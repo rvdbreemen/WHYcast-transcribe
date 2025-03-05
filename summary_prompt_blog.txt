@@ -13,5 +13,5 @@ And finish with a 300 word blog about the podcast highlights. Make sure it's a n
 
 The format of the blog should be:
 Short title: WHYcast <epispode number>
-Introduction to blog (1 blog)
-Then add a 300 word blog body text.
+Introduction to blog (1 line or paragraph)
+Then add blog with minimal 300 word. Make sure the blog is readable. So it should not just give a statement on what was discussed, but be reasonable verbose in the pagagraphs.
