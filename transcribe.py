@@ -2,9 +2,13 @@ import os
 import sys
 import logging
 from typing import Tuple, List, Optional
+from dotenv import load_dotenv  # Add this import
 
 from faster_whisper import WhisperModel
 from openai import OpenAI
+
+# Load environment variables from .env file
+load_dotenv()  # Add this line
 
 # ==================== CONFIGURATION ====================
 # Model configuration

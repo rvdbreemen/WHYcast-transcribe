@@ -160,6 +160,11 @@ cython_debug/
 #.idea/
 
 
-# Audio files
+# Audio files 
 *.mp3
+
+# Environment variables
+.env
+
+# Folder that needs to be ignored
 /faster-whisper
