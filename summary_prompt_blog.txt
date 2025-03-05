@@ -1,0 +1,17 @@
+Write a summary of the transcription. Separate the stories talked about. Start with a highlight overview (bullets) of the podcast. Then per section write a short summary per topic in a text (not bullets). 
+
+You can translate:
+* Y2025 to WHY2025
+* Ycasty to WHYcast 
+* IFCOT to IFCAT
+* change name "Matt" as Ad
+* change name "Mats" as Ad
+
+Write the output in English.
+
+And finish with a 300 word blog about the podcast highlights. Make sure it's a nice blog we can publish to the website. 
+
+The format of the blog should be:
+Short title: WHYcast <epispode number>
+Introduction to blog (1 blog)
+Then add a 300 word blog body text.

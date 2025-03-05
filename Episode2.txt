@@ -1,0 +1,469 @@
+ Hi, and welcome to the YCast episode 2.
+ I am Nancy.
+ And I'm Ad.
+ And we are the hosts of the only podcast about a hacker camp in the world.
+ This volunteer run event will take place next year in the Netherlands,
+ 42 kilometers above Amsterdam, from August 8th to 12th, 2025.
+ So, Ad, what are we talking about today?
+ Well, there's a couple of items we have to cross off the list.
+ We start off with the project lead meetup from earlier this week.
+ Last Sunday, yeah.
+ Last Sunday.
+ That is technically this week, I think.
+ Yeah.
+ We have an interview with someone from Team Terrain.
+ Not just someone.
+ Not just someone.
+ Stitch.
+ Right.
+ And where to hack, obviously.
+ Yes.
+ Every week.
+ We're also going to go through some vacancies for volunteers.
+ And there's a history lesson, like, every week.
+ With the outfluencer.
+ With the outfluencer, yes.
+ Very cool.
+ But first off.
+ The project lead meetup, project lighting, as we call it in Dutch.
+ Yes, project lighting in proper Dutch.
+ Yeah.
+ So, we are with six people.
+ I will share a photo.
+ But you can also find us on the wiki, because everything is on the wiki.
+ That's a very scary thing to say, because we try to have everything on the wiki.
+ So, if you miss information on the wiki, please.
+ Let us know.
+ Put it there.
+ Or let us know.
+ We are with six people.
+ And one of the things we wanted to work on, or have to work on, is budget.
+ So, we can determine a ticket price.
+ Everybody's favorite budgets, right?
+ Yes.
+ So, we discussed.
+ Well, it is interesting, because it is so relevant.
+ So, some things that are stupid, but relevant enough, are less stupid.
+ Or less.
+ Yeah, it's less annoying, because it's so, we need it, right?
+ And we really, really try to keep the ticket price as low as possible,
+ while keeping the coolest event ever.
+ So, and that's always give and take.
+ And we always, well, it's almost like politics, right?
+ We all vouch for different things.
+ And things that are close to our hearts.
+ So, we tried really hard to finish it last Sunday, for approximately seven to eight hours.
+ And we're not done yet.
+ So, we'll keep you posted, because we really, really want to, yeah, get on with the rest of the organizing of the event.
+ But, yeah, it's hard work.
+ So, bear with us a little bit more.
+ But what we also did, and that is, I think, very cool, because I was really looking forward to this, because of Fall Fest in September.
+ And it is more physical meetups with the volunteers.
+ You were there at Fall Fest.
+ Yes.
+ And I think we can agree that that was pretty cool.
+ Yeah.
+ Not just pretty cool.
+ It was awesome.
+ It was awesome.
+ I think that many people there with the same ideas and the same goal in mind.
+ And everybody just trying to be productive and constructive towards that goal is just a great, great feeling.
+ Yeah.
+ We have online meetings for everybody who wants to be involved every month, for now.
+ The frequency of that will probably get higher getting closer to the event.
+ Yeah.
+ Yeah.
+ Yeah.
+ Yeah.
+ Yeah.
+ Yeah.
+ Yeah.
+ Yeah.
+ Yeah.
+ Yeah.
+ Yeah.
+ Yeah.
+ Yeah.
+ Yeah.
+ Yeah.
+ Yeah.
+ But when you have an online meeting, it's more like a serial thing.
+ So everybody talks about their teams and what's going on.
+ And what you see happening at those physical days is there's way more interaction between different teams.
+ Of course, also a lot of fun and good food and, yeah, friends meeting each other.
+ So it's more fun and more effective to have more physical meetups.
+ So first one.
+ So please mark your calendars is still this year, the 14th of December.
+ Yeah.
+ And now we have one every two months after that.
+ So there will be one in February.
+ There will be one in April, 5th of April, which will be a field day as well.
+ So that will be a meet on the fields, on the terrain.
+ So that's great fun, especially because we're going to have.
+ Stitch talking about the trends and more in this episode.
+ Yeah.
+ And the 21st of June, we will also have a physical meet.
+ As always, you can find all the meetings online, offline on the wiki.
+ There's a little button on the left in the menu bar that says meetings.
+ So all the meetings will be there.
+ But yeah, mark your calendars for 14th of December for now.
+ Which is a Saturday.
+ It's yeah, they're all on Saturdays, so you don't have to take a day off from work if you if you have a job, unless you have a job that also requires you to work on Saturdays, right?
+ For the majority, you're early now, you're early now.
+ Yeah.
+ All the online meet in meetings are on Wednesday, Wednesday evening.
+ Yes.
+ And the physical meetups are on Saturdays.
+ Yes.
+ And it's great fun, international, international as well, because people are we're coming in from Germany and the UK as well.
+ So, yeah, it's it's it's a lovely way and an effective way to make this awesome event happening.
+ And we need locations for it.
+ We prefer hackerspaces.
+ Of course, we've already been to BitLayer in Amersfoort.
+ We've already been to Hackalot in Eindhoven.
+ So probably Booker Wim has sent out an email already to the mailing list, which you can also find on the wiki about who wants to host which meeting if you have an idea, if you say, okay, I have place for probably around 100 people to have a meet and greet and work together on the event, please send an email to projectlining.
+ So we can make sure it will happen.
+ It will happen.
+ I think I'm also...
+ So, you've gone to a Little
+ Pool or has been doing some work?
+ We have made it a little pool at the very starting one, at the very beginning.
+ Last year.
+ We made a blog post about the Split team.
+ And so they were like, come on in and you meet too, take your time, this is an exciting hour.
+ And so I made an email.
+ My book came out first, I saw the blog didn't it.
+ Yeah.
+ This is the first like the first episode for the first day. We don't know yet. Okay. Okay. You might help in episode three or five or weekly. Yep. It's weekly. It's weekly. So you have like 50 episodes to go. Yes. Of one hour. No, half an hour. Two hours. Half an hour. Three.
+ 42 minutes. Maybe 42 minutes. So we're talking with team members from all different types of teams to figure out what's going on in your team. Do you need help? Because it's also to find maybe more volunteers. Yeah. And just share cool stuff about what's going on in the preparations of why.
+ All right. And should I break the fourth wall and say you have to help? Yes. You can always do that. Fourth wall.
+ Fourth wall. Hello. So what I've done now is work with Team Terrain. So let me introduce myself. Who are you? Hello. I'm Stitch. Hello. I'm Stitch. And I have helped organizing the past two camps. Now the burden has shifted to you and Crystal and lots of other people.
+ And this time I have no responsibility at all.
+ Which makes it even easier to organize things. And this time I've worked on the Terrain team a little bit just to get that going. Yep. We've done site visits. We made drawings and like first drawing, which was absolutely horrible in hindsight. But at least there was something. So we can talk about it. And everybody says like this sucks and say, okay, why does it suck and what do you need? Right. And then we switch things over and we visit the Terrain team.
+ Terrain after the Liquicity Drum and Bass Festival, which is five days prior to what we are organizing. Yes. So and look how damaged the field was and how terrible it was and did some statistical analysis if this will be as terrible next time. And well, probably not. But in worst case, it will be as terrible as it is now. Yeah. Which makes a part of the Terrain the Badlands, which cannot be used.
+ And we figured out where do we have to put things? So where do you place stages? Where do you place the food court? Where do you place things like how do you deal with waste streams or water, wastewater? Where can you plant villages and such? And that has been on our minds for five, like seven, eight weeks now. The team is six people. So that's really nice.
+ Red Lizard is the chair of that team. Yeah. And what? Yeah, we've we've just met here. Some people took three hours to go here in Eindhoven. Yeah. Just by train. So here it's a fall fest. Yeah, exactly. It's like today is 7th of September. Exactly. Yeah. So. So yeah, it's really early in that sense. It's really early in the process.
+ I think it's starting to that there haven't been many complaints. So none, none, actually. So I think it's going to be really nice. You can worry now. Think of something. Either we don't communicate or we are really good at our jobs. I just I always assume the latter just just because I can. Yeah, exactly. Yeah. So no, it's it's not there yet. And we're we're
+ requesting feedback now. We've just presented it on stage. So what what does it look like? So you need feedback from other teams? Yeah. Other teams. Do you also need help from from people specifically into team terrain as well? Just helping our team volunteers here? Yeah, exactly. Yes and no. Other people are always welcome. But there are other teams that are more in need of help. Yeah. And we also expect
+ We have to the next step is right permit stuff. I think that we are pretty fine on that. And we need to plan some build up tear down and vendor stuff that people that that that join or like the big companies that put up tents and such they need to be arranged. But that's in a while. So we'll slow down a little bit. And then we can
+ accelerate just a few months before the event again. So yes, there's always a need for but the terrain team has never been stronger or bigger than we're currently are. Then it's right now. That's also good to hear. That's good to hear. And it's also comes in very handy that we have someone who's so much in his backpack already. To make sure you've been there. You've done it. Yeah. So that's, that's great. So cool. Yeah. So how are you doing?
+ How are you doing now with all the stuff?
+ Until now, it's still crazy fun. I think it's it's it's a lot of fun probably. Also, because I don't know what I don't know yet.
+ Yeah, that's that's ignorance. That's that's ignorance is bliss face. I think. Which is fine. This is fine.
+ We'll do also do the last we'll do also the last to see how you look how I look how I feel. Yeah, no, I think. And, and it's, it's also a good thing that there's
+ at least two of us. And, of course, six in in project lining, you know, in the whole team. And yeah, of course, things happen. Unexpected things happen. But yeah, I'm still pretty confident that I'm still having a good time.
+ All right. That's good. Yeah, there's always things. I'm not I'm not breaking. No, no, no, that's good. That's good. That's what I would like to stay that way.
+ Yeah. So there might be a sleepless night.
+ Or two. But most, like, there's a lot of people on the team that have been there already know what to do. And absolutely. Yeah, I felt like, okay, let me tell a small story about last time. We made a super cool budget. Yeah. And the budget was pretty, yeah, pretty tight. And things were really expensive with the COVID stuff. And so yeah. So we made a tight budget. And then we
+ made a ticket price. And when we selected the whole range of cells from different teams, so this cost this, this cost that, we forgot to select one cell in the spreadsheet, which was 100,000 euros of the most expensive team. So when we were at the point that, oh, God, we are making a loss. And now we're going to go bankrupt. We found out exactly that mistake. So we were another 100,000 in the hole.
+ Deeper, deeper.
+ So that was, that was the least fun part. Yeah. So the only thing that I would recommend is, we had five people checking the spreadsheet, maybe have six, have more, have more people have more diligently and like, it will save you a lot of. Yeah. Because that, that will probably cause some panic.
+ And it was, I think that was the lowest, lowest point was like, how much do they have like gone? Yeah, you're this.
+ Project is gone. And it's like, that was not, that's not fun. No, that's really painful. So you can laugh about it now. But then it's no, no fucking way. I will, I will make new mistakes, right? I hope so. Yeah. I learned from them. Hopefully. Yeah. So, well, I think we're all set. Probably, maybe in the coming few months, we'll talk to you somewhere again, about other cool stuff that you're secretly working on.
+ Yeah.
+ Maybe it's something that's more about school stuff. coming up.
+ Bring it to us. Awesome. Very cool. Thanks.
+ This is probably this terrain is going to look so awesome.
+ So looking forward to this one.
+ And, uh, stitches also probably the one who also makes, uh, the drone images. So if you look at the after movie from MCH two, uh, 2022, which is also in our YouTube channel, where we have this white cast as well.
+ Yeah. It's very cool that he is so excited about it.
+ Yeah.
+ So I'm looking forward to seeing you guys tomorrow.
+ Yeah.
+ Bye.
+ Bye.
+ still so involved
+ yeah definitely
+ and he's
+ also at the place
+ where we are
+ going to talk about
+ hacker stuff
+ each week we will share
+ where you can find white minded people
+ where to hack
+ so where to
+ hack this time
+ so where to hack this time
+ well it's
+ mainly the hacking
+ cool hacking parts and where you can meet
+ white minded people will be in the in
+ between but next week
+ the 1st and the 2nd of October
+ there's the
+ one conference which is in
+ The Hague in the Netherlands
+ it's organized by
+ the government right?
+ the government basically
+ National Cyber Security Center so it has cyber in it
+ and
+ not only
+ I am
+ speaking but also Stitch is speaking
+ so this is like a Stitch
+ loving episode
+ right?
+ it all comes together
+ it's a Stitch Rich episode
+ now
+ I will be giving a talk about
+ why
+ you won't think
+ at day 1
+ in the main room right before
+ lunch
+ it's called
+ something along the lines
+ of the history of Dutch Hacker Camps
+ the regular presentation is an hour and I have to shorten it to 25 minutes
+ so you're leaving out the future and the importance and it's just history
+ so that's
+ hopefully by the release of this episode
+ it's finished and done
+ and the second day you can go to Stitch
+ who's going to have a presentation about how the Dutch raised the security baseline
+ with transparency
+ um
+ and there will be a lot of cool presentations there
+ I think tickets are invite only which sucks because we want to have a lot of people there
+ um
+ yep
+ but
+ on the Tuesday night there are
+ parties all over the Hague with all
+ White-minded people
+ uh if you keep an ear and eye out on what's going on you will
+ find them
+ so um
+ please be sure that uh if you talk to White-minded people that's completely private
+ please be sure that if you talk to White-minded people that's completely private
+ or not
+ they will probably know where to go
+ so
+ yeah so we can have some
+ hacker parties in The Hague
+ so even if you're not at
+ the event
+ if you're in the area
+ enough cool people
+ there to have an amazing
+ time
+ so that's
+ I will share the link in the show notes it's called
+ oneconference.nl
+ and you can
+ find at least some white people
+ there and stickers of course
+ obviously stickers
+ all right
+ let's talk about
+ vacancies
+ plural
+ actually because we need more
+ yeah we started
+ out with the idea that we want to have
+ one vacancy per episode
+ but we need more people than that
+ we need more people we need more help
+ to help us out
+ so you are part of
+ team info
+ and there's a very specific
+ role in team info
+ for now that we want to highlight
+ there are more but this is one
+ we want to highlight
+ we need a social spammer
+ we need a social spammer
+ yeah we need someone to monitor
+ and post on
+ social media
+ all the big platforms
+ schedule messages
+ and
+ try to grab as much info
+ from other teams
+ that might be interesting for
+ a social post for
+ well informing the world
+ of what is happening
+ behind the curtains
+ in the organization
+ and create little bits and pieces
+ of content from all the
+ because we have a lot to share
+ so but it takes time
+ to create it and to send it out
+ so maybe
+ social spammer can also be plural
+ oh sure
+ sure
+ yeah
+ to spread the load
+ create content for
+ to get more friends
+ and
+ nice people at the event
+ cool
+ thanks
+ and I see someone
+ for team permits
+ they need someone
+ to help with
+ getting permits
+ and there's some stuff starting
+ in October
+ so if you hop in now
+ you can join in with the
+ with the startup
+ with the kickoff
+ yes
+ for now we are
+ not with that many people
+ in team permits
+ it's essential
+ for the event
+ no permits
+ no events
+ so it's in that way
+ so it's such a grateful job
+ because it's so freaking important
+ to have the permits done
+ but it's also a lot of work
+ and mainly harvesting
+ all the information
+ from the social media
+ separate teams
+ because it's about first aid
+ it's about security
+ it's about fire
+ it's about all the different things
+ traffic
+ so it's really really
+ a load of work
+ and we only have
+ like two to three people now
+ so we really need more people
+ to help at least
+ to gather all the information
+ and make sure that we have
+ all the information there
+ for permits
+ to get the permit
+ all right
+ yes
+ so if you think
+ that might be something for me
+ please reach out
+ to team permit
+ or just mail nancy
+ if you go to the wiki
+ to team permits
+ you will see mail nancy
+ then let's hop into
+ the history lesson
+ what
+ do you have some cool
+ history lesson for us
+ it's not just a history lesson
+ it's even a little bit of
+ explanation of computer science
+ stuff
+ each episode of the show
+ will be diving into
+ a piece of history
+ something special
+ from the predecessors
+ of why 2025
+ so that could be from
+ the galactic hacker party
+ from 1989
+ hackers at the end of the universe
+ from 93
+ hacking in progress
+ 97
+ hackers at large
+ 2001
+ what the hack
+ 2005
+ hacking at random
+ 2009
+ observe hack make
+ 2013
+ still hacking anyways
+ 2017
+ may contain hackers
+ from 2021
+ no
+ mac of it happened
+ so that became
+ may contain hackers
+ 2022
+ and this week
+ we will be taking a look at
+ hackers
+ especially
+ the woody
+ clumpy things
+ you used to
+ hang your clothes
+ on the drying rack
+ but in this case
+ a very specific use
+ pegs used as a dhcp server
+ or actually like a dhcp
+ offer message
+ but first of all
+ let's see what is dhcp
+ dynamic host configuration protocol
+ is a protocol used to
+ tell a computer
+ how to provide it to a person
+ what ip address to use on a network and what subnet mask and some other information as well
+ this is a protocol designed in 1993 rfc 1531 for the people playing along at home
+ but it's not it wasn't commonly in use in 97 when hacking in progress was was the camp to be at
+ so for the 1600 computers that were at the event something else was was needed to to work as a dhcp
+ server so they took a tent one of the tents in the middle of the field and they got a huge
+ bucket load of pegs and they wrote the last numbers of the ip address on the pegs all unique
+ because that is something that the dhcp server does it gives out unique addresses and uh they
+ had some some some paper with it uh with the other information like the serpent mask uh default
+ gateway things like that uh to be able to configure your computer with your unique address uh to be
+ on the network and to make use of the 100 megabits backbone that was on available on camp and the six
+ megabits information component was you know disconnected from the network so yeah yeah
+ upload which was probably huge for 97. Nowadays we can hardly imagine that but
+ yep back then it was quite quite a thing. Also for the the camp they had 40
+ kilometers of cable on the terrain which is intense. But Hacking in Progress
+ in 97 had the first use of Pag DHCP. You would go to the tent, you would get one
+ Pag with a unique number, you would get the leaflet with the other information,
+ you would stick the Pag on your network cable because wireless wasn't the
+ thing back then. It was all wired Ethernet. You would clamp the Pag on your
+ cable so your cable had your unique number on there. You would configure your
+ computer according to the number on the
+ Pag and then you were part of the network. Nowadays this is this is done
+ automatically with DHCP on every consumer router imaginable. So if you
+ log in at home on your network your computer just asks is there someone who
+ can tell me an IP address and your router says yeah take this one. But in
+ 97 it was done with a with a Pag and I know that on
+ April 4th it was done with a Pag and I know that on April 4th it was done with a Pag and I know that on April 4th it was done with a Pag and I know that on April
+ 1st it was done with a Pag and I know that on April 4th it was done with a Pag and I know that on April 1st of 98 there was actually an RFC released RFC 2322
+ describing this Pag DHCP in in great detail. The date April 1st might be
+ significant. I at least know from reliable sources that that RFC not only
+ got a bunch of laughs but also got a lot of people laughing about it. So I think that's a good thing.
+ at least one relationship was formed
+ because of that RFC. Back to cherry- Pentah Alcohol
+ back to today back to now
+ back the future back to Y20 25.
+ Well thank you all for listening and thank Stitch for the interview.
+ If you have any feedback, comments or any cool ideas, please leave them in the comments, or send us an email at ycast at Y2025.org.
+ If you have any feedback, comments or any cool ideas please leave them in the comments, or send us an email at ycast at Y2025. we can support you as a community.
+ Tip us with any questions or any ideas.
+ 천z multiple loom
+ any千z you can still ask other questions as well.
+ Any Dank.
+ cool hacker events um some historical dutch hacker camp stories if you have some some cool ones um
+ visit the wiki uh for all the information about the event for for the volunteering um for the
+ vacancies and all the information you you ever want is on there or at least it should be if it
+ isn't send us an email as well thank you all for listening and see you next friday why day
+ you

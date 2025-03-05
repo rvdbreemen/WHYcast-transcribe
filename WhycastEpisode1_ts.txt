@@ -1,0 +1,595 @@
+[0.00s -> 15.82s]  Hi, and welcome to the YCast Episode 1.
+[16.40s -> 17.06s]  Hi, I'm Nancy.
+[17.56s -> 18.02s]  Hi, Mats.
+[18.74s -> 22.50s]  And we are the hosts of the only podcast about a hacker camp in the world.
+[22.82s -> 26.94s]  This volunteer run event will take place next year in the Netherlands,
+[26.94s -> 33.84s]  42 kilometers above Amsterdam, from August 8th to 12th, 12th, 2025.
+[34.80s -> 37.32s]  So, Ats, what are we talking about today?
+[37.98s -> 40.60s]  Well, there's a couple of things we will be discussing.
+[40.96s -> 46.06s]  And one of the things I want to touch on first is what happened about two weeks ago.
+[47.22s -> 50.56s]  In Eindhoven, at Hackalot, we had Fallfest,
+[51.42s -> 56.14s]  the most recent in-person organ meet for the event.
+[56.14s -> 56.26s]  Yes.
+[56.26s -> 57.96s]  And we were there together.
+[58.74s -> 59.14s]  Yes.
+[59.36s -> 60.98s]  Together with about 70 other people.
+[62.46s -> 63.98s]  Which was a lot.
+[64.50s -> 65.44s]  It was a lot.
+[66.82s -> 68.54s]  But it was great, I think.
+[70.50s -> 77.08s]  So, first of all, you have to imagine that we have 42 teams.
+[77.88s -> 84.66s]  And not even everyone was there present at this meetup.
+[84.66s -> 85.96s]  So, there's even more people.
+[85.96s -> 90.20s]  There's even more people working behind the scenes, getting this event up and running.
+[90.20s -> 95.80s]  But having 70 people in one room, who all have the same goal,
+[95.80s -> 102.52s]  making this an awesome event, is very productive, I could say.
+[102.52s -> 103.52s]  Oh, yes.
+[104.52s -> 112.52s]  There has been done more during those few hours in there than there has been in the weeks prior, I think.
+[112.52s -> 113.72s]  Which is awesome.
+[113.72s -> 115.08s]  And what did you...
+[115.96s -> 117.32s]  What were your highlights?
+[118.32s -> 120.00s]  Well, I'm all up for remote first.
+[120.00s -> 128.36s]  But, yeah, just seeing and meeting each other and have leaders and leaders of Club Mata going on there.
+[130.08s -> 132.52s]  First, thanks to Hackalot for hosting us.
+[133.24s -> 136.96s]  The fun fact is they just recently had a new space.
+[136.96s -> 145.00s]  So, they're based in a church now, which helps a lot when you want to have 70 people of a community in one space.
+[145.96s -> 153.56s]  I think Kristel, my co-chair of IFCOT, did a great job in opening everything and welcoming everything.
+[153.56s -> 159.08s]  Because, yeah, without everybody volunteering, this event is not happening.
+[159.08s -> 164.52s]  And all the things we spoke about and all the teams who were getting together,
+[164.52s -> 175.80s]  and whether it was about the food court or the permits or the family zone or the NUTS, Team NUTS, you can look it up on the wiki.
+[175.80s -> 179.60s]  What that means, I think it was great.
+[179.60s -> 182.72s]  And also, we did a lot of interviews for the WIcast.
+[183.04s -> 184.48s]  That too, that too.
+[184.48s -> 191.68s]  Yeah, we got a lot of content already from there, which is also pretty cool.
+[191.68s -> 194.40s]  Thanks, Stitch, for using your office for it.
+[196.88s -> 203.00s]  Because we had a nice cyber museum background there.
+[203.00s -> 204.60s]  So, that was cool.
+[204.60s -> 205.20s]  And...
+[206.52s -> 211.52s]  Yeah, I think the overall vibe was very enthusiastic and looking forward to everything.
+[211.52s -> 217.04s]  Team Terrain did a really great job in presenting the terrain and all the...
+[217.04s -> 223.96s]  Well, some of the bumps that we also have to take into account.
+[223.96s -> 231.60s]  But all in all, I think it was a great meet and I saw a lot of positive vibes all over the place.
+[231.60s -> 234.88s]  So, yeah, I'm very, very excited about it.
+[234.88s -> 235.12s]  Yep.
+[235.12s -> 235.60s]  Especially because it's 11.
+[235.60s -> 238.12s]  11 months prior to the event, right?
+[238.12s -> 242.28s]  That so many people already are active and involved in making this happen.
+[242.28s -> 244.16s]  That's so cool.
+[244.16s -> 245.56s]  Yep. Yep.
+[245.56s -> 247.04s]  And also the terrain talk.
+[247.04s -> 253.68s]  I mean, having terrains designated as the desert, the Badlands and the Boneyard.
+[253.68s -> 255.36s]  I mean, yep.
+[255.36s -> 256.32s]  Yep. Yep.
+[257.52s -> 258.60s]  Very interesting.
+[258.60s -> 259.28s]  Yeah.
+[259.68s -> 260.40s]  Yeah.
+[260.40s -> 263.80s]  And we had the bit of Huisdel
+[264.92s -> 265.52s]  shown there.
+[265.60s -> 267.92s]  Look at the banner, look at the banner.
+[267.92s -> 277.12s]  If you're listening to this podcast, please check out the YouTube because on screen currently is the banner for the event.
+[277.12s -> 278.12s]  Yeah.
+[278.12s -> 285.04s]  And Team Volunteers also made some very lovely posters, which is over there, but that's not quite clear.
+[285.04s -> 289.40s]  But I think you can download them at the Wiki as well.
+[289.40s -> 291.64s]  Oh, okay.
+[291.64s -> 293.56s]  This is not working out, which is fine.
+[293.56s -> 294.92s]  This is fine.
+[294.92s -> 296.56s]  This is fine.
+[296.56s -> 303.64s]  It says volunteers needed and they've been passed along to all the hackerspaces.
+[303.64s -> 306.20s]  So the posters are everywhere on the hackerspaces.
+[306.20s -> 309.80s]  And we had loads and loads and loads of stickers.
+[309.80s -> 313.88s]  So if you need stickers, want stickers, go to hackerspaces.
+[313.88s -> 320.28s]  I will show them in front of the camera in all kinds of different colors and you can stick them anywhere.
+[321.12s -> 321.52s]  Yep.
+[321.52s -> 322.00s]  Legal.
+[323.00s -> 323.80s]  Yes.
+[323.80s -> 324.84s]  So the poster says,
+[324.84s -> 326.92s]  volunteers needed.
+[326.92s -> 336.44s]  If you go to the Wiki, there's a vacancies position there, a page that lists a lot of the vacancies still open.
+[337.08s -> 337.80s]  Yeah.
+[337.80s -> 338.92s]  Link will be in the show notes.
+[340.12s -> 343.96s]  But you mentioned you had a couple of interviews at Volfest.
+[345.32s -> 350.44s]  And I know that one of them was with Dani from Team Content.
+[351.24s -> 354.72s]  And Content is obviously quite important for an event like this.
+[354.72s -> 363.12s]  Because part of the conference is just being there and see friends, but also going to lectures.
+[363.76s -> 364.00s]  Yeah.
+[364.00s -> 366.00s]  And we have every event.
+[366.00s -> 370.40s]  We have at least 200 talks and workshops.
+[370.96s -> 378.80s]  And one of the highlights, because there were a lot of highlights, but one of the highlights of
+[378.80s -> 381.44s]  Volfest was that the CFP is open.
+[381.44s -> 382.00s]  Yes.
+[382.00s -> 384.56s]  So now you have the possibility if you want.
+[384.56s -> 395.60s]  If you want to be share cool knowledge on a stage, you can sign up and they also need reviewers, by the way, which Dani will also talk about.
+[396.80s -> 398.88s]  But yeah, the CFP is open.
+[398.88s -> 409.12s]  So if you have a cool subject, the thing you want to talk about or anything, you can head over to the CFP page and yeah, sign up your talk.
+[410.00s -> 414.48s]  Links will be in the show notes wherever they are on your favorite podcast app.
+[414.56s -> 416.56s]  Or down there in the YouTubes.
+[417.04s -> 417.28s]  Yeah.
+[418.56s -> 420.80s]  Well, maybe now it's time to listen to Dani, I guess.
+[421.52s -> 421.84s]  Yes.
+[422.40s -> 422.96s]  Perfect.
+[423.68s -> 428.56s]  So we're here still at the Volfest in September.
+[428.56s -> 433.68s]  We don't know when this will be in the episode, but we're here with Dani.
+[433.68s -> 438.24s]  So can you please tell us some more about yourself and the team?
+[438.24s -> 438.56s]  Yes.
+[438.56s -> 438.96s]  Okay.
+[438.96s -> 440.16s]  Hi, I am Dani.
+[440.80s -> 442.32s]  That's the short form of Daniëlle.
+[442.32s -> 444.16s]  But umlauts in names still go wrong.
+[444.56s -> 445.12s]  I'm in systems.
+[445.12s -> 446.32s]  So it went on to Dani.
+[447.44s -> 449.28s]  I am in team content.
+[450.32s -> 456.32s]  So we are working on the CFP and making sure that we have some nice speakers on the event.
+[456.96s -> 461.12s]  I've heard a lot of people ask me, what does CFP stand for?
+[461.12s -> 462.24s]  What does it mean?
+[462.24s -> 466.96s]  It's a call for papers or call for proposals or call for presenters.
+[468.24s -> 472.40s]  Basically, if you want to talk at Y,
+[473.04s -> 474.48s]  you're going to send in a
+[474.56s -> 476.40s]  proposal or call for proposals.
+[476.96s -> 477.52s]  Which one?
+[477.52s -> 480.48s]  I want to talk about this subject or this subject.
+[480.48s -> 482.40s]  And this is my idea.
+[482.96s -> 483.52s]  Very cool.
+[484.08s -> 489.76s]  And do you already have an idea of what type of content we are looking for for Y?
+[489.76s -> 490.56s]  Yes.
+[490.56s -> 491.20s]  Okay.
+[491.20s -> 497.68s]  We have for Y, we want, of course, talks that connect to our event, connect to our scene.
+[497.68s -> 500.96s]  So we have four streams of topics.
+[500.96s -> 503.28s]  We have wonderful creations.
+[504.00s -> 506.16s]  Everything that you have created from scratch.
+[506.16s -> 507.20s]  And that can be art.
+[507.20s -> 508.48s]  It can be software.
+[508.48s -> 509.60s]  It can be hardware.
+[510.16s -> 512.88s]  It can be anything that is somewhat related.
+[512.88s -> 513.36s]  Cookies.
+[514.00s -> 514.48s]  Cookies.
+[514.48s -> 516.32s]  If you have the greatest cookie recipe.
+[516.32s -> 518.32s]  We have the altfluencer here as well.
+[518.32s -> 519.44s]  Cookies is fine, too.
+[521.12s -> 524.56s]  If you are doing something with what somebody else did.
+[524.56s -> 526.16s]  And then we have hacking.
+[526.16s -> 529.52s]  Hacking is for everything that is, I fixed it.
+[529.52s -> 530.32s]  I broke it.
+[530.32s -> 531.52s]  I broke it by fixing it.
+[531.52s -> 532.64s]  I fixed it by breaking it.
+[533.28s -> 536.08s]  Or just doing something about hacking is.
+[536.08s -> 539.12s]  Again, software, hardware, humanware, whatever.
+[540.56s -> 542.40s]  Then we have yearn for a better future.
+[543.28s -> 551.92s]  And that is all about building a better world by political talks, self-improvement,
+[552.56s -> 554.32s]  environmental stuff.
+[554.32s -> 555.04s]  Things like that.
+[555.04s -> 558.08s]  Things that will improve the world or people.
+[559.12s -> 561.28s]  If you say, well, those are three things.
+[561.28s -> 562.40s]  I'm not really sure what it is.
+[562.40s -> 562.96s]  We also have.
+[563.28s -> 564.08s]  The square hole.
+[564.72s -> 566.96s]  Because everything fits into the square hole.
+[567.76s -> 568.48s]  Very good.
+[568.48s -> 573.28s]  So those are the four mainstreams of content that we want.
+[573.28s -> 575.20s]  There's going to be a longer description on the website.
+[576.08s -> 580.08s]  Of course, if you go to the CFP site, you see a bit longer description already.
+[580.08s -> 585.84s]  And we're working on like a long format blog post about what the entire idea and philosophy is.
+[585.84s -> 587.84s]  And the CFP is live as of today.
+[587.84s -> 592.08s]  CFP is live as of the fallfest today at cfp.y2020.com.
+[592.96s -> 598.24s]  And you can send in your proposals until towel day.
+[598.24s -> 602.48s]  And that is 25th of May 2025.
+[602.48s -> 603.84s]  So that's a very long time.
+[603.84s -> 604.08s]  Yeah.
+[604.08s -> 608.40s]  You've got a lot of time, but please, please, please don't wait until May next year to send
+[608.40s -> 611.20s]  in your proposals because we have to read through them.
+[611.20s -> 613.84s]  And I've just done it for other conference.
+[613.84s -> 615.60s]  It's a lot of work to read all that stuff.
+[615.60s -> 616.40s]  Yes.
+[616.40s -> 621.04s]  And why is completely organized and by volunteers.
+[621.04s -> 622.72s]  So these are actual people who.
+[622.72s -> 626.08s]  Who give up their free time to go through all the proposals.
+[626.08s -> 629.12s]  So please be nice and be early.
+[629.12s -> 629.68s]  Yeah.
+[629.68s -> 630.96s]  And be complete.
+[630.96s -> 636.56s]  And if you have any questions, you can also email email us at content at y2035.org.
+[636.56s -> 638.40s]  If you have any questions, you need some help.
+[638.40s -> 640.96s]  You don't know how to do the CFP form.
+[640.96s -> 641.92s]  We're here to help as well.
+[642.80s -> 643.44s]  Very cool.
+[644.96s -> 648.96s]  Does your esteem content also in need of more volunteers?
+[649.52s -> 651.84s]  At the moment, we are good.
+[651.84s -> 652.34s]  Okay.
+[652.72s -> 657.36s]  Going on to the event, we're going to need some more reviewer people that's going to
+[657.36s -> 659.20s]  review all the CFPs and rate them.
+[659.20s -> 660.24s]  It's like, I want to see this.
+[660.24s -> 661.76s]  I'm not really want to see this.
+[663.28s -> 671.20s]  And of course we also have sub teams for the speaker desk and stuff like that for on the
+[671.20s -> 671.92s]  event itself.
+[671.92s -> 675.92s]  We have, we can still have some people that will want to help on the event.
+[675.92s -> 676.72s]  Yeah.
+[676.72s -> 678.72s]  And also in.
+[680.64s -> 681.36s]  Former events.
+[681.36s -> 682.56s]  I have been a Herald.
+[682.56s -> 683.76s]  That's also a part of your team, right?
+[683.76s -> 685.84s]  Herald is also one of our bits.
+[685.84s -> 687.20s]  Herald is people who.
+[688.32s -> 689.60s]  Hear ye, hear ye.
+[691.12s -> 692.96s]  Who announce speakers.
+[692.96s -> 693.36s]  Yeah.
+[693.36s -> 694.64s]  So that's great fun.
+[694.64s -> 699.12s]  And it might be also nice, but that's something for, for later next year.
+[699.12s -> 703.04s]  So if you want to be a Herald, get in touch with team content, find ourselves on the,
+[703.04s -> 704.96s]  on the wiki or find ourselves an email.
+[706.00s -> 708.00s]  We also arrange that as a sub team.
+[708.00s -> 708.24s]  Yeah.
+[708.80s -> 709.44s]  Very nice.
+[710.00s -> 712.32s]  Anything else that we forgot to mention that?
+[712.32s -> 712.56s]  Yeah.
+[712.56s -> 713.60s]  You want to add or.
+[715.20s -> 720.88s]  Go look at our CFP page because there are some special stuff that we're hoping to get around.
+[721.92s -> 724.16s]  That is alluded into the CFP.
+[724.16s -> 725.84s]  If you read that, you will find it.
+[725.84s -> 730.16s]  And we're still working out the details if we can make this happen, but it's going to be awesome.
+[730.16s -> 731.04s]  Awesome.
+[731.04s -> 732.08s]  Thank you so much.
+[732.08s -> 732.96s]  You're very welcome.
+[732.96s -> 733.60s]  And go for it.
+[734.40s -> 734.80s]  Okay.
+[734.80s -> 741.36s]  So that was the amazing interview with Dani and we have more in store for you this episode.
+[741.36s -> 742.48s]  Uh, like.
+[742.48s -> 748.80s]  For instance, we have a history lesson about something cool happening at a former camp
+[748.80s -> 749.92s]  by the Adfluencer.
+[751.28s -> 753.52s]  And what else, Ad?
+[753.52s -> 757.76s]  There's also an interview with Dave Borghuis from Hackfest.
+[758.72s -> 762.80s]  That is something where you can hack Sue.
+[765.76s -> 768.64s]  But I think we'll start off with the, with the history lesson.
+[768.64s -> 769.04s]  Yes.
+[769.04s -> 771.04s]  Tell us some more about the history, Ad.
+[771.04s -> 772.24s]  Okay.
+[772.48s -> 775.04s]  Each episode, we'll be diving into a piece of history.
+[775.04s -> 778.72s]  Something special from the predecessors of Y2025.
+[778.72s -> 782.80s]  So that could be from the Galactic Hacker Party from 1989.
+[782.80s -> 785.36s]  Hackers at the End of the Universe from 93.
+[785.36s -> 787.12s]  Hacking in Progress, 97.
+[787.12s -> 789.04s]  Hackers at Large, 2001.
+[789.04s -> 790.40s]  What the Hack, 2005.
+[790.40s -> 791.76s]  Hacking at Random, 2009.
+[791.76s -> 793.04s]  Observe Hack Make, 2013.
+[793.04s -> 794.64s]  Still Hacking Anyways, 2017.
+[794.64s -> 796.48s]  May Contain Hackers from 2021.
+[796.48s -> 796.80s]  No.
+[796.80s -> 800.08s]  Mac COVID happened, so that became May Contain Hackers 2022.
+[800.08s -> 802.00s]  And this week we will be taking a look at...
+[802.48s -> 804.16s]  The Stone Age Computer.
+[804.16s -> 807.36s]  On display at Hacking at the End of the Universe in 1993,
+[807.36s -> 811.12s]  an interactive art installation made by Mathilde Muppet,
+[811.12s -> 813.52s]  or microprocessor as it is stylized.
+[814.72s -> 819.12s]  It has been on display on several locations in 1993,
+[819.12s -> 820.80s]  dressed up differently each time,
+[821.36s -> 824.88s]  which ties in with the organic feel of this artwork.
+[824.88s -> 830.88s]  It was meant as a piece to bring people back from the kilos of manuals
+[830.88s -> 831.92s]  that were involved with...
+[832.56s -> 833.44s]  Using computers.
+[834.32s -> 835.28s]  Back to nature.
+[836.08s -> 838.64s]  It is designed like a Japanese garden.
+[838.64s -> 843.84s]  And as we read on her website from 1993, and I quote,
+[843.84s -> 845.68s]  Get into the primitive mode.
+[845.68s -> 848.88s]  Hit the Stone Age keyboard where rocks represent the keys.
+[848.88s -> 852.00s]  Squeeze the water sacks dangling along the keyboard,
+[853.04s -> 856.80s]  representing the simultaneous keys, Alt Shift and Control.
+[856.80s -> 860.72s]  Get the feeling how you push your data through the computer.
+[860.72s -> 861.28s]  End quote.
+[862.00s -> 865.76s]  So, I guess you have to squeeze the water sacks
+[865.76s -> 868.24s]  and mash the Z key when you do something wrong.
+[869.84s -> 872.80s]  And you should also not forget to water the keyboard
+[872.80s -> 878.08s]  as it is laid in actual soil with living plants and moss and everything.
+[879.36s -> 882.24s]  According to the stories that I've heard,
+[882.24s -> 885.12s]  this is the event where the computer actually got hooked up
+[885.12s -> 889.84s]  to one of the eight phone lines that was available at the camp.
+[889.84s -> 890.72s]  So it could have...
+[890.72s -> 891.24s]  Closed-court, 8 games per night.
+[891.24s -> 894.88s]  actual dial-up connection to the rest of the world.
+[895.58s -> 897.10s]  And for the people watching on YouTube,
+[897.30s -> 900.72s]  there will be some pictures flashing on screen from Matilda's website.
+[900.88s -> 901.96s]  The link will be in the show notes.
+[902.22s -> 905.60s]  And it is also featured on the cover of a book about data communications.
+[906.52s -> 909.44s]  This wasn't the last time that Matilda would show up
+[909.44s -> 910.74s]  with an interactive art piece.
+[911.04s -> 913.16s]  And that might be something for a future episode.
+[914.22s -> 917.42s]  So let's look at one of the vacancies of the week.
+[917.42s -> 921.92s]  We have a team that is called Volunteering.
+[922.92s -> 928.12s]  And this is kind of a meta thing we are having at our hands here.
+[928.56s -> 931.56s]  You mean that team Volunteers is looking for volunteers
+[931.56s -> 932.66s]  to look for volunteers?
+[933.40s -> 935.40s]  Yes, that is what I mean.
+[936.46s -> 940.20s]  So we need volunteers to look for volunteers to have more volunteers
+[940.20s -> 943.70s]  because we can never have enough volunteers.
+[943.70s -> 944.04s]  Volunteers.
+[945.78s -> 946.70s]  Yeah, and it's not only...
+[947.42s -> 952.26s]  During this organizational phase, it's also during the event
+[952.26s -> 955.06s]  because there's the whole angel system with volunteering
+[955.06s -> 962.02s]  during the event with simple tasks, but very necessary tasks.
+[962.76s -> 966.00s]  And we also need people for the volunteer kitchen.
+[967.10s -> 967.74s]  Yes.
+[967.86s -> 971.20s]  Because if you do participate in the angel system
+[971.20s -> 975.38s]  and you do actually volunteer for a couple of hours on a day,
+[976.00s -> 976.90s]  you get a meal.
+[978.02s -> 978.90s]  Yeah, absolutely.
+[979.88s -> 984.28s]  And it's also about making sure everybody stays hydrated.
+[984.62s -> 990.28s]  It's about all kinds of different things at the event itself.
+[990.50s -> 994.34s]  But prior to the event, it's also talking to other teams.
+[994.48s -> 995.58s]  Do you still have vacancies?
+[995.80s -> 996.60s]  Do you need help?
+[996.86s -> 1002.10s]  Do we need people to help out with the finance team,
+[1002.10s -> 1004.34s]  the fire team, the shuttle team?
+[1005.18s -> 1007.08s]  Do we need more shuttle drivers?
+[1007.08s -> 1008.70s]  You can also become a shuttle driver
+[1008.70s -> 1016.20s]  to take people from the station to the event and back again.
+[1017.44s -> 1021.48s]  So, yeah, volunteers is a very important team
+[1021.48s -> 1026.48s]  for finding volunteers to help volunteers.
+[1027.38s -> 1029.32s]  Yes, so check them out on the wiki
+[1029.32s -> 1033.24s]  or send them an email at volunteers at y2025.org.
+[1033.66s -> 1034.14s]  Yes.
+[1037.08s -> 1041.10s]  Each week, we will share where you can find
+[1041.10s -> 1043.48s]  why-minded people, where to hack.
+[1044.86s -> 1048.12s]  So here with me today is Dave.
+[1048.50s -> 1051.48s]  And Dave is going to tell us a little bit
+[1051.48s -> 1054.16s]  on where we can hack soon
+[1054.16s -> 1056.82s]  because you're organizing an amazing event
+[1056.82s -> 1060.14s]  and happy to have you on the YCast
+[1060.14s -> 1062.00s]  to tell a little bit more about it.
+[1062.12s -> 1064.08s]  So maybe you can introduce yourself.
+[1064.50s -> 1067.02s]  Maybe also what you're doing organizing hacks.
+[1067.08s -> 1069.08s]  And maybe also a little bit about
+[1069.08s -> 1071.30s]  what you intend to do for Y.
+[1073.02s -> 1075.42s]  So, yeah, my name is Dave Borchuis.
+[1075.92s -> 1077.80s]  I am also a volunteer at Y.
+[1077.80s -> 1085.04s]  So this year, I can help with the permit party part.
+[1085.68s -> 1090.58s]  And I was also a volunteer in previous camps.
+[1091.14s -> 1095.58s]  So one camp, I was the lead of the light and audio.
+[1096.18s -> 1096.86s]  Another one, I had...
+[1096.86s -> 1100.14s]  I had my own village called Ritok Village
+[1100.14s -> 1103.04s]  with Commodore 64 and Amiga and stuff like that.
+[1103.72s -> 1107.96s]  So I was already quite busy with, yeah,
+[1108.02s -> 1109.60s]  all kinds of computer stuff.
+[1111.22s -> 1116.62s]  And in 28 and 29 September of this year,
+[1117.18s -> 1118.84s]  I'm going to organize the Hackfest.
+[1119.52s -> 1121.62s]  And it's going to be in the Drukpershal.
+[1122.88s -> 1123.40s]  Drukpershal.
+[1123.84s -> 1124.06s]  Yes.
+[1124.06s -> 1126.80s]  We will put a link in the show notes.
+[1126.86s -> 1131.52s]  But it's a very old building where previously
+[1131.52s -> 1135.24s]  the letter, the newspapers were printed.
+[1135.62s -> 1136.54s]  Oh, that's awesome.
+[1136.76s -> 1136.90s]  Cool.
+[1137.56s -> 1141.70s]  Awesome, big space, very high, very industrial.
+[1142.20s -> 1144.32s]  So, yeah, that's what I like.
+[1144.92s -> 1146.70s]  Very suitable for a Hackfest.
+[1147.22s -> 1148.40s]  Yeah, I thought so.
+[1148.80s -> 1153.60s]  So it took a little bit of effort to get it all organized.
+[1153.60s -> 1156.66s]  But we're going to do the festival itself.
+[1156.86s -> 1159.52s]  Okay, so Hackfest is two days.
+[1159.62s -> 1161.00s]  It's on a Saturday and a Sunday.
+[1161.36s -> 1162.22s]  Yeah, that's right.
+[1162.78s -> 1166.04s]  And the Drukpershal is based in?
+[1166.78s -> 1167.48s]  Enschede itself.
+[1167.56s -> 1168.48s]  In Enschede.
+[1168.90s -> 1169.34s]  So, yeah.
+[1169.70s -> 1171.48s]  So it's near the German border as well.
+[1171.92s -> 1172.08s]  Yeah.
+[1172.60s -> 1173.48s]  So...
+[1173.48s -> 1175.36s]  Well, all Germans are also welcome to Hackfest.
+[1175.36s -> 1177.32s]  Germans are always welcome also.
+[1177.92s -> 1179.60s]  Of course, everybody is welcome.
+[1180.00s -> 1180.10s]  Yeah.
+[1180.10s -> 1184.60s]  And can you tell me a little bit about the content?
+[1184.78s -> 1186.66s]  What will happen when I look at the...
+[1186.66s -> 1186.76s]  Yeah.
+[1186.76s -> 1186.78s]  Yeah.
+[1186.78s -> 1186.80s]  Yeah.
+[1186.80s -> 1186.82s]  Yeah.
+[1186.82s -> 1186.84s]  Yeah.
+[1186.84s -> 1186.86s]  Yeah.
+[1186.86s -> 1188.06s]  Speakers program, for instance.
+[1188.60s -> 1189.08s]  Yeah.
+[1189.18s -> 1191.30s]  So I have several parts.
+[1191.88s -> 1196.00s]  So it's kind of the traditional Maker Faire.
+[1196.32s -> 1197.80s]  And if you don't know what it is,
+[1198.24s -> 1201.02s]  that is that a hobbyist has his own projects
+[1201.02s -> 1205.72s]  and is going to show and tell a little bit about their project
+[1205.72s -> 1207.36s]  and explain what he did
+[1207.36s -> 1210.32s]  and maybe explain a little bit about the mistakes he made
+[1210.32s -> 1211.18s]  and stuff like that.
+[1212.22s -> 1213.74s]  So that's always...
+[1213.74s -> 1215.90s]  I find that mostly interesting.
+[1215.90s -> 1218.36s]  Sorry.
+[1221.16s -> 1225.18s]  And Saturday evening, we also have a part of the demo scene
+[1225.18s -> 1226.90s]  because I am also active in there.
+[1227.28s -> 1230.06s]  So that's MCA's 2022.
+[1231.52s -> 1235.58s]  I organized a bite jam at the camp.
+[1235.70s -> 1236.60s]  That was kind of nice.
+[1237.24s -> 1240.12s]  And lots of people still don't know what it is.
+[1241.16s -> 1241.54s]  So...
+[1241.54s -> 1242.62s]  What is it?
+[1242.94s -> 1243.88s]  A demo scene?
+[1244.76s -> 1244.78s]  Yeah.
+[1244.78s -> 1245.88s]  So very short.
+[1246.16s -> 1249.30s]  The chart originally started in the old days
+[1249.30s -> 1250.36s]  when the computers were new.
+[1250.98s -> 1254.58s]  And the software, if someone cracked it,
+[1255.60s -> 1258.34s]  they want to put something in front of it,
+[1258.46s -> 1259.30s]  like bragging,
+[1259.64s -> 1261.48s]  I made this and stuff like that.
+[1262.08s -> 1262.26s]  Yeah.
+[1262.82s -> 1265.00s]  That became more and more complex.
+[1265.58s -> 1267.38s]  So in the end, it was with music
+[1267.38s -> 1270.66s]  and real-time graphics and stuff like that.
+[1271.02s -> 1271.20s]  Yeah.
+[1272.08s -> 1272.84s]  So...
+[1272.84s -> 1275.58s]  And after some time, the cracking itself became illegal.
+[1275.58s -> 1275.86s]  So...
+[1275.88s -> 1278.12s]  People don't want to do that anymore.
+[1278.42s -> 1280.82s]  But still want to make the demos,
+[1280.82s -> 1284.38s]  still want to make the music, the effects and stuff like that.
+[1285.30s -> 1287.78s]  And that became, in the end, the demo scene.
+[1287.78s -> 1292.34s]  And even nowadays, there were still people that make demos
+[1292.34s -> 1298.46s]  for the Commodore 64 or the Amiga or all kind of other old platforms.
+[1299.00s -> 1301.52s]  Yeah, it's crazy creative and cool.
+[1301.52s -> 1303.92s]  Yeah, it's really much so much fun.
+[1304.40s -> 1304.70s]  Yeah.
+[1304.70s -> 1305.50s]  And especially...
+[1305.50s -> 1310.94s]  What I like, they also have categories called 4K and 4K,
+[1310.94s -> 1314.14s]  not in resolution, but as the size of the executable.
+[1314.14s -> 1314.64s]  Uh-huh.
+[1314.64s -> 1315.94s]  Of 4,000 bytes.
+[1315.94s -> 1318.82s]  And if you see what they make with 4,000 bytes,
+[1318.82s -> 1320.60s]  it's crazy amazing.
+[1321.70s -> 1323.72s]  So that's going to be Saturday evening.
+[1323.72s -> 1327.34s]  So we're going to show a little bit of the history of the demo scene.
+[1327.64s -> 1331.48s]  Then we're going to have a live coding part with Tech 80.
+[1331.90s -> 1335.46s]  And then after that, there's a DJ who makes a little bit of music.
+[1335.98s -> 1336.48s]  Okay.
+[1336.82s -> 1340.42s]  So a really awesome party on Saturday night as well.
+[1341.06s -> 1341.24s]  Yeah.
+[1341.24s -> 1347.56s]  And yeah, during the day, the exposition is there and the speakers.
+[1347.98s -> 1351.64s]  And one of the speakers, Mitch Altman, he's going to expand a little bit
+[1351.64s -> 1354.04s]  about Hackerspace and why it's important.
+[1354.74s -> 1356.32s]  But we also...
+[1356.32s -> 1358.60s]  Because you are also linked to Hackerspace, right?
+[1358.96s -> 1359.18s]  Yeah.
+[1359.18s -> 1359.44s]  Yeah.
+[1359.44s -> 1363.46s]  So I'm also the founder of the Hackerspace in Enschede, called the Tuckernub.
+[1363.94s -> 1365.44s]  Do you sleep as well?
+[1365.50s -> 1366.16s]  Sometimes.
+[1366.16s -> 1366.64s]  Sometimes.
+[1366.64s -> 1367.04s]  Sometimes.
+[1367.04s -> 1372.50s]  So you're also the founder of Tuckernub, which we will also put in the show notes.
+[1372.50s -> 1373.00s]  Of course.
+[1373.00s -> 1373.78s]  Very cool.
+[1373.78s -> 1374.32s]  Cool, cool.
+[1375.38s -> 1381.28s]  And yeah, and I also try to promote Hackerspaces in general.
+[1381.58s -> 1386.06s]  So I'm also kind of the maintainer of the Hackerspaces.nl site in the Netherlands.
+[1386.50s -> 1387.16s]  Very nice.
+[1387.16s -> 1390.06s]  And map at mapspace.
+[1390.06s -> 1393.10s]  No, mapall.space.
+[1393.10s -> 1393.82s]  Oh, terrible.
+[1393.82s -> 1395.02s]  Oh, you know what I mean?
+[1395.02s -> 1395.28s]  Yeah.
+[1395.28s -> 1395.48s]  Yeah.
+[1395.50s -> 1399.84s]  You can see all the spaces that are currently open and including the Fab Labs and stuff
+[1399.84s -> 1400.26s]  like that.
+[1401.60s -> 1404.16s]  So yeah, I do a little bit more than that.
+[1404.22s -> 1405.16s]  And I still sleep.
+[1405.82s -> 1407.10s]  And you still sleep.
+[1407.74s -> 1407.92s]  Yeah.
+[1408.98s -> 1410.08s]  And speakers.
+[1410.34s -> 1411.10s]  Yeah, we have Mitch.
+[1411.20s -> 1413.96s]  We have some MQTT talks.
+[1414.60s -> 1416.16s]  We have also workshops.
+[1417.54s -> 1418.84s]  Like, yeah, Mitch is there.
+[1418.94s -> 1420.58s]  So we have the soldering workshops then.
+[1421.04s -> 1421.88s]  That makes sense.
+[1422.04s -> 1422.16s]  Yeah.
+[1422.16s -> 1425.04s]  Yeah, it's kind of always to come together.
+[1425.50s -> 1430.80s]  Some guys of the lockpicking village that's normally in the hacker camps is also there.
+[1430.80s -> 1431.30s]  Nice.
+[1431.54s -> 1432.04s]  Yeah.
+[1432.34s -> 1435.64s]  And then we have to how to make your own digital ID.
+[1437.38s -> 1440.92s]  So and the last part we're going to have is kind of hacker launch.
+[1440.96s -> 1443.00s]  So that's kind of what you see at Congress.
+[1443.34s -> 1449.42s]  So you can sit down there with your laptop and yeah, hack around and be social or not
+[1449.42s -> 1450.62s]  social, whatever you want.
+[1451.00s -> 1454.96s]  Yeah, be yourself with your people.
+[1454.96s -> 1458.04s]  Yeah, bring projects, small projects if you want to.
+[1458.04s -> 1466.38s]  So that's kind of the whole part of the both days and the demo scene part.
+[1466.38s -> 1471.46s]  That's only Saturday evening and we're going to repeat the history part on Sunday.
+[1471.46s -> 1475.00s]  But there's no live coding on Sunday.
+[1475.00s -> 1477.30s]  So yeah, that's kind of the program.
+[1477.62s -> 1478.08s]  Yeah.
+[1478.08s -> 1479.72s]  It's also on our website.
+[1479.72s -> 1483.04s]  So if this all goes too fast, just read it.
+[1483.38s -> 1484.34s]  Yeah, right.
+[1484.96s -> 1487.12s]  And important question.
+[1487.12s -> 1488.62s]  Are there still tickets left?
+[1489.00s -> 1489.46s]  Sure.
+[1489.76s -> 1491.08s]  There are tickets left.
+[1491.34s -> 1491.84s]  Yeah.
+[1492.50s -> 1498.54s]  And if you are if you come in full cosplay, you can get free entrance.
+[1498.84s -> 1502.30s]  Ooh, that's a nice excuse to dress up again.
+[1503.72s -> 1506.20s]  So I'm all for for dressing up.
+[1506.20s -> 1511.80s]  I already told you I was I have my crown here for the queen of hearts.
+[1513.50s -> 1514.92s]  So this will.
+[1514.96s -> 1517.46s]  Not be enough for a cosplay, right?
+[1517.96s -> 1521.16s]  No, no, you have to do a little bit more than that.
+[1521.42s -> 1521.92s]  You have to.
+[1521.92s -> 1522.96s]  Yeah, we will.
+[1522.96s -> 1525.58s]  We will do the full, full costume.
+[1525.72s -> 1527.54s]  We will put the full costume in.
+[1527.54s -> 1534.38s]  But so if you if you like to dress up, you can and dress up and get free entrance.
+[1534.38s -> 1536.38s]  That's like that's like a double bonus.
+[1536.66s -> 1537.30s]  Yeah.
+[1537.30s -> 1539.16s]  Also, very cool.
+[1539.16s -> 1544.16s]  You told me if you would dress up, it would probably be steampunk style, right?
+[1544.26s -> 1544.76s]  Yeah.
+[1544.76s -> 1549.26s]  But but to be honest, I find very amazing that people do that.
+[1549.26s -> 1551.38s]  But I'm not that creative.
+[1551.38s -> 1553.38s]  So I have other qualities.
+[1553.38s -> 1557.38s]  They say they're organizing crazy cool events, for instance.
+[1557.64s -> 1559.42s]  Yeah. Yeah.
+[1559.42s -> 1564.96s]  So is there anything else you want to add or I want to highlight or.
+[1566.72s -> 1569.06s]  The computer museum is also coming.
+[1569.06s -> 1570.10s]  So that's kind of nice.
+[1570.10s -> 1571.06s]  Best team is coming.
+[1571.06s -> 1572.76s]  So also part of the camp.
+[1574.76s -> 1577.26s]  They also make the batches for the coming white cap.
+[1577.26s -> 1578.80s]  So, yes, very cool.
+[1578.80s -> 1584.76s]  Yeah, but and I also have some people that make music.
+[1584.76s -> 1588.96s]  So there's some 3D printed instruments.
+[1589.46s -> 1593.38s]  Oh, the guy who makes instruments with the laser cutter.
+[1594.46s -> 1597.56s]  So this is all kind of accidental stuff.
+[1598.46s -> 1602.80s]  Demi also for from the laser lights and stuff like that.
+[1602.88s -> 1604.06s]  So if you see this.
+[1604.06s -> 1607.86s]  Laser light at any party in the Netherlands, the chance is high
+[1607.86s -> 1610.06s]  that Dimitri is involved somehow.
+[1610.30s -> 1611.30s]  Yeah, yeah, yeah.
+[1612.52s -> 1615.94s]  We're probably going to have him on the show somewhere.
+[1615.94s -> 1621.18s]  Yeah, he has some crazy cool plants with loads of fire for a while as well.
+[1621.18s -> 1623.68s]  Yeah, yeah.
+[1623.68s -> 1627.56s]  We're doing the permits, so we have to make sure he can do his thing.
+[1628.56s -> 1631.72s]  Well, we have to say, say, Demi, nice idea, but no.
+[1631.72s -> 1636.38s]  Well, let's try to make it happen because that would be awesome.
+[1636.38s -> 1638.68s]  Yeah, very cool.
+[1638.68s -> 1643.84s]  And for the rest, it's all about hardware, software or kind of open source technical.
+[1644.76s -> 1648.80s]  Also a little bit introduction for the people who are not very familiar with it.
+[1648.80s -> 1651.56s]  So yeah, enough to do for everyone.
+[1651.72s -> 1654.18s]  So sounds cool.
+[1654.18s -> 1654.92s]  Great.
+[1654.92s -> 1657.72s]  Well, Dave, thank you so much for telling us more.
+[1659.26s -> 1661.30s]  Anyone who does listen.
+[1661.30s -> 1661.56s]  If you have.
+[1661.56s -> 1663.22s]  If you have time, please go to answer today.
+[1663.22s -> 1667.68s]  Go to Hackfest because it sounds like you have a very cool program there
+[1667.68s -> 1671.86s]  for for anyone who is interested in the in the community.
+[1672.02s -> 1673.86s]  So thank you so much.
+[1673.86s -> 1675.44s]  Yeah, thank you.
+[1676.40s -> 1678.86s]  So those are some some cool stories by Dave.
+[1679.32s -> 1679.94s]  Yeah.
+[1680.60s -> 1681.22s]  Yeah.
+[1681.22s -> 1682.32s]  See you at Hackfest.
+[1682.32s -> 1685.02s]  So I'll be there.
+[1685.02s -> 1686.26s]  I'll be on stage actually.
+[1686.26s -> 1688.90s]  So you can interview people who don't like us as well there.
+[1689.80s -> 1691.14s]  Perhaps, perhaps.
+[1691.14s -> 1695.64s]  Oh, I mean, I'll be there both days.
+[1695.64s -> 1700.44s]  So if you have something to ask or to share, please come up to me.
+[1701.30s -> 1705.94s]  And if you have feedback on our podcast, send us an email.
+[1706.72s -> 1709.44s]  Ycast at Y2025.org.
+[1710.22s -> 1715.84s]  And we want to thank Bix for giving our giving us our intro music.
+[1716.44s -> 1718.72s]  Yeah, thanks, Bix.
+[1718.72s -> 1720.44s]  Yeah, that's awesome.
+[1720.44s -> 1723.74s]  If you want more information about the event, the different teams
+[1724.20s -> 1727.02s]  or this podcast, look at our wiki.
+[1727.68s -> 1730.32s]  You can find that on Y2025.org.
+[1730.74s -> 1733.68s]  And you can also mail either Nancy or
+[1734.94s -> 1736.36s]  the podcast itself.
+[1736.36s -> 1744.32s]  You can send an email to Ycast at Y2025.org with any cool stories, hacker events
+[1744.52s -> 1750.32s]  and also send historical facts with us so we can have more cool.
+[1750.44s -> 1753.56s]  Cool things in the episode with the Adfluencer.
+[1754.06s -> 1754.28s]  Yeah.
+[1754.28s -> 1755.90s]  Thank you so much for listening indeed.
+[1756.74s -> 1758.20s]  And see you next week, Ad.
+[1758.82s -> 1759.52s]  See you next week.
+[1759.52s -> 1759.94s]  See you next week.
