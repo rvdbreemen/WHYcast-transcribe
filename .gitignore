@@ -163,6 +163,9 @@ cython_debug/
 # Audio files 
 *.mp3
 
+# Log files 
+*.log
+
 # Environment variables
 .env
 

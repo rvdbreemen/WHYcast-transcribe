@@ -38,16 +38,57 @@ def setup_logging():
     logger = logging.getLogger()
     logger.setLevel(logging.INFO)
     
-    # Console handler
-    console_handler = logging.StreamHandler()
-    console_handler.setFormatter(logging.Formatter(log_format))
-    logger.addHandler(console_handler)
+    # Remove any existing handlers
+    for handler in logger.handlers[:]:
+        logger.removeHandler(handler)
     
-    # File handler
+    # File handler with UTF-8 encoding
     log_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'transcribe.log')
-    file_handler = logging.FileHandler(log_file)
+    file_handler = logging.FileHandler(log_file, encoding='utf-8')
     file_handler.setFormatter(logging.Formatter(log_format))
     logger.addHandler(file_handler)
+    
+    # Console handler with proper Unicode handling
+    try:
+        # Configure console for UTF-8
+        if sys.platform == 'win32':
+            import locale
+            # Use error handler that replaces problematic characters
+            console_handler = logging.StreamHandler()
+            console_handler.setFormatter(logging.Formatter(log_format))
+            console_handler.setStream(open(os.devnull, 'w', encoding='utf-8'))  # Dummy stream for initial setup
+            
+            # Custom StreamHandler that handles encoding errors
+            class EncodingSafeStreamHandler(logging.StreamHandler):
+                def emit(self, record):
+                    try:
+                        msg = self.format(record)
+                        stream = self.stream
+                        # Write with error handling for encoding issues
+                        try:
+                            stream.write(msg + self.terminator)
+                        except UnicodeEncodeError:
+                            # Fall back to ascii with replacement characters
+                            stream.write(msg.encode('ascii', 'replace').decode('ascii') + self.terminator)
+                        self.flush()
+                    except Exception:
+                        self.handleError(record)
+            
+            # Use our custom handler
+            console_handler = EncodingSafeStreamHandler(sys.stdout)
+            console_handler.setFormatter(logging.Formatter(log_format))
+        else:
+            # On non-Windows platforms, standard handler usually works fine
+            console_handler = logging.StreamHandler(sys.stdout)
+            console_handler.setFormatter(logging.Formatter(log_format))
+            
+        logger.addHandler(console_handler)
+    except Exception as e:
+        # Fallback to basic handler
+        console_handler = logging.StreamHandler()
+        console_handler.setFormatter(logging.Formatter(log_format))
+        logger.addHandler(console_handler)
+        logger.warning(f"Could not set up optimal console logging: {e}")
     
     return logger
 
@@ -396,8 +437,13 @@ def write_transcript_files(segments, output_file: str, output_file_timestamped: 
          open(output_file_timestamped, "w", encoding="utf-8") as f_timestamped:
         
         for segment in segments:
-            # Print to console with timestamps
-            logging.info("[%.2fs -> %.2fs] %s", segment.start, segment.end, segment.text)
+            # Print to console with timestamps - handle potential encoding errors
+            try:
+                logging.info("[%.2fs -> %.2fs] %s", segment.start, segment.end, segment.text)
+            except UnicodeEncodeError:
+                # Fall back to ASCII if Unicode fails
+                safe_text = segment.text.encode('ascii', 'replace').decode('ascii')
+                logging.info("[%.2fs -> %.2fs] %s", segment.start, segment.end, safe_text)
             
             # Store for OpenAI processing
             full_transcript += segment.text + "\n"
