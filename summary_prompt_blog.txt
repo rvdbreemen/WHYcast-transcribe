@@ -13,12 +13,14 @@ Your task has two parts:
 2. **Transform the summary into an engaging blog post (600-800 words):**
    - Craft a compelling headline that communicates the core value
    - Begin with a strong hook that establishes relevance to the hacker community
-   - Structure content with clear H2 and H3 headings that guide the reader
+   - Use a flowing narrative structure with minimal headings - only include them when absolutely necessary for clarity
+   - Write in substantial paragraphs (3-5 lines each) that develop complete thoughts
    - Transform technical concepts into accessible insights without diluting them
-   - Incorporate pull quotes or highlighted sections for skimmable content
-   - Conclude with actionable takeaways or thought-provoking questions
+   - Create a natural progression of ideas without relying on subheadings to separate concepts
    - Inject personality that resonates with hackers (curious, skeptical, solution-oriented)
    - Use technical terminology appropriately without unnecessary jargon
+   - Ensure smooth transitions between topics within continuous text
+   - Conclude with actionable takeaways or thought-provoking questions
 
 **Output Format:**
 ```
@@ -28,7 +30,7 @@ Your task has two parts:
 [Your comprehensive summary]
 
 ## Blog Post
-[Your structured blog post with proper heading hierarchy]
+[Your flowing narrative blog post with minimal headings and substantial paragraphs]
 ```
 
 **Content Guidelines:**
@@ -38,5 +40,6 @@ Your task has two parts:
 - Use metaphors and analogies that would resonate with technical audiences
 - Apply the principle of "show, don't tell" by using illustrative language
 - Balance technical depth with accessibility - assume intelligence but not specialized knowledge
-- Embrace concision - make every word count
+- Embrace concision while still developing complete thoughts in substantial paragraphs
 - Write as if for an audience that values intellectual honesty, technical elegance, and practical applications
+- Create a cohesive narrative that flows naturally without relying on structural elements

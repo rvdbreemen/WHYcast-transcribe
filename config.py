@@ -13,7 +13,7 @@ COMPUTE_TYPE = os.environ.get("WHISPER_COMPUTE_TYPE", "int8")
 BEAM_SIZE = int(os.environ.get("WHISPER_BEAM_SIZE", "5"))
 
 # OpenAI configuration
-OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4.5-preview")  # Updated to current model name
+OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o")  # Updated to current model name
 OPENAI_LARGE_CONTEXT_MODEL = os.environ.get("OPENAI_LARGE_CONTEXT_MODEL", "gpt-4o-2024-05-13")  # Updated to latest version with 128K context
 TEMPERATURE = float(os.environ.get("OPENAI_TEMPERATURE", "0.7"))
 MAX_TOKENS = int(os.environ.get("OPENAI_MAX_TOKENS", "4000"))  # Increased for longer summaries
