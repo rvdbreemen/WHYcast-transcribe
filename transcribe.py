@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-WHYcast Transcribe - v0.0.1
+WHYcast Transcribe - v0.0.2
 
 A tool for transcribing audio files and generating summaries using OpenAI GPT models.
 
@@ -32,11 +32,26 @@ from config import (
 # Load environment variables from .env file
 load_dotenv()
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
+# Set up logging to both console and file
+def setup_logging():
+    log_format = '%(asctime)s - %(levelname)s - %(message)s'
+    logger = logging.getLogger()
+    logger.setLevel(logging.INFO)
+    
+    # Console handler
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(logging.Formatter(log_format))
+    logger.addHandler(console_handler)
+    
+    # File handler
+    log_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'transcribe.log')
+    file_handler = logging.FileHandler(log_file)
+    file_handler.setFormatter(logging.Formatter(log_format))
+    logger.addHandler(file_handler)
+    
+    return logger
+
+logger = setup_logging()
 
 # ==================== API FUNCTIONS ====================
 def ensure_api_key() -> str:
@@ -443,7 +458,7 @@ def transcription_exists(input_file: str) -> bool:
 
 # ==================== MAIN FUNCTION ====================
 def main(input_file: str, model_size: Optional[str] = None, output_dir: Optional[str] = None, 
-         skip_summary: bool = False, force: bool = False) -> None:
+         skip_summary: bool = False, force: bool = False, is_batch_mode: bool = False) -> None:
     """
     Main function to process an audio file.
     
@@ -453,12 +468,15 @@ def main(input_file: str, model_size: Optional[str] = None, output_dir: Optional
         output_dir: Directory to save output files (defaults to input file directory)
         skip_summary: Flag to skip summary generation
         force: Flag to force regeneration of transcription even if it exists
+        is_batch_mode: Flag indicating if running as part of batch processing
     """
     try:
         # Check input file
         if not os.path.exists(input_file):
             logging.error(f"Input file does not exist: {input_file}")
-            sys.exit(1)
+            if not is_batch_mode:
+                sys.exit(1)
+            return
         
         # Skip if transcription already exists and not forcing
         if not force and transcription_exists(input_file):
@@ -505,8 +523,10 @@ def main(input_file: str, model_size: Optional[str] = None, output_dir: Optional
             process_summary(full_transcript, output_summary_file)
             
     except Exception as e:
-        logging.error(f"An error occurred: {str(e)}")
-        sys.exit(1)
+        logging.error(f"An error occurred processing {input_file}: {str(e)}")
+        if not is_batch_mode:
+            sys.exit(1)
+        # In batch mode, we continue to the next file
 
 def process_batch(input_pattern: str, **kwargs) -> None:
     """
@@ -524,7 +544,7 @@ def process_batch(input_pattern: str, **kwargs) -> None:
     logging.info(f"Found {len(files)} files to process")
     for file in tqdm(files, desc="Processing files"):
         logging.info(f"Processing file: {file}")
-        main(file, **kwargs)
+        main(file, is_batch_mode=True, **kwargs)
 
 def process_all_mp3s(directory: str, **kwargs) -> None:
     """
@@ -547,7 +567,7 @@ def process_all_mp3s(directory: str, **kwargs) -> None:
     logging.info(f"Found {len(files)} MP3 files to process")
     for file in tqdm(files, desc="Processing MP3 files"):
         logging.info(f"Processing file: {file}")
-        main(file, **kwargs)
+        main(file, is_batch_mode=True, **kwargs)
 
 # ==================== ENTRY POINT ====================
 if __name__ == "__main__":
