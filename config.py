@@ -4,7 +4,7 @@ Configuration settings for the transcription system.
 import os
 
 # Version information
-VERSION = "v0.0.2"
+VERSION = "v0.0.3"
 
 # Model configuration
 MODEL_SIZE = os.environ.get("WHISPER_MODEL_SIZE", "large-v3")
@@ -31,3 +31,7 @@ CHUNK_OVERLAP = int(os.environ.get("CHUNK_OVERLAP", "1000"))  # Overlap between 
 
 # File paths
 PROMPT_FILE = os.environ.get("SUMMARY_PROMPT_FILE", "summary_prompt_blog.txt")
+
+# Custom vocabulary settings
+USE_CUSTOM_VOCABULARY = True  # Set to False to disable
+VOCABULARY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "vocabulary.json")

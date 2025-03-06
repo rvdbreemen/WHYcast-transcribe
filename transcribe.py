@@ -12,22 +12,33 @@ License: MIT (see LICENSE file for details)
 import os
 import sys
 import logging
-from typing import Tuple, List, Optional
+from typing import Tuple, List, Optional, Dict
 from dotenv import load_dotenv
 from tqdm import tqdm
 import glob
 import argparse
+import json
+import re
 from openai import OpenAI, BadRequestError
 from faster_whisper import WhisperModel
 
-# Import configuration
-from config import (
-    VERSION, MODEL_SIZE, DEVICE, COMPUTE_TYPE, BEAM_SIZE,
-    OPENAI_MODEL, OPENAI_LARGE_CONTEXT_MODEL, 
-    TEMPERATURE, MAX_TOKENS, MAX_INPUT_TOKENS, CHARS_PER_TOKEN,
-    PROMPT_FILE, MAX_FILE_SIZE_KB,
-    USE_RECURSIVE_SUMMARIZATION, MAX_CHUNK_SIZE, CHUNK_OVERLAP
-)
+# Try to import configuration
+try:
+    from config import (
+        VERSION, MODEL_SIZE, DEVICE, COMPUTE_TYPE, BEAM_SIZE,
+        OPENAI_MODEL, OPENAI_LARGE_CONTEXT_MODEL, 
+        TEMPERATURE, MAX_TOKENS, MAX_INPUT_TOKENS, CHARS_PER_TOKEN,
+        PROMPT_FILE, MAX_FILE_SIZE_KB,
+        USE_RECURSIVE_SUMMARIZATION, MAX_CHUNK_SIZE, CHUNK_OVERLAP,
+        VOCABULARY_FILE, USE_CUSTOM_VOCABULARY
+    )
+except ImportError as e:
+    sys.stderr.write(f"Error: Could not import configuration - {str(e)}\n")
+    sys.stderr.write("Make sure config.py exists and contains all required settings.\n")
+    sys.exit(1)
+except Exception as e:
+    sys.stderr.write(f"Error in configuration: {str(e)}\n")
+    sys.exit(1)
 
 # Load environment variables from .env file
 load_dotenv()
@@ -371,6 +382,119 @@ def generate_summary_and_blog(transcript: str, prompt: str) -> Optional[str]:
         logging.error(f"Error generating summary: {str(e)}")
         return None
 
+# ==================== VOCABULARY PROCESSING FUNCTIONS ====================
+# Dictionary to cache vocabulary mappings
+_vocabulary_cache = {}
+
+def load_vocabulary_mappings(vocab_file: str) -> Dict[str, str]:
+    """
+    Load vocabulary mappings from a JSON file.
+    
+    Args:
+        vocab_file: Path to the vocabulary JSON file
+        
+    Returns:
+        Dictionary of {incorrect_term: correct_term} mappings
+    """
+    # Return cached vocabulary if available
+    if vocab_file in _vocabulary_cache:
+        return _vocabulary_cache[vocab_file]
+        
+    if not os.path.exists(vocab_file):
+        logging.warning(f"Vocabulary file not found: {vocab_file}")
+        return {}
+        
+    try:
+        # Read file content once to avoid reading twice in case of error
+        with open(vocab_file, 'r', encoding='utf-8') as f:
+            content = f.read()
+            
+        try:
+            mappings = json.loads(content)
+        except json.JSONDecodeError as json_err:
+            # Provide more detailed information about the JSON parsing error
+            logging.error(f"JSON syntax error in vocabulary file: {str(json_err)}")
+            logging.error(f"Check your vocabulary file for issues near character position {json_err.pos}")
+            # Show the problematic part of the JSON
+            start_pos = max(0, json_err.pos - 20)
+            end_pos = min(len(content), json_err.pos + 20)
+            context = content[start_pos:end_pos]
+            pointer = ' ' * (min(20, json_err.pos - start_pos)) + '^'
+            logging.error(f"Context: ...{context}...")
+            logging.error(f"Position: ...{pointer}...")
+            return {}
+        
+        if not isinstance(mappings, dict):
+            logging.error(f"Vocabulary file must contain a JSON object/dictionary")
+            return {}
+        
+        # Validate entries - ensure keys and values are strings and not empty
+        valid_mappings = {}
+        for key, value in mappings.items():
+            if not isinstance(key, str) or not key.strip():
+                logging.warning(f"Skipping invalid vocabulary mapping key: {key}")
+                continue
+            if not isinstance(value, str):
+                logging.warning(f"Skipping non-string value for key '{key}': {value}")
+                continue
+            valid_mappings[key] = value
+            
+        if len(valid_mappings) < len(mappings):
+            logging.warning(f"Removed {len(mappings) - len(valid_mappings)} invalid mappings")
+            
+        # Cache the validated mappings
+        _vocabulary_cache[vocab_file] = valid_mappings
+        logging.info(f"Loaded {len(valid_mappings)} vocabulary mappings")
+        return valid_mappings
+    except Exception as e:
+        logging.error(f"Error loading vocabulary file: {str(e)}")
+        return {}
+
+def apply_vocabulary_corrections(text: str, vocab_mappings: Dict[str, str]) -> str:
+    """
+    Apply vocabulary corrections to the transcribed text.
+    
+    Args:
+        text: The text to correct
+        vocab_mappings: Dictionary of word mappings
+        
+    Returns:
+        Corrected text
+    """
+    if not vocab_mappings:
+        return text
+    
+    corrected_text = text
+    
+    # Sort mappings by length (descending) to handle longer phrases first
+    sorted_mappings = sorted(vocab_mappings.items(), key=lambda x: len(x[0]), reverse=True)
+    
+    for incorrect, correct in sorted_mappings:
+        # Use word boundaries for more accurate replacement
+        pattern = r'\b' + re.escape(incorrect) + r'\b'
+        corrected_text = re.sub(pattern, correct, corrected_text, flags=re.IGNORECASE)
+    
+    return corrected_text
+
+def process_transcript_with_vocabulary(transcript: str) -> str:
+    """
+    Process a transcript with custom vocabulary corrections.
+    
+    Args:
+        transcript: The transcript text
+        
+    Returns:
+        The processed transcript
+    """
+    if not USE_CUSTOM_VOCABULARY:
+        return transcript
+    
+    vocab_mappings = load_vocabulary_mappings(VOCABULARY_FILE)
+    if not vocab_mappings:
+        return transcript
+    
+    return apply_vocabulary_corrections(transcript, vocab_mappings)
+
 # ==================== TRANSCRIPTION FUNCTIONS ====================
 def setup_model(model_size: str = MODEL_SIZE) -> WhisperModel:
     """
@@ -396,13 +520,15 @@ def transcribe_audio(model: WhisperModel, audio_file: str) -> Tuple[List, object
         Tuple of (segments, info)
     """
     logging.info(f"Transcribing {audio_file}...")
+    if USE_CUSTOM_VOCABULARY:
+        logging.info("Vocabulary corrections will be applied during transcription")
+    
     return model.transcribe(
         audio_file,
         beam_size=BEAM_SIZE
-        # Removed progress_callback parameter as it's not supported in this version of faster-whisper
     )
 
-def create_output_paths(input_file: str) -> Tuple[str, str, str, str]:
+def create_output_paths(input_file: str) -> Tuple[str, str, str]:
     """
     Create output file paths based on the input filename.
     
@@ -410,14 +536,13 @@ def create_output_paths(input_file: str) -> Tuple[str, str, str, str]:
         input_file: Path to the input audio file
         
     Returns:
-        Tuple of (plain_text_path, timestamped_path, summary_path, blog_path)
+        Tuple of (plain_text_path, timestamped_path, summary_path)   
     """
     base = os.path.splitext(input_file)[0]
     return (
         f"{base}.txt",             # Without timestamps
         f"{base}_ts.txt",          # With timestamps
         f"{base}_summary.txt",     # For summary
-        f"{base}_blog.txt"         # For blog post
     )
 
 def write_transcript_files(segments, output_file: str, output_file_timestamped: str) -> str:
@@ -428,85 +553,76 @@ def write_transcript_files(segments, output_file: str, output_file_timestamped: 
         segments: Transcript segments from WhisperModel
         output_file: Path for plain text output
         output_file_timestamped: Path for timestamped output
-            
+        
     Returns:
         The full transcript as a string
     """
     full_transcript = ""
     
-    with open(output_file, "w", encoding="utf-8") as f_plain, \
-         open(output_file_timestamped, "w", encoding="utf-8") as f_timestamped:
+    with open(output_file, "w", encoding="utf-8") as f_plain, open(output_file_timestamped, "w", encoding="utf-8") as f_timestamped:
         
         for segment in segments:
-            # Print to console with timestamps - handle potential encoding errors
-            try:
-                logging.info("[%.2fs -> %.2fs] %s", segment.start, segment.end, segment.text)
-            except UnicodeEncodeError:
-                # Fall back to ASCII if Unicode fails
-                safe_text = segment.text.encode('ascii', 'replace').decode('ascii')
-                logging.info("[%.2fs -> %.2fs] %s", segment.start, segment.end, safe_text)
+            # Get the original segment text
+            segment_text = segment.text
+            
+            # Apply vocabulary corrections to segment text if enabled
+            if USE_CUSTOM_VOCABULARY:
+                segment_text = apply_vocabulary_corrections(segment_text, load_vocabulary_mappings(VOCABULARY_FILE))
             
             # Store for OpenAI processing
-            full_transcript += segment.text + "\n"
+            full_transcript += segment_text + "\n"
             
             # Write to plain text file without timestamps
-            f_plain.write(segment.text + "\n")
-                
+            f_plain.write(segment_text + "\n")
+            
             # Write to timestamped file with timestamps
-            f_timestamped.write("[%.2fs -> %.2fs] %s\n" % (segment.start, segment.end, segment.text))
+            f_timestamped.write("[%.2fs -> %.2fs] %s\n" % (segment.start, segment.end, segment_text))
+            
+            # Print to console with timestamps - handle potential encoding errors
+            try:
+                logging.info("[%.2fs -> %.2fs] %s", segment.start, segment.end, segment_text)
+            except UnicodeEncodeError:
+                # Fall back to ASCII if Unicode fails
+                safe_text = segment_text.encode('ascii', 'replace').decode('ascii')
+                logging.info("[%.2fs -> %.2fs] %s", segment.start, segment.end, safe_text)
     
     logging.info(f"Transcription saved to: {output_file}")
     logging.info(f"Timestamped transcription saved to: {output_file_timestamped}")
     
+    # Apply a final pass of vocabulary corrections to the full transcript if enabled
+    # This catches any patterns that might span across segments
+    if USE_CUSTOM_VOCABULARY:
+        original_transcript = full_transcript
+        full_transcript = apply_vocabulary_corrections(full_transcript, load_vocabulary_mappings(VOCABULARY_FILE))
+        
+        # If the final pass made additional corrections, update the saved files
+        if full_transcript != original_transcript:
+            logging.info("Applying final vocabulary correction pass to catch cross-segment patterns")
+            with open(output_file, "w", encoding="utf-8") as f_plain:
+                f_plain.write(full_transcript)
+            
+            # Simplification: regenerate timestamped file from full transcript
+            # This is imperfect since timestamps might not perfectly align with corrected text
+            lines = full_transcript.split('\n')
+            timestamped_lines = []
+            with open(output_file_timestamped, "r", encoding="utf-8") as f_original:
+                original_timestamped = f_original.readlines()
+                
+            # Try to maintain timestamp information while updating text
+            for i, line in enumerate(lines):
+                if i < len(original_timestamped):
+                    ts_line = original_timestamped[i]
+                    ts_match = re.match(r'^\[\s*(\d+\.\d+)s\s*->\s*(\d+\.\d+)s\s*\]', ts_line)
+                    if ts_match and line.strip():
+                        start, end = ts_match.groups()
+                        timestamped_lines.append(f"[{start}s -> {end}s] {line}")
+                    elif line.strip():
+                        timestamped_lines.append(line)
+            
+            with open(output_file_timestamped, "w", encoding="utf-8") as f_updated:
+                f_updated.write('\n'.join(timestamped_lines))
+    
     return full_transcript
-
-def split_summary_and_blog(content: str) -> Tuple[str, str]:
-    """
-    Split the combined summary and blog content into separate parts.
-    
-    Args:
-        content: Combined summary and blog content
-        
-    Returns:
-        Tuple of (summary, blog)
-    """
-    # Look for common patterns that indicate the start of the blog section
-    blog_indicators = [
-        "WHYcast ",                        # Title typically starts with WHYcast
-        "Short title: WHYcast",             # From the prompt template
-        "# WHYcast ",                       # Markdown heading
-        "## WHYcast "                       # Alternative markdown heading
-    ]
-    
-    # Find the position where the blog starts
-    blog_start_pos = -1
-    blog_content = ""
-    summary_content = content
-    
-    for indicator in blog_indicators:
-        pos = content.find(indicator)
-        if pos != -1:
-            # Found a potential blog section start
-            # Check if this is the earliest indicator found
-            if blog_start_pos == -1 or pos < blog_start_pos:
-                blog_start_pos = pos
-    
-    # If we found a blog section, split the content
-    if blog_start_pos != -1:
-        # Get content before and after the split point
-        summary_content = content[:blog_start_pos].strip()
-        blog_content = content[blog_start_pos:].strip()
-        
-        # If we couldn't find a clear separation, log a warning and use the whole content as summary
-        if not summary_content or not blog_content:
-            logging.warning("Could not clearly separate summary and blog. Treating entire content as summary.")
-            summary_content = content
-            blog_content = ""
-    else:
-        # If we can't find any blog indicators, assume it's all summary
-        logging.info("Blog section not clearly identified. Treating entire content as summary.")
-    
-    return summary_content, blog_content
 
 def process_summary(full_transcript: str, output_summary_file: str, output_blog_file: Optional[str] = None) -> bool:
     """
@@ -515,7 +631,7 @@ def process_summary(full_transcript: str, output_summary_file: str, output_blog_
     Args:
         full_transcript: The complete transcript text
         output_summary_file: Path to save the summary
-        output_blog_file: Path to save the blog (if None, combined output is saved to summary file)
+        output_blog_file: Path to save the blog (ignored - all content saved to summary file)
         
     Returns:
         Success status (True/False)
@@ -524,7 +640,7 @@ def process_summary(full_transcript: str, output_summary_file: str, output_blog_
     if not summary_prompt:
         logging.warning("Summary prompt file not found or empty, skipping summary generation")
         return False
-        
+    
     logging.info("Generating summary and blog post...")
     summary_and_blog = generate_summary_and_blog(full_transcript, summary_prompt)
     
@@ -532,27 +648,10 @@ def process_summary(full_transcript: str, output_summary_file: str, output_blog_
         logging.error("Failed to generate summary and blog post")
         return False
     
-    # If output_blog_file is provided, split the content and save to separate files
-    if output_blog_file:
-        summary_content, blog_content = split_summary_and_blog(summary_and_blog)
-        
-        # Save summary to file
-        with open(output_summary_file, "w", encoding="utf-8") as f_summary:
-            f_summary.write(summary_content)
-        logging.info(f"Summary saved to: {output_summary_file}")
-        
-        # Save blog to file if blog content was found
-        if blog_content:
-            with open(output_blog_file, "w", encoding="utf-8") as f_blog:
-                f_blog.write(blog_content)
-            logging.info(f"Blog post saved to: {output_blog_file}")
-        else:
-            logging.warning(f"No distinct blog content was identified. Only summary was saved.")
-    else:
-        # Legacy mode: save combined output to summary file
-        with open(output_summary_file, "w", encoding="utf-8") as f_summary:
-            f_summary.write(summary_and_blog)
-        logging.info(f"Combined summary and blog post saved to: {output_summary_file}")
+    # Save combined output to summary file (no longer splitting)
+    with open(output_summary_file, "w", encoding="utf-8") as f_summary:
+        f_summary.write(summary_and_blog)
+    logging.info(f"Summary and blog post saved to: {output_summary_file}")
     
     return True
 
@@ -561,7 +660,7 @@ def transcription_exists(input_file: str) -> bool:
     Check if a transcription already exists for the given audio file.
     
     Args:
-        input_file: Path to the input audio file
+        input_file: Path to the input audio file    
         
     Returns:
         True if transcription exists, False otherwise
@@ -583,19 +682,19 @@ def regenerate_summary(transcript_file: str) -> bool:
     if not os.path.exists(transcript_file):
         logging.error(f"Transcript file does not exist: {transcript_file}")
         return False
-        
+    
     try:
         # Read the transcript
         with open(transcript_file, 'r', encoding='utf-8') as f:
             transcript = f.read()
-            
+        
         # Create paths for output files
         base = os.path.splitext(transcript_file)[0]
         summary_file = f"{base}_summary.txt"
         blog_file = f"{base}_blog.txt"
         
         # Generate and save summary and blog
-        return process_summary(transcript, summary_file, blog_file)
+        return process_summary(transcript, summary_file, blog_file)    
     except Exception as e:
         logging.error(f"Error regenerating summary: {str(e)}")
         return False
@@ -609,7 +708,10 @@ def regenerate_all_summaries(directory: str) -> None:
     """
     if not os.path.isdir(directory):
         directory = os.path.dirname(directory) or '.'
-        
+        if not os.path.isdir(directory):
+            logging.error(f"Invalid directory: {directory}")
+            return
+    
     # Look for transcript files (txt files that don't have "_ts" or "_summary" in their name)
     files = glob.glob(os.path.join(directory, "*.txt"))
     transcript_files = [f for f in files if "_ts.txt" not in f and "_summary.txt" not in f]
@@ -617,16 +719,19 @@ def regenerate_all_summaries(directory: str) -> None:
     if not transcript_files:
         logging.warning(f"No transcript files found in directory: {directory}")
         return
-        
+    
     logging.info(f"Found {len(transcript_files)} transcript files to process")
     for file in tqdm(transcript_files, desc="Regenerating summaries"):
         logging.info(f"Regenerating summary for: {file}")
         regenerate_summary(file)
+        # Force garbage collection to release GPU memory
+        import gc
+        gc.collect()
 
 # ==================== MAIN FUNCTION ====================
 def main(input_file: str, model_size: Optional[str] = None, output_dir: Optional[str] = None, 
          skip_summary: bool = False, force: bool = False, is_batch_mode: bool = False,
-         regenerate_summary_only: bool = False) -> None:
+         regenerate_summary_only: bool = False, skip_vocabulary: bool = False) -> None:
     """
     Main function to process an audio file.
     
@@ -637,7 +742,8 @@ def main(input_file: str, model_size: Optional[str] = None, output_dir: Optional
         skip_summary: Flag to skip summary generation
         force: Flag to force regeneration of transcription even if it exists
         is_batch_mode: Flag indicating if running as part of batch processing
-        regenerate_summary_only: Flag to only regenerate summary from existing transcript
+        regenerate_summary_only: Flag to only regenerate summary from existing transcript file
+        skip_vocabulary: Flag to skip vocabulary corrections
     """
     try:
         # Process for summary regeneration
@@ -663,7 +769,7 @@ def main(input_file: str, model_size: Optional[str] = None, output_dir: Optional
                 if not success and not is_batch_mode:
                     sys.exit(1)
                 return
-    
+        
         # Check input file
         if not os.path.exists(input_file):
             logging.error(f"Input file does not exist: {input_file}")
@@ -675,7 +781,7 @@ def main(input_file: str, model_size: Optional[str] = None, output_dir: Optional
         if not force and transcription_exists(input_file):
             logging.info(f"Skipping {input_file} - transcription already exists (use --force to override)")
             return
-            
+        
         # Use provided model size or MODEL_SIZE
         model_size = model_size or MODEL_SIZE
         
@@ -686,7 +792,7 @@ def main(input_file: str, model_size: Optional[str] = None, output_dir: Optional
             output_base = os.path.join(output_dir, base_name)
         else:
             output_base = os.path.splitext(input_file)[0]
-            
+        
         output_file = f"{output_base}.txt"
         output_file_timestamped = f"{output_base}_ts.txt"
         output_summary_file = f"{output_base}_summary.txt"
@@ -707,7 +813,6 @@ def main(input_file: str, model_size: Optional[str] = None, output_dir: Optional
             file_size_kb = os.path.getsize(output_file) / 1024
             logging.info(f"Transcript file size: {file_size_kb:.1f} KB")
             check_file_size(output_file)
-            
             # Extra warning for extremely large files
             if file_size_kb > MAX_FILE_SIZE_KB * 2:
                 logging.warning(f"File is extremely large ({file_size_kb:.1f} KB). Processing may take significant time.")
@@ -715,7 +820,6 @@ def main(input_file: str, model_size: Optional[str] = None, output_dir: Optional
         # Generate and save summary (if not skipped)
         if not skip_summary:
             process_summary(full_transcript, output_summary_file, output_blog_file)
-            
     except Exception as e:
         logging.error(f"An error occurred processing {input_file}: {str(e)}")
         if not is_batch_mode:
@@ -734,11 +838,16 @@ def process_batch(input_pattern: str, **kwargs) -> None:
     if not files:
         logging.warning(f"No files found matching pattern: {input_pattern}")
         return
-        
+    
     logging.info(f"Found {len(files)} files to process")
+    model = setup_model(kwargs.get('model_size') or MODEL_SIZE)
     for file in tqdm(files, desc="Processing files"):
         logging.info(f"Processing file: {file}")
-        main(file, is_batch_mode=True, **kwargs)
+        # Pass the model instance to avoid reloading for each file
+        main(file, is_batch_mode=True, model=model, **kwargs)
+        
+    # Clean up after processing all files
+    cleanup_resources(model)
 
 def process_all_mp3s(directory: str, **kwargs) -> None:
     """
@@ -750,14 +859,13 @@ def process_all_mp3s(directory: str, **kwargs) -> None:
     """
     if not os.path.isdir(directory):
         directory = os.path.dirname(directory) or '.'
-        
     mp3_pattern = os.path.join(directory, "*.mp3")
     files = glob.glob(mp3_pattern)
     
     if not files:
         logging.warning(f"No MP3 files found in directory: {directory}")
         return
-        
+    
     logging.info(f"Found {len(files)} MP3 files to process")
     for file in tqdm(files, desc="Processing MP3 files"):
         logging.info(f"Processing file: {file}")
@@ -777,7 +885,7 @@ if __name__ == "__main__":
     parser.add_argument('--version', action='version', version=f'WHYcast Transcribe v{VERSION}')
     parser.add_argument('--regenerate-summary', '-r', action='store_true', help='Regenerate summary and blog from existing transcript')
     parser.add_argument('--regenerate-all-summaries', '-R', action='store_true', help='Regenerate summaries for all transcripts in directory')
-    
+    parser.add_argument('--skip-vocabulary', action='store_true', help='Skip custom vocabulary corrections')
     args = parser.parse_args()
     
     logging.info(f"WHYcast Transcribe v{VERSION} starting up")
@@ -792,20 +900,18 @@ if __name__ == "__main__":
         if os.path.isdir(args.input):
             logging.error("Please specify a transcript file when using --regenerate-summary, not a directory")
             sys.exit(1)
-        main(args.input, regenerate_summary_only=True)
-    elif args.all_mp3s:
-        process_all_mp3s(args.input, model_size=args.model, 
-                     output_dir=args.output_dir, skip_summary=args.skip_summary,
-                     force=args.force)
-    elif args.batch:
-        process_batch(args.input, model_size=args.model, 
-                     output_dir=args.output_dir, skip_summary=args.skip_summary,
-                     force=args.force, regenerate_summary_only=args.regenerate_summary)
-    else:
-        if not os.path.isfile(args.input):
+        elif not os.path.isfile(args.input):
             logging.error(f"Input file does not exist: {args.input}")
             sys.exit(1)
-            
-        main(args.input, model_size=args.model, 
-             output_dir=args.output_dir, skip_summary=args.skip_summary,
-             force=args.force, regenerate_summary_only=args.regenerate_summary)
+        else:
+            main(args.input, regenerate_summary_only=True, skip_vocabulary=args.skip_vocabulary)
+    elif args.all_mp3s:
+        process_all_mp3s(args.input, model_size=args.model, output_dir=args.output_dir, skip_summary=args.skip_summary,
+                         force=args.force, skip_vocabulary=args.skip_vocabulary)
+    elif args.batch:
+        process_batch(args.input, model_size=args.model, output_dir=args.output_dir, skip_summary=args.skip_summary,
+                      force=args.force, skip_vocabulary=args.skip_vocabulary)
+    else:
+        main(args.input, model_size=args.model, output_dir=args.output_dir, skip_summary=args.skip_summary,
+             force=args.force, regenerate_summary_only=args.regenerate_summary,
+             skip_vocabulary=args.skip_vocabulary)
