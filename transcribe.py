@@ -402,7 +402,7 @@ def transcribe_audio(model: WhisperModel, audio_file: str) -> Tuple[List, object
         # Removed progress_callback parameter as it's not supported in this version of faster-whisper
     )
 
-def create_output_paths(input_file: str) -> Tuple[str, str, str]:
+def create_output_paths(input_file: str) -> Tuple[str, str, str, str]:
     """
     Create output file paths based on the input filename.
     
@@ -410,13 +410,14 @@ def create_output_paths(input_file: str) -> Tuple[str, str, str]:
         input_file: Path to the input audio file
         
     Returns:
-        Tuple of (plain_text_path, timestamped_path, summary_path)
+        Tuple of (plain_text_path, timestamped_path, summary_path, blog_path)
     """
     base = os.path.splitext(input_file)[0]
     return (
         f"{base}.txt",             # Without timestamps
         f"{base}_ts.txt",          # With timestamps
-        f"{base}_summary.txt"      # For summary and blog
+        f"{base}_summary.txt",     # For summary
+        f"{base}_blog.txt"         # For blog post
     )
 
 def write_transcript_files(segments, output_file: str, output_file_timestamped: str) -> str:
@@ -459,13 +460,62 @@ def write_transcript_files(segments, output_file: str, output_file_timestamped: 
     
     return full_transcript
 
-def process_summary(full_transcript: str, output_summary_file: str) -> bool:
+def split_summary_and_blog(content: str) -> Tuple[str, str]:
     """
-    Process the transcript to generate and save a summary.
+    Split the combined summary and blog content into separate parts.
+    
+    Args:
+        content: Combined summary and blog content
+        
+    Returns:
+        Tuple of (summary, blog)
+    """
+    # Look for common patterns that indicate the start of the blog section
+    blog_indicators = [
+        "WHYcast ",                        # Title typically starts with WHYcast
+        "Short title: WHYcast",             # From the prompt template
+        "# WHYcast ",                       # Markdown heading
+        "## WHYcast "                       # Alternative markdown heading
+    ]
+    
+    # Find the position where the blog starts
+    blog_start_pos = -1
+    blog_content = ""
+    summary_content = content
+    
+    for indicator in blog_indicators:
+        pos = content.find(indicator)
+        if pos != -1:
+            # Found a potential blog section start
+            # Check if this is the earliest indicator found
+            if blog_start_pos == -1 or pos < blog_start_pos:
+                blog_start_pos = pos
+    
+    # If we found a blog section, split the content
+    if blog_start_pos != -1:
+        # Get content before and after the split point
+        summary_content = content[:blog_start_pos].strip()
+        blog_content = content[blog_start_pos:].strip()
+        
+        # If we couldn't find a clear separation, log a warning and use the whole content as summary
+        if not summary_content or not blog_content:
+            logging.warning("Could not clearly separate summary and blog. Treating entire content as summary.")
+            summary_content = content
+            blog_content = ""
+    else:
+        # If we can't find any blog indicators, assume it's all summary
+        logging.info("Blog section not clearly identified. Treating entire content as summary.")
+    
+    return summary_content, blog_content
+
+def process_summary(full_transcript: str, output_summary_file: str, output_blog_file: Optional[str] = None) -> bool:
+    """
+    Process the transcript to generate and save summary and blog.
     
     Args:
         full_transcript: The complete transcript text
         output_summary_file: Path to save the summary
+        output_blog_file: Path to save the blog (if None, combined output is saved to summary file)
         
     Returns:
         Success status (True/False)
@@ -481,11 +531,29 @@ def process_summary(full_transcript: str, output_summary_file: str) -> bool:
     if not summary_and_blog:
         logging.error("Failed to generate summary and blog post")
         return False
+    
+    # If output_blog_file is provided, split the content and save to separate files
+    if output_blog_file:
+        summary_content, blog_content = split_summary_and_blog(summary_and_blog)
         
-    # Save summary and blog to file
-    with open(output_summary_file, "w", encoding="utf-8") as f_summary:
-        f_summary.write(summary_and_blog)
-    logging.info(f"Summary and blog post saved to: {output_summary_file}")
+        # Save summary to file
+        with open(output_summary_file, "w", encoding="utf-8") as f_summary:
+            f_summary.write(summary_content)
+        logging.info(f"Summary saved to: {output_summary_file}")
+        
+        # Save blog to file if blog content was found
+        if blog_content:
+            with open(output_blog_file, "w", encoding="utf-8") as f_blog:
+                f_blog.write(blog_content)
+            logging.info(f"Blog post saved to: {output_blog_file}")
+        else:
+            logging.warning(f"No distinct blog content was identified. Only summary was saved.")
+    else:
+        # Legacy mode: save combined output to summary file
+        with open(output_summary_file, "w", encoding="utf-8") as f_summary:
+            f_summary.write(summary_and_blog)
+        logging.info(f"Combined summary and blog post saved to: {output_summary_file}")
+    
     return True
 
 def transcription_exists(input_file: str) -> bool:
@@ -502,9 +570,63 @@ def transcription_exists(input_file: str) -> bool:
     transcript_file = f"{base}.txt"
     return os.path.exists(transcript_file)
 
+def regenerate_summary(transcript_file: str) -> bool:
+    """
+    Regenerate summary and blog from an existing transcript file.
+    
+    Args:
+        transcript_file: Path to the transcript file
+        
+    Returns:
+        Success status (True/False)
+    """
+    if not os.path.exists(transcript_file):
+        logging.error(f"Transcript file does not exist: {transcript_file}")
+        return False
+        
+    try:
+        # Read the transcript
+        with open(transcript_file, 'r', encoding='utf-8') as f:
+            transcript = f.read()
+            
+        # Create paths for output files
+        base = os.path.splitext(transcript_file)[0]
+        summary_file = f"{base}_summary.txt"
+        blog_file = f"{base}_blog.txt"
+        
+        # Generate and save summary and blog
+        return process_summary(transcript, summary_file, blog_file)
+    except Exception as e:
+        logging.error(f"Error regenerating summary: {str(e)}")
+        return False
+
+def regenerate_all_summaries(directory: str) -> None:
+    """
+    Regenerate summaries and blogs for all transcript files in the directory.
+    
+    Args:
+        directory: Directory containing transcript files
+    """
+    if not os.path.isdir(directory):
+        directory = os.path.dirname(directory) or '.'
+        
+    # Look for transcript files (txt files that don't have "_ts" or "_summary" in their name)
+    files = glob.glob(os.path.join(directory, "*.txt"))
+    transcript_files = [f for f in files if "_ts.txt" not in f and "_summary.txt" not in f]
+    
+    if not transcript_files:
+        logging.warning(f"No transcript files found in directory: {directory}")
+        return
+        
+    logging.info(f"Found {len(transcript_files)} transcript files to process")
+    for file in tqdm(transcript_files, desc="Regenerating summaries"):
+        logging.info(f"Regenerating summary for: {file}")
+        regenerate_summary(file)
+
 # ==================== MAIN FUNCTION ====================
 def main(input_file: str, model_size: Optional[str] = None, output_dir: Optional[str] = None, 
-         skip_summary: bool = False, force: bool = False, is_batch_mode: bool = False) -> None:
+         skip_summary: bool = False, force: bool = False, is_batch_mode: bool = False,
+         regenerate_summary_only: bool = False) -> None:
     """
     Main function to process an audio file.
     
@@ -515,8 +637,33 @@ def main(input_file: str, model_size: Optional[str] = None, output_dir: Optional
         skip_summary: Flag to skip summary generation
         force: Flag to force regeneration of transcription even if it exists
         is_batch_mode: Flag indicating if running as part of batch processing
+        regenerate_summary_only: Flag to only regenerate summary from existing transcript
     """
     try:
+        # Process for summary regeneration
+        if regenerate_summary_only:
+            if input_file.endswith('.txt') and 'summary' not in input_file:
+                # Input is already a transcript file
+                transcript_file = input_file
+                logging.info(f"Regenerating summary from transcript: {transcript_file}")
+                success = regenerate_summary(transcript_file)
+                if not success and not is_batch_mode:
+                    sys.exit(1)
+                return
+            else:
+                # Input is an audio file, construct the transcript filename
+                transcript_file = os.path.splitext(input_file)[0] + ".txt"
+                if not os.path.exists(transcript_file):
+                    logging.error(f"Cannot regenerate summary: transcript file {transcript_file} does not exist")
+                    if not is_batch_mode:
+                        sys.exit(1)
+                    return
+                logging.info(f"Regenerating summary from transcript: {transcript_file}")
+                success = regenerate_summary(transcript_file)
+                if not success and not is_batch_mode:
+                    sys.exit(1)
+                return
+    
         # Check input file
         if not os.path.exists(input_file):
             logging.error(f"Input file does not exist: {input_file}")
@@ -543,6 +690,7 @@ def main(input_file: str, model_size: Optional[str] = None, output_dir: Optional
         output_file = f"{output_base}.txt"
         output_file_timestamped = f"{output_base}_ts.txt"
         output_summary_file = f"{output_base}_summary.txt"
+        output_blog_file = f"{output_base}_blog.txt"
         
         # Setup model
         model = setup_model(model_size)
@@ -566,7 +714,7 @@ def main(input_file: str, model_size: Optional[str] = None, output_dir: Optional
         
         # Generate and save summary (if not skipped)
         if not skip_summary:
-            process_summary(full_transcript, output_summary_file)
+            process_summary(full_transcript, output_summary_file, output_blog_file)
             
     except Exception as e:
         logging.error(f"An error occurred processing {input_file}: {str(e)}")
@@ -627,6 +775,8 @@ if __name__ == "__main__":
     parser.add_argument('--force', '-f', action='store_true', help='Force regeneration of transcriptions even if they exist')
     parser.add_argument('--verbose', '-v', action='store_true', help='Enable verbose logging')
     parser.add_argument('--version', action='version', version=f'WHYcast Transcribe v{VERSION}')
+    parser.add_argument('--regenerate-summary', '-r', action='store_true', help='Regenerate summary and blog from existing transcript')
+    parser.add_argument('--regenerate-all-summaries', '-R', action='store_true', help='Regenerate summaries for all transcripts in directory')
     
     args = parser.parse_args()
     
@@ -636,14 +786,21 @@ if __name__ == "__main__":
     if args.verbose:
         logging.getLogger().setLevel(logging.DEBUG)
     
-    if args.all_mp3s:
+    if args.regenerate_all_summaries:
+        regenerate_all_summaries(args.input)
+    elif args.regenerate_summary:
+        if os.path.isdir(args.input):
+            logging.error("Please specify a transcript file when using --regenerate-summary, not a directory")
+            sys.exit(1)
+        main(args.input, regenerate_summary_only=True)
+    elif args.all_mp3s:
         process_all_mp3s(args.input, model_size=args.model, 
                      output_dir=args.output_dir, skip_summary=args.skip_summary,
                      force=args.force)
     elif args.batch:
         process_batch(args.input, model_size=args.model, 
                      output_dir=args.output_dir, skip_summary=args.skip_summary,
-                     force=args.force)
+                     force=args.force, regenerate_summary_only=args.regenerate_summary)
     else:
         if not os.path.isfile(args.input):
             logging.error(f"Input file does not exist: {args.input}")
@@ -651,4 +808,4 @@ if __name__ == "__main__":
             
         main(args.input, model_size=args.model, 
              output_dir=args.output_dir, skip_summary=args.skip_summary,
-             force=args.force)
+             force=args.force, regenerate_summary_only=args.regenerate_summary)

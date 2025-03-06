@@ -1,8 +1,9 @@
 Write a summary of the transcription. Separate the stories talked about. Start with a highlight overview (bullets) of the podcast. Then per section write a short summary per topic in a text (not bullets). 
 
-You can translate:
+Make sure to transcribe correctly... the following common mistake happen, format: "* <mistake> to <corrected>":
 * Y2025 to WHY2025
-* Ycasty to WHYcast 
+* Y-Cast to WHYcast
+* Ycast to WHYcast 
 * IFCOT to IFCAT
 * change name "Matt" as Ad
 * change name "Mats" as Ad

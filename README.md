@@ -1,153 +1,171 @@
-# WHYcast-transcribe v0.0.2
+# WHYcast-transcribe
 
-A powerful tool for transcribing audio files and automatically generating summaries and blog posts using OpenAI's GPT models.
-
-> **Note**: This code was generated using Claude 3.7 Sonnet Thinking with GitHub Co-Pilot assistance. Last updated: March, 6 of 2025.
->
-> **Current version**: 0.0.2
+A tool for transcribing audio files and generating summaries using OpenAI GPT models.
 
 ## Features
 
-- Transcribe audio files using the Faster Whisper implementation
-- Generate timestamps for each segment of speech
-- Automatically create summaries and blog posts from transcripts
-- Handle files of any size through recursive summarization
-- Batch processing for multiple files
-- Configurable via environment variables or .env file
-
-## New Features in v0.0.2
-- Enhanced logging: All terminal output is now also saved to `transcribe.log` file for better auditability
-- Updated prompt templates for more accurate transcription summaries
-- Fixed batch processing to handle errors gracefully and continue with remaining files
-- Improved error handling and reporting
+- **Audio Transcription**: Transcribes audio files using faster-whisper models
+- **Summary Generation**: Creates summaries of transcripts using OpenAI GPT models
+- **Blog Post Generation**: Automatically generates blog posts from transcriptions
+- **Batch Processing**: Process multiple files at once
+- **Flexible Output**: Generate plain text and timestamped transcripts
+- **Recursive Summarization**: Handles very large transcripts by chunking
+- **Summary Regeneration**: Regenerate summaries from existing transcripts
 
 ## Installation
 
-1. Clone the repository:
-   ```
-   git clone https://github.com/YourUsername/WHYcast-transcribe.git
-   cd WHYcast-transcribe
-   ```
-
-2. Install dependencies:
+1. Clone this repository
+2. Install requirements:
    ```
    pip install -r requirements.txt
    ```
-
-3. Set up your OpenAI API key:
+3. Create a `.env` file with your OpenAI API key:
    ```
-   echo "OPENAI_API_KEY=your-api-key-here" > .env
+   OPENAI_API_KEY=your_api_key_here
    ```
 
 ## Usage
 
-### Basic usage
+### Basic Usage
 
 ```bash
-python transcribe.py path/to/audiofile.mp3
+python transcribe.py path/to/audio_file.mp3
 ```
 
 This will:
 1. Transcribe the audio file
-2. Save plain text transcript as `audiofile.txt`
-3. Save timestamped transcript as `audiofile_ts.txt`
-4. Generate and save summary as `audiofile_summary.txt`
+2. Generate a plain text transcript (.txt)
+3. Generate a timestamped transcript (_ts.txt)
+4. Generate a summary (_summary.txt)
+5. Generate a blog post (_blog.txt)
 
-### Command-line options
+### Command Line Options
 
-```bash
-python transcribe.py path/to/audiofile.mp3 [options]
+```
+usage: transcribe.py [-h] [--batch] [--all-mp3s] [--model MODEL] [--output-dir OUTPUT_DIR] [--skip-summary] [--force] [--verbose] [--version] [--regenerate-summary] [--regenerate-all-summaries] input
+
+WHYcast Transcribe - Transcribe audio files and generate summaries
+
+positional arguments:
+  input                 Path to the input audio file, directory, or glob pattern
+
+optional arguments:
+  -h, --help            show this help message and exit
+  --batch, -b           Process multiple files matching pattern
+  --all-mp3s, -a        Process all MP3 files in directory
+  --model MODEL, -m MODEL
+                        Model size (e.g., "large-v3", "medium", "small")
+  --output-dir OUTPUT_DIR, -o OUTPUT_DIR
+                        Directory to save output files
+  --skip-summary, -s    Skip summary generation
+  --force, -f           Force regeneration of transcriptions even if they exist
+  --verbose, -v         Enable verbose logging
+  --version             show program's version number and exit
+  --regenerate-summary, -r
+                        Regenerate summary and blog from existing transcript
+  --regenerate-all-summaries, -R
+                        Regenerate summaries for all transcripts in directory
 ```
 
-Options:
-- `--batch`, `-b`: Process multiple files matching a glob pattern
-- `--all-mp3s`, `-a`: Process all MP3 files in directory
-- `--model`, `-m`: Specify Whisper model size (e.g., "large-v3", "medium", "small")
-- `--output-dir`, `-o`: Directory to save output files
-- `--skip-summary`, `-s`: Skip summary generation
-- `--force`, `-f`: Force regeneration of transcriptions even if they exist
-- `--verbose`, `-v`: Enable verbose logging
-- `--version`: Show program's version number and exit
+### Examples
 
-### Batch processing
-
-Process all MP3 files matching a pattern:
+**Process a single file:**
 ```bash
-python transcribe.py "path/to/*.mp3" --batch
+python transcribe.py podcast.mp3
 ```
 
-Process all MP3 files in a directory:
+**Process all MP3s in a directory:**
 ```bash
-python transcribe.py path/to/directory --all-mp3s
+python transcribe.py directory_path --all-mp3s
 ```
 
-The batch processing will continue even if there's an error with one file, ensuring all files are attempted.
+**Process multiple files matching a pattern:**
+```bash
+python transcribe.py "*.mp3" --batch
+```
 
-## Logging
-All log output is now written to both the terminal and a log file named `transcribe.log` in the project directory. This provides a complete audit trail of all operations performed by the application.
+**Use a specific model size:**
+```bash
+python transcribe.py podcast.mp3 --model large-v3
+```
+
+**Skip summary generation:**
+```bash
+python transcribe.py podcast.mp3 --skip-summary
+```
+
+**Regenerate summary from an existing transcript:**
+```bash
+python transcribe.py podcast.txt --regenerate-summary
+```
+
+**Regenerate all summaries in a directory:**
+```bash
+python transcribe.py directory_path --regenerate-all-summaries
+```
+
+### Batch Processing
+
+When processing multiple files with `--batch` or `--all-mp3s`, the script processes one file at a time and continues to the next file even if errors occur with the current file.
+
+**Tips for handling large batches:**
+
+1. **Check the log file**: All processing events are logged to `transcribe.log` in the script directory
+   ```bash
+   # After a batch run, check for errors
+   grep -i error transcribe.log
+   ```
+
+2. **Use the verbose flag**: Enable detailed logging to track progress
+   ```bash
+   python transcribe.py directory_path --all-mp3s --verbose
+   ```
+
+3. **Resume interrupted processing**: If a batch was interrupted, use `--force` only if needed
+   ```bash
+   # This will skip files that were already transcribed
+   python transcribe.py directory_path --all-mp3s
+   ```
+
+4. **Process in smaller batches**: For very large collections, process directories separately
+   ```bash
+   python transcribe.py "podcasts/2023/*.mp3" --batch
+   python transcribe.py "podcasts/2022/*.mp3" --batch
+   ```
+
+5. **Identify failed files**: After processing, any files without corresponding .txt output likely failed
+
+6. **Run another pass for failed files**: To process only files that failed in previous runs
+   ```bash
+   # This will only process files that don't already have transcriptions
+   python transcribe.py directory_path --all-mp3s
+   ```
+
+7. **Monitor with progress bar**: The script displays a progress bar showing completion status
+
+If you need to retry only failed files, you can create a list of successfully processed files and use pattern matching to process the remaining ones.
 
 ## Configuration
 
-The application can be configured using environment variables or a `.env` file.
+Edit the `config.py` file to customize:
 
-### Environment variables
-
-#### Whisper Configuration
-- `WHISPER_MODEL_SIZE`: Model size to use (default: "large-v3")
-- `WHISPER_DEVICE`: Device to run inference on (default: "cuda")
-- `WHISPER_COMPUTE_TYPE`: Compute type for model (default: "int8")
-- `WHISPER_BEAM_SIZE`: Beam size for transcription (default: 5)
-
-#### OpenAI Configuration
-- `OPENAI_API_KEY`: Your OpenAI API key (required)
-- `OPENAI_MODEL`: Model to use for summaries (default: "gpt-4.5-preview")
-- `OPENAI_LARGE_CONTEXT_MODEL`: Model for large transcripts (default: "gpt-4o-2024-05-13")
-- `OPENAI_TEMPERATURE`: Temperature setting (default: 0.7)
-- `OPENAI_MAX_TOKENS`: Maximum tokens in completion (default: 4000)
-- `OPENAI_MAX_INPUT_TOKENS`: Maximum input tokens (default: 50000)
-
-#### Advanced Configuration
-- `USE_RECURSIVE_SUMMARIZATION`: Enable recursive summarization (default: True)
-- `MAX_CHUNK_SIZE`: Maximum chunk size for recursive summarization (default: 40000)
-- `CHUNK_OVERLAP`: Overlap between chunks (default: 1000)
-- `MAX_FILE_SIZE_KB`: Maximum file size before warning (default: 250)
-
-## File Structure
-
-- `transcribe.py`: Main script for transcription and summarization
-- `config.py`: Configuration settings
-- `requirements.txt`: Required Python packages
-- `summary_prompt_blog.txt`: Prompt template for generating summaries
-- `transcribe.log`: Log file containing all application output
-
-## Example
-
-1. Transcribe a single file:
-   ```bash
-   python transcribe.py podcast_episode.mp3
-   ```
-
-2. Batch process all mp3 files in a directory:
-   ```bash
-   python transcribe.py podcasts --all-mp3s --output-dir summaries
-   ```
-
-3. Use a smaller model for faster processing:
-   ```bash
-   python transcribe.py interview.mp3 --model medium
-   ```
+- Whisper model size and parameters
+- OpenAI model selection
+- Token limits and temperature settings
+- Summarization parameters
 
 ## Requirements
 
-- Python 3.8+
-- OpenAI API key
-- For CUDA support (recommended): NVIDIA GPU with CUDA installed
+- Python 3.7+
+- faster-whisper
+- openai
+- tqdm
+- python-dotenv
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+MIT License - See LICENSE file for details
 
-## Acknowledgments
+## Author
 
-- This tool uses [Faster Whisper](https://github.com/guillaumekln/faster-whisper) for transcription
-- Summaries are generated using OpenAI's GPT models
+Robert van den Breemen
