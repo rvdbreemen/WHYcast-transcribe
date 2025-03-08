@@ -1,9 +1,10 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-WHYcast Transcribe - v0.0.2
+WHYcast Transcribe - v0.0.4
 
 A tool for transcribing audio files and generating summaries using OpenAI GPT models.
+Supports downloading the latest episode from podcast feeds.
 
 Copyright (c) 2025 Robert van den Breemen
 License: MIT (see LICENSE file for details)
@@ -21,6 +22,11 @@ import json
 import re
 from openai import OpenAI, BadRequestError
 from faster_whisper import WhisperModel
+import feedparser
+import requests
+import hashlib
+from urllib.parse import urlparse
+from datetime import datetime
 
 # Try to import configuration
 try:
@@ -495,6 +501,7 @@ def process_transcript_with_vocabulary(transcript: str) -> str:
     
     return apply_vocabulary_corrections(transcript, vocab_mappings)
 
+
 # ==================== TRANSCRIPTION FUNCTIONS ====================
 def setup_model(model_size: str = MODEL_SIZE) -> WhisperModel:
     """
@@ -728,6 +735,159 @@ def regenerate_all_summaries(directory: str) -> None:
         import gc
         gc.collect()
 
+# ==================== PODCAST FEED FUNCTIONS ====================
+def get_latest_episode(feed_url: str) -> Optional[Dict]:
+    """
+    Get the latest episode from a podcast RSS feed.
+    
+    Args:
+        feed_url: URL of the RSS feed
+        
+    Returns:
+        Dictionary with episode info or None if failed
+    """
+    try:
+        logging.info(f"Fetching podcast feed from {feed_url}")
+        feed = feedparser.parse(feed_url)
+        
+        if not feed.entries:
+            logging.warning("No episodes found in the feed")
+            return None
+            
+        # Get the latest episode (first entry)
+        latest = feed.entries[0]
+        
+        # Find the audio file URL
+        audio_url = None
+        for enclosure in latest.enclosures:
+            if enclosure.type.startswith('audio/'):
+                audio_url = enclosure.href
+                break
+                
+        if not audio_url:
+            logging.warning("No audio file found in the latest episode")
+            return None
+            
+        return {
+            'title': latest.title,
+            'published': latest.published if hasattr(latest, 'published') else '',
+            'audio_url': audio_url,
+            'description': latest.description if hasattr(latest, 'description') else '',
+            'guid': latest.id if hasattr(latest, 'id') else ''
+        }
+    except Exception as e:
+        logging.error(f"Error fetching podcast feed: {str(e)}")
+        return None
+
+def get_episode_filename(episode: Dict) -> str:
+    """
+    Generate a filename for the episode based on its title.
+    
+    Args:
+        episode: Episode dictionary from get_latest_episode()
+        
+    Returns:
+        Sanitized filename
+    """
+    # Clean the title to make it suitable for a filename
+    title = episode['title'].lower()
+    # Replace special chars with underscores
+    title = re.sub(r'[^\w\s-]', '_', title)
+    # Replace whitespace with underscores
+    title = re.sub(r'\s+', '_', title)
+    return f"{title}.mp3"
+
+def episode_already_processed(episode: Dict, download_dir: str) -> bool:
+    """
+    Check if an episode has already been processed.
+    
+    Args:
+        episode: Episode dictionary
+        download_dir: Directory where episodes are stored
+        
+    Returns:
+        True if already processed, False otherwise
+    """
+    # Create a unique identifier for the episode
+    if 'guid' in episode and episode['guid']:
+        # Use last part of GUID if available
+        episode_id = episode['guid'].split('/')[-1]
+    else:
+        # Create hash from title and published date
+        episode_id = hashlib.md5(f"{episode['title']}-{episode['published']}".encode()).hexdigest()
+    
+    # Check if episode file exists
+    filename = get_episode_filename(episode)
+    full_path = os.path.join(download_dir, filename)
+    
+    # Check if the file exists
+    if os.path.exists(full_path):
+        return True
+        
+    # Check if a transcription of this file exists
+    transcript_file = os.path.splitext(full_path)[0] + ".txt"
+    if os.path.exists(transcript_file):
+        return True
+    
+    return False
+
+def download_latest_episode(feed_url: str, download_dir: str) -> Optional[str]:
+    """
+    Download the latest episode from the podcast feed if not already processed.
+    
+    Args:
+        feed_url: URL of the RSS feed
+        download_dir: Directory to save the downloaded file
+        
+    Returns:
+        Path to the downloaded file or None if no new episode or error
+    """
+    # Create download directory if it doesn't exist
+    os.makedirs(download_dir, exist_ok=True)
+    
+    # Get latest episode info
+    episode = get_latest_episode(feed_url)
+    if not episode:
+        logging.warning("No episode found to download")
+        return None
+    
+    # Check if already processed
+    if episode_already_processed(episode, download_dir):
+        logging.info(f"Episode '{episode['title']}' has already been processed, skipping")
+        return None
+    
+    # Generate filename
+    filename = get_episode_filename(episode)
+    full_path = os.path.join(download_dir, filename)
+    
+    # Download the file
+    try:
+        logging.info(f"Downloading episode: {episode['title']}")
+        response = requests.get(episode['audio_url'], stream=True)
+        response.raise_for_status()
+        
+        total_size = int(response.headers.get('content-length', 0))
+        block_size = 8192
+        
+        with open(full_path, 'wb') as f:
+            with tqdm(total=total_size, unit='B', unit_scale=True, desc="Downloading") as progress_bar:
+                for chunk in response.iter_content(chunk_size=block_size):
+                    if chunk:
+                        f.write(chunk)
+                        progress_bar.update(len(chunk))
+        
+        logging.info(f"Downloaded episode to {full_path}")
+        return full_path
+    except Exception as e:
+        logging.error(f"Error downloading episode: {str(e)}")
+        # Clean up partial download if it exists
+        if os.path.exists(full_path):
+            try:
+                os.remove(full_path)
+            except:
+                pass
+        return None
+
 # ==================== MAIN FUNCTION ====================
 def main(input_file: str, model_size: Optional[str] = None, output_dir: Optional[str] = None, 
          skip_summary: bool = False, force: bool = False, is_batch_mode: bool = False,
@@ -849,6 +1009,32 @@ def process_batch(input_pattern: str, **kwargs) -> None:
     # Clean up after processing all files
     cleanup_resources(model)
 
+def cleanup_resources(model=None):
+    """
+    Clean up resources after processing.
+    
+    Args:
+        model: The WhisperModel instance to clean up (if provided)
+    """
+    try:
+        # Clear CUDA cache if available
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            logging.info("CUDA cache cleared")
+        
+        # Delete model to free up memory
+        if model is not None:
+            del model
+            logging.info("Model resources released")
+        
+        # Force garbage collection
+        import gc
+        gc.collect()
+    except Exception as e:
+        logging.warning(f"Error during resource cleanup: {str(e)}")
+
+
 def process_all_mp3s(directory: str, **kwargs) -> None:
     """
     Process all MP3 files in the given directory.
@@ -874,7 +1060,7 @@ def process_all_mp3s(directory: str, **kwargs) -> None:
 # ==================== ENTRY POINT ====================
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=f'WHYcast Transcribe v{VERSION} - Transcribe audio files and generate summaries')
-    parser.add_argument('input', help='Path to the input audio file, directory, or glob pattern')
+    parser.add_argument('input', nargs='?', help='Path to the input audio file, directory, or glob pattern')
     parser.add_argument('--batch', '-b', action='store_true', help='Process multiple files matching pattern')
     parser.add_argument('--all-mp3s', '-a', action='store_true', help='Process all MP3 files in directory')
     parser.add_argument('--model', '-m', help='Model size (e.g., "large-v3", "medium", "small")')
@@ -886,14 +1072,51 @@ if __name__ == "__main__":
     parser.add_argument('--regenerate-summary', '-r', action='store_true', help='Regenerate summary and blog from existing transcript')
     parser.add_argument('--regenerate-all-summaries', '-R', action='store_true', help='Regenerate summaries for all transcripts in directory')
     parser.add_argument('--skip-vocabulary', action='store_true', help='Skip custom vocabulary corrections')
+    
+    # Add podcast feed arguments
+    parser.add_argument('--feed', '-F', default="https://whycast.podcast.audio/@whycast/feed.xml", 
+                       help='RSS feed URL to download latest episode (default: WHYcast feed)')
+    parser.add_argument('--download-dir', '-D', default='podcasts', 
+                       help='Directory to save downloaded episodes (default: podcasts)')
+    parser.add_argument('--no-download', '-N', action='store_true', 
+                       help='Disable automatic podcast download')
+    
     args = parser.parse_args()
     
-    logging.info(f"WHYcast Transcribe v{VERSION} starting up")
+    logging.info(f"WHYcast Transcribe {VERSION} starting up")
     
     # Set logging level based on verbosity
     if args.verbose:
         logging.getLogger().setLevel(logging.DEBUG)
     
+    # Determine if we should check the podcast feed
+    # Default behavior: check feed if no specific input is provided and no special mode is requested
+    should_check_feed = (not args.no_download and 
+                         not args.input and 
+                         not args.regenerate_all_summaries and 
+                         not args.regenerate_summary)
+    
+    if should_check_feed:
+        feed_url = args.feed
+        download_dir = args.download_dir
+        
+        logging.info(f"Checking for the latest episode from {feed_url}")
+        episode_file = download_latest_episode(feed_url, download_dir)
+        
+        if episode_file:
+            logging.info(f"Processing newly downloaded episode: {episode_file}")
+            main(episode_file, model_size=args.model, output_dir=args.output_dir, 
+                 skip_summary=args.skip_summary, force=args.force)
+            sys.exit(0)
+        else:
+            logging.info("No new episode to download or process")
+            sys.exit(0)
+    
+    # Continue with existing functionality if input is provided or special mode is requested
+    if not args.input:
+        parser.print_help()
+        sys.exit(1)
+        
     if args.regenerate_all_summaries:
         regenerate_all_summaries(args.input)
     elif args.regenerate_summary:

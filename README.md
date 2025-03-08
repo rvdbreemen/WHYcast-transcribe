@@ -1,205 +1,101 @@
 # WHYcast Transcribe
 
-A tool for transcribing audio files and generating summaries using OpenAI GPT models.
+WHYcast Transcribe is a tool for transcribing audio files and generating summaries using OpenAI GPT models. It supports downloading the latest episode from podcast feeds and provides various options for processing audio files.
 
 ## Features
 
-- Transcribe audio files using Whisper models
-- Generate summaries and blog posts from transcriptions
-- Apply custom vocabulary corrections to improve transcription accuracy
-- Handle very large transcripts with recursive summarization
-- Process files in batch mode
-- Regenerate summaries without re-transcribing
+- Transcribe audio files using the Whisper model
+- Generate summaries and blog posts from transcripts using OpenAI GPT models
+- Download the latest episode from a podcast RSS feed
+- Apply custom vocabulary corrections to transcripts
+- Batch processing of multiple audio files
+- Regenerate summaries from existing transcripts
+
+## Requirements
+
+- Python 3.7+
+- Required Python packages (listed in `requirements.txt`)
 
 ## Installation
 
 1. Clone the repository:
-   ```
-   git clone https://github.com/yourusername/WHYcast-transcribe.git
-   cd WHYcast-transcribe
-   ```
+    ```sh
+    git clone https://github.com/yourusername/WHYcast-transcribe.git
+    cd WHYcast-transcribe
+    ```
 
-2. Create and activate a virtual environment (optional but recommended):
-   ```
-   python -m venv venv
-   # On Windows
-   venv\Scripts\activate
-   # On macOS/Linux
-   source venv/bin/activate
-   ```
+2. Install the required packages:
+    ```sh
+    pip install -r requirements.txt
+    ```
 
-3. Install dependencies:
-   ```
-   pip install -r requirements.txt
-   ```
-
-4. Create a `.env` file with your OpenAI API key:
-   ```
-   OPENAI_API_KEY=your_api_key_here
-   ```
-
-## Configuration
-
-Create a `config.py` file with the following settings:
-
-```python
-# Model configuration
-VERSION = "0.0.3"
-MODEL_SIZE = "medium"  # Options: "tiny", "base", "small", "medium", "large-v1", "large-v2", "large-v3"
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-COMPUTE_TYPE = "float16" if torch.cuda.is_available() else "float32"
-BEAM_SIZE = 5
-
-# OpenAI API configuration
-OPENAI_MODEL = "gpt-4"
-OPENAI_LARGE_CONTEXT_MODEL = "gpt-4-32k"
-TEMPERATURE = 0.3
-MAX_TOKENS = 4000
-MAX_INPUT_TOKENS = 16000
-CHARS_PER_TOKEN = 4
-
-# File configuration
-PROMPT_FILE = "prompt.txt"
-MAX_FILE_SIZE_KB = 1000
-
-# Summarization options
-USE_RECURSIVE_SUMMARIZATION = True
-MAX_CHUNK_SIZE = 16000
-CHUNK_OVERLAP = 1000
-
-# Vocabulary correction
-VOCABULARY_FILE = "vocabulary.json"
-USE_CUSTOM_VOCABULARY = True
-```
+3. Create a `.env` file with your OpenAI API key:
+    ```env
+    OPENAI_API_KEY=your_openai_api_key
+    ```
 
 ## Usage
 
-### Basic Transcription
+### Transcribe an Audio File
 
-Transcribe a single audio file:
-
-```bash
-python transcribe.py path/to/audio.mp3
+To transcribe an audio file and generate a summary:
+```sh
+python transcribe.py path/to/audio/file.mp3
 ```
 
-### Specifying a Model Size
+### Download and Transcribe the Latest Podcast Episode
 
-Choose a different Whisper model size:
-
-```bash
-python transcribe.py path/to/audio.mp3 --model large-v3
-```
-
-Available model sizes: tiny, base, small, medium, large-v1, large-v2, large-v3
-
-### Skip Summary Generation
-
-Only generate transcription (no summary or blog post):
-
-```bash
-python transcribe.py path/to/audio.mp3 --skip-summary
+To download the latest episode from the default podcast feed and transcribe it:
+```sh
+python transcribe.py
 ```
 
 ### Batch Processing
 
-Process all files matching a pattern:
-
-```bash
-python transcribe.py "path/to/*.mp3" --batch
+To process multiple files matching a pattern:
+```sh
+python transcribe.py --batch "path/to/files/*.mp3"
 ```
 
-Process all MP3 files in a directory:
+### Process All MP3 Files in a Directory
 
-```bash
-python transcribe.py path/to/directory --all-mp3s
+To process all MP3 files in a directory:
+```sh
+python transcribe.py --all-mp3s path/to/directory
 ```
 
-### Force Regeneration
+### Regenerate Summary from Existing Transcript
 
-Force regeneration of transcriptions even if they exist:
-
-```bash
-python transcribe.py path/to/audio.mp3 --force
+To regenerate the summary and blog post from an existing transcript file:
+```sh
+python transcribe.py --regenerate-summary path/to/transcript.txt
 ```
 
-### Summary Regeneration
+### Regenerate Summaries for All Transcripts in a Directory
 
-Regenerate the summary for an existing transcript:
-
-```bash
-python transcribe.py path/to/transcript.txt --regenerate-summary
+To regenerate summaries for all transcript files in a directory:
+```sh
+python transcribe.py --regenerate-all-summaries path/to/directory
 ```
 
-Regenerate summaries for all transcripts in a directory:
+## Command-Line Options
 
-```bash
-python transcribe.py path/to/directory --regenerate-all-summaries
-```
-
-### Custom Vocabulary
-
-To use custom vocabulary corrections, create a `vocabulary.json` file with word mappings:
-
-```json
-{
-  "incorrectTerm": "correctTerm",
-  "misspelled": "correctly spelled",
-  "acronym": "expanded form"
-}
-```
-
-Set `USE_CUSTOM_VOCABULARY=True` in your `config.py` to enable this feature.
-
-To skip vocabulary corrections for a specific run:
-
-```bash
-python transcribe.py path/to/audio.mp3 --skip-vocabulary
-```
-
-### Output Directory
-
-Specify a custom output directory:
-
-```bash
-python transcribe.py path/to/audio.mp3 --output-dir path/to/output
-```
-
-### Verbose Logging
-
-Enable detailed logging:
-
-```bash
-python transcribe.py path/to/audio.mp3 --verbose
-```
-
-## Prompt Template
-
-Create a `prompt.txt` file with instructions for the summary generation:
-
-```
-You're an assistant that helps create concise summaries and blog posts from audio transcripts.
-
-Please analyze the provided transcript and:
-
-1. Create a concise summary (max 250 words) highlighting the key points
-2. Create a well-structured blog post (500-800 words) based on the content
-3. Include appropriate headings and subheadings in the blog post
-4. Maintain the original meaning and key insights from the transcript
-
-Format your response as:
-
-## Summary
-[Your summary here]
-
-## Blog Post
-[Your blog post with headings here]
-```
+- `--batch, -b`: Process multiple files matching pattern
+- `--all-mp3s, -a`: Process all MP3 files in directory
+- `--model, -m`: Model size (e.g., "large-v3", "medium", "small")
+- `--output-dir, -o`: Directory to save output files
+- `--skip-summary, -s`: Skip summary generation
+- `--force, -f`: Force regeneration of transcriptions even if they exist
+- `--verbose, -v`: Enable verbose logging
+- `--version`: Show the version of WHYcast Transcribe
+- `--regenerate-summary, -r`: Regenerate summary and blog from existing transcript
+- `--regenerate-all-summaries, -R`: Regenerate summaries for all transcripts in directory
+- `--skip-vocabulary`: Skip custom vocabulary corrections
+- `--rss-feed, -rss`: URL of the RSS feed to process
+- `--no-rss`: Skip checking the RSS feed
+- `--limit, -l`: Limit the number of podcasts to process from RSS feed (default: RSS_DEFAULT_LIMIT)
+- `--clear-cache`: Clear model and vocabulary cache before processing
 
 ## License
 
-MIT License (see LICENSE file for details)
-
-## Acknowledgements
-
-- Uses [Faster Whisper](https://github.com/SYSTRAN/faster-whisper) for transcription
-- Uses [OpenAI API](https://openai.com/) for summary generation
+This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
