@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-WHYcast Transcribe - v0.0.4
+WHYcast Transcribe - v0.0.5
 
-A tool for transcribing audio files and generating summaries using OpenAI GPT models.
+A tool for transcribing audio files and generating summaries using local Phi-4 model.
 Supports downloading the latest episode from podcast feeds.
 
 Copyright (c) 2025 Robert van den Breemen
@@ -20,24 +20,35 @@ import glob
 import argparse
 import json
 import re
-from openai import OpenAI, BadRequestError
-from faster_whisper import WhisperModel
+import torch
+from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
 import feedparser
 import requests
 import hashlib
 from urllib.parse import urlparse
 from datetime import datetime
+from faster_whisper import WhisperModel
 
 # Try to import configuration
 try:
     from config import (
         VERSION, MODEL_SIZE, DEVICE, COMPUTE_TYPE, BEAM_SIZE,
-        OPENAI_MODEL, OPENAI_LARGE_CONTEXT_MODEL, 
-        TEMPERATURE, MAX_TOKENS, MAX_INPUT_TOKENS, CHARS_PER_TOKEN,
+        PHI_MODEL_NAME, PHI_MAX_NEW_TOKENS, PHI_TEMPERATURE, 
+        MAX_INPUT_TOKENS, CHARS_PER_TOKEN,
         PROMPT_FILE, MAX_FILE_SIZE_KB,
         USE_RECURSIVE_SUMMARIZATION, MAX_CHUNK_SIZE, CHUNK_OVERLAP,
         VOCABULARY_FILE, USE_CUSTOM_VOCABULARY
     )
+    # Try to import LMStudio config variables, set defaults if they don't exist
+    try:
+        from config import USE_LMSTUDIO_API, LMSTUDIO_URL, LMSTUDIO_API_KEY, LMSTUDIO_MODEL
+    except ImportError:
+        # Set default values for LMStudio configuration
+        USE_LMSTUDIO_API = True
+        LMSTUDIO_URL = "http://localhost:1234/v1"
+        LMSTUDIO_API_KEY = ""
+        LMSTUDIO_MODEL = "phi-4"  # Default model name
+        logging.warning("LMStudio API configuration not found in config.py, using defaults.")
 except ImportError as e:
     sys.stderr.write(f"Error: Could not import configuration - {str(e)}\n")
     sys.stderr.write("Make sure config.py exists and contains all required settings.\n")
@@ -112,32 +123,240 @@ def setup_logging():
 logger = setup_logging()
 
 # ==================== API FUNCTIONS ====================
-def ensure_api_key() -> str:
+def check_lmstudio_server():
     """
-    Ensure that the OpenAI API key is available.
+    Check if LMStudio server is available.
     
     Returns:
-        str: The API key if available
-        
-    Raises:
-        ValueError: If the API key is not set
+        bool: True if server is available, False otherwise
     """
-    api_key = os.environ.get("OPENAI_API_KEY")
-    if not api_key:
-        raise ValueError("OPENAI_API_KEY environment variable is not set")
-    return api_key
+    try:
+        url = f"{LMSTUDIO_URL}/models"
+        headers = {"Content-Type": "application/json"}
+        if LMSTUDIO_API_KEY:
+            headers["Authorization"] = f"Bearer {LMSTUDIO_API_KEY}"
+        
+        response = requests.get(url, headers=headers, timeout=5)
+        if response.status_code == 200:
+            # Log available models
+            models = response.json()
+            model_names = [model.get("id", "unknown") for model in models.get("data", [])]
+            if model_names:
+                logging.info(f"LMStudio server available with models: {', '.join(model_names)}")
+            else:
+                logging.info(f"LMStudio server is available at {LMSTUDIO_URL}")
+            return True
+        else:
+            logging.warning(f"LMStudio server returned status code {response.status_code}")
+            return False
+    except Exception as e:
+        logging.warning(f"LMStudio server is not available: {str(e)}")
+        return False
+
+def generate_with_lmstudio(prompt: str) -> Optional[str]:
+    """
+    Generate text using the LMStudio API.
+    
+    Args:
+        prompt: The input prompt
+        
+    Returns:
+        Generated text or None if there was an error
+    """
+    try:
+        url = f"{LMSTUDIO_URL}/completions"
+        headers = {
+            "Content-Type": "application/json"
+        }
+        if LMSTUDIO_API_KEY:
+            headers["Authorization"] = f"Bearer {LMSTUDIO_API_KEY}"
+            
+        payload = {
+            "model": LMSTUDIO_MODEL,  # Specify the model name
+            "prompt": prompt,
+            "max_tokens": PHI_MAX_NEW_TOKENS,
+            "temperature": PHI_TEMPERATURE,
+            "stream": False
+        }
+        
+        logging.info(f"Sending completions request to LMStudio with model: {LMSTUDIO_MODEL}")
+        response = requests.post(url, headers=headers, json=payload)
+        
+        # Add better error reporting
+        if response.status_code != 200:
+            error_detail = ""
+            try:
+                error_detail = response.json()
+            except:
+                error_detail = response.text[:500]  # First 500 chars of response if not JSON
+            
+            logging.error(f"LMStudio API error ({response.status_code}): {error_detail}")
+            return None
+        
+        result = response.json()
+        generated_text = result["choices"][0]["text"]
+        
+        return generated_text.strip()
+    except Exception as e:
+        logging.error(f"Error generating with LMStudio API: {str(e)}")
+        return None
+
+def chat_with_lmstudio(prompt: str) -> Optional[str]:
+    """
+    Generate text using the LMStudio chat API.
+    
+    Args:
+        prompt: The input prompt
+        
+    Returns:
+        Generated text or None if there was an error
+    """
+    try:
+        url = f"{LMSTUDIO_URL}/chat/completions"
+        headers = {
+            "Content-Type": "application/json"
+        }
+        if LMSTUDIO_API_KEY:
+            headers["Authorization"] = f"Bearer {LMSTUDIO_API_KEY}"
+            
+        payload = {
+            "model": LMSTUDIO_MODEL,  # Specify the model name
+            "messages": [
+                {"role": "user", "content": prompt}
+            ],
+            "max_tokens": PHI_MAX_NEW_TOKENS,
+            "temperature": PHI_TEMPERATURE,
+            "stream": False
+        }
+        
+        logging.info(f"Sending chat request to LMStudio with model: {LMSTUDIO_MODEL}")
+        response = requests.post(url, headers=headers, json=payload)
+        
+        # Add better error reporting
+        if response.status_code != 200:
+            error_detail = ""
+            try:
+                error_detail = response.json()
+            except:
+                error_detail = response.text[:500]  # First 500 chars of response if not JSON
+            
+            logging.error(f"LMStudio chat API error ({response.status_code}): {error_detail}")
+            return None
+        
+        result = response.json()
+        generated_text = result["choices"][0]["message"]["content"]
+        
+        return generated_text.strip()
+    except Exception as e:
+        logging.error(f"Error using LMStudio chat API: {str(e)}")
+        return None
+
+def load_phi_model():
+    """
+    Load the Phi-4 model and tokenizer for local inference.
+    If LMStudio API is enabled and available, returns None for model and tokenizer.
+    
+    Returns:
+        Tuple of (model, tokenizer) or (None, None) if using LMStudio
+    """
+    if USE_LMSTUDIO_API and check_lmstudio_server():
+        logging.info("Using LMStudio API server instead of loading model directly")
+        return None, None
+    
+    logging.info(f"Loading Phi model: {PHI_MODEL_NAME}")
+    
+    # Set device
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    if device == "cpu":
+        logging.warning("CUDA not available, using CPU for inference which may be slow")
+    
+    # Load tokenizer and model
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(PHI_MODEL_NAME)
+        model = AutoModelForCausalLM.from_pretrained(
+            PHI_MODEL_NAME, 
+            device_map="auto",
+            torch_dtype=torch.float16 if device == "cuda" else torch.float32
+        )
+        
+        logging.info(f"Phi model loaded successfully on {device}")
+        return model, tokenizer
+    except Exception as e:
+        logging.error(f"Error loading Phi model: {str(e)}")
+        
+        # If direct model loading fails, attempt to use LMStudio as fallback
+        if check_lmstudio_server():
+            logging.info("Falling back to LMStudio API server")
+            return None, None
+        else:
+            raise
+
+def generate_with_phi(prompt: str, model=None, tokenizer=None) -> str:
+    """
+    Generate text using either the Phi model or LMStudio API.
+    
+    Args:
+        prompt: The input prompt
+        model: The loaded model (can be None if using LMStudio)
+        tokenizer: The loaded tokenizer (can be None if using LMStudio)
+        
+    Returns:
+        Generated text
+    """
+    # If model and tokenizer are None, use LMStudio API
+    if model is None or tokenizer is None:
+        try:
+            logging.info("Generating text with LMStudio API")
+            # Try chat API first, fall back to completions API if that fails
+            response = chat_with_lmstudio(prompt)
+            if response is None:
+                logging.info("Chat API failed, trying completions API")
+                response = generate_with_lmstudio(prompt)
+            
+            if response is None:
+                logging.error("Both LMStudio APIs failed")
+                return None
+                
+            return response
+        except Exception as e:
+            logging.error(f"Error using LMStudio API: {str(e)}")
+            return None
+    
+    # Otherwise use the Phi model directly
+    try:
+        inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
+        
+        with torch.no_grad():
+            outputs = model.generate(
+                **inputs,
+                max_new_tokens=PHI_MAX_NEW_TOKENS,
+                temperature=PHI_TEMPERATURE,
+                do_sample=PHI_TEMPERATURE > 0,
+            )
+            
+        response = tokenizer.decode(outputs[0], skip_special_tokens=True)
+        
+        # Remove the prompt from the response
+        if response.startswith(prompt):
+            response = response[len(prompt):]
+            
+        return response.strip()
+    except Exception as e:
+        logging.error(f"Error generating with Phi: {str(e)}")
+        return None
 
 def read_summary_prompt(prompt_file: str = PROMPT_FILE) -> Optional[str]:
     """
     Read the summary prompt from file.
     
     Args:
-        prompt_file: Path to the prompt file
+        prompt_file: Path to the prompt file (defaults to PROMPT_FILE from config.py)
         
     Returns:
         The prompt text or None if there was an error
     """
     try:
+        logging.info(f"Reading prompt template from {prompt_file}")
         with open(prompt_file, 'r', encoding='utf-8') as file:
             return file.read()
     except Exception as e:
@@ -180,26 +399,6 @@ def truncate_transcript(transcript: str, max_tokens: int) -> str:
     last_part = transcript[-last_part_size:]
     
     return first_part + "\n\n[...transcript truncated due to length...]\n\n" + last_part
-
-def choose_appropriate_model(transcript: str) -> str:
-    """
-    Choose the appropriate model based on transcript length.
-    
-    Args:
-        transcript: The transcript text
-        
-    Returns:
-        Model name to use
-    """
-    estimated_tokens = estimate_token_count(transcript)
-    logging.info(f"Estimated transcript length: ~{estimated_tokens} tokens")
-    
-    # If transcript is long, use large context model
-    if estimated_tokens > MAX_INPUT_TOKENS and OPENAI_LARGE_CONTEXT_MODEL:
-        logging.info(f"Using large context model: {OPENAI_LARGE_CONTEXT_MODEL} due to transcript length")
-        return OPENAI_LARGE_CONTEXT_MODEL
-    
-    return OPENAI_MODEL
 
 def check_file_size(file_path: str) -> bool:
     """
@@ -256,20 +455,26 @@ def split_into_chunks(text: str, max_chunk_size: int = MAX_CHUNK_SIZE, overlap: 
         
     return chunks
 
-def summarize_large_transcript(transcript: str, prompt: str, client: OpenAI) -> Optional[str]:
+def summarize_large_transcript(transcript: str, prompt: str) -> Optional[str]:
     """
     Handle very large transcripts by chunking and recursive summarization.
     
     Args:
         transcript: The transcript text
         prompt: The summarization prompt
-        client: OpenAI client
         
     Returns:
         Generated summary or None if failed
     """
     estimated_tokens = estimate_token_count(transcript)
     logging.info(f"Starting recursive summarization for large transcript (~{estimated_tokens} tokens)")
+    
+    # Load Phi model
+    try:
+        model, tokenizer = load_phi_model()
+    except Exception as e:
+        logging.error(f"Failed to load Phi model for recursive summarization: {str(e)}")
+        return None
     
     # Split into chunks
     chunks = split_into_chunks(transcript)
@@ -281,19 +486,15 @@ def summarize_large_transcript(transcript: str, prompt: str, client: OpenAI) -> 
         logging.info(f"Processing chunk {i+1}/{len(chunks)}")
         
         try:
-            chunk_prompt = "This is part of a longer transcript. Please summarize just this section, focusing on key points."
-            response = client.chat.completions.create(
-                model=OPENAI_MODEL,
-                messages=[
-                    {"role": "system", "content": "You are a helpful assistant that creates concise summaries."},
-                    {"role": "user", "content": f"{chunk_prompt}\n\n{chunk}"}
-                ],
-                temperature=TEMPERATURE,
-                max_tokens=MAX_TOKENS // 2  # Shorter summaries for intermediate steps
-            )
-            summary = response.choices[0].message.content
-            intermediate_summaries.append(summary)
-            logging.info(f"Completed summary for chunk {i+1}")
+            chunk_prompt = "This is part of a longer transcript. Please summarize just this section, focusing on key points.\n\n"
+            full_prompt = chunk_prompt + chunk
+            summary = generate_with_phi(full_prompt, model, tokenizer)
+            
+            if summary:
+                intermediate_summaries.append(summary)
+                logging.info(f"Completed summary for chunk {i+1}")
+            else:
+                logging.warning(f"No summary generated for chunk {i+1}")
         except Exception as e:
             logging.error(f"Error summarizing chunk {i+1}: {str(e)}")
             # Continue with partial results if available
@@ -307,81 +508,54 @@ def summarize_large_transcript(transcript: str, prompt: str, client: OpenAI) -> 
     
     try:
         logging.info("Generating final summary from intermediate summaries")
-        response = client.chat.completions.create(
-            model=OPENAI_LARGE_CONTEXT_MODEL,
-            messages=[
-                {"role": "system", "content": "You are a helpful assistant that summarizes transcripts."},
-                {"role": "user", "content": f"{prompt}\n\nHere are summaries from different parts of the transcript. Please combine them into a cohesive summary and blog post:\n\n{combined_text}"}
-            ],
-            temperature=TEMPERATURE,
-            max_tokens=MAX_TOKENS
-        )
-        return response.choices[0].message.content
+        final_prompt = f"{prompt}\n\nHere are summaries from different parts of the transcript. Please combine them into a cohesive summary and blog post:\n\n{combined_text}"
+        return generate_with_phi(final_prompt, model, tokenizer)
     except Exception as e:
         logging.error(f"Error generating final summary: {str(e)}")
         return None
 
 def generate_summary_and_blog(transcript: str, prompt: str) -> Optional[str]:
     """
-    Generate summary and blog post using OpenAI API.
+    Generate summary and blog post using Phi model.
     
     Args:
         transcript: The transcript text to summarize
-        prompt: Instructions for the AI
+        prompt: Instructions for the AI (loaded from prompt file)
         
     Returns:
         The generated summary and blog or None if there was an error
     """
     try:
-        api_key = ensure_api_key()
-        client = OpenAI(api_key=api_key)
-        
         estimated_tokens = estimate_token_count(transcript)
         logging.info(f"Estimated transcript length: ~{estimated_tokens} tokens")
         
         # For very large transcripts, use recursive summarization
         if USE_RECURSIVE_SUMMARIZATION and estimated_tokens > MAX_INPUT_TOKENS:
             logging.info(f"Transcript is very large ({estimated_tokens} tokens), using recursive summarization")
-            return summarize_large_transcript(transcript, prompt, client)
-        
-        # Choose appropriate model based on length
-        model_to_use = choose_appropriate_model(transcript)
+            return summarize_large_transcript(transcript, prompt)
         
         # If transcript is still too long, truncate it
         if estimated_tokens > MAX_INPUT_TOKENS:
             logging.warning(f"Transcript too long (~{estimated_tokens} tokens > {MAX_INPUT_TOKENS} limit), truncating...")
             transcript = truncate_transcript(transcript, MAX_INPUT_TOKENS)
         
-        logging.info(f"Sending transcript to OpenAI for summary and blog generation using {model_to_use}...")
+        logging.info(f"Loading Phi model for summary generation...")
+        model, tokenizer = load_phi_model()
+        
+        logging.info(f"Generating summary and blog post using Phi model with prompt template...")
         logging.info(f"Estimated input size: ~{estimate_token_count(transcript)} tokens")
         
         try:
-            response = client.chat.completions.create(
-                model=model_to_use,
-                messages=[
-                    {"role": "system", "content": "You are a helpful assistant that summarizes transcripts."},
-                    {"role": "user", "content": f"{prompt}\n\nHere's the transcript to summarize:\n\n{transcript}"}
-                ],
-                temperature=TEMPERATURE,
-                max_tokens=MAX_TOKENS
-            )
-            return response.choices[0].message.content
-        except BadRequestError as e:
-            if "maximum context length" in str(e).lower():
+            full_prompt = f"{prompt}\n\nHere's the transcript to summarize:\n\n{transcript}"
+            return generate_with_phi(full_prompt, model, tokenizer)
+        except Exception as e:
+            if "out of memory" in str(e).lower():
                 # Try with more aggressive truncation
-                logging.warning(f"Context length exceeded. Retrying with further truncation...")
+                logging.warning(f"Memory exceeded. Retrying with further truncation...")
                 transcript = truncate_transcript(transcript, MAX_INPUT_TOKENS // 2)
                 logging.info(f"Retrying with reduced transcript (~{estimate_token_count(transcript)} tokens)...")
-                response = client.chat.completions.create(
-                    model=model_to_use,
-                    messages=[
-                        {"role": "system", "content": "You are a helpful assistant that summarizes transcripts."},
-                        {"role": "user", "content": f"{prompt}\n\nHere's the transcript to summarize:\n\n{transcript}"}
-                    ],
-                    temperature=TEMPERATURE,
-                    max_tokens=MAX_TOKENS
-                )
-                return response.choices[0].message.content
+                full_prompt = f"{prompt}\n\nHere's the transcript to summarize:\n\n{transcript}"
+                return generate_with_phi(full_prompt, model, tokenizer)
             else:
                 raise
     except Exception as e:
@@ -505,15 +679,22 @@ def process_transcript_with_vocabulary(transcript: str) -> str:
 # ==================== TRANSCRIPTION FUNCTIONS ====================
 def setup_model(model_size: str = MODEL_SIZE) -> WhisperModel:
     """
-    Initialize and return the Whisper model.
+    Initialize the Whisper model with the specified size.
     
     Args:
-        model_size: The model size to use
-    
+        model_size: Size of the model to use (tiny, base, small, medium, large)
+        
     Returns:
-        The initialized WhisperModel
+        WhisperModel: The initialized model
     """
-    return WhisperModel(model_size, device=DEVICE, compute_type=COMPUTE_TYPE)
+    # Check for GPU availability
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    compute_type = "float16" if device == "cuda" else "int8"
+    
+    # Initialize and return the model
+    model = WhisperModel(model_size, device=device, compute_type=compute_type)
+    print(f"Model loaded on {device} using {compute_type}")
+    return model
 
 def transcribe_audio(model: WhisperModel, audio_file: str) -> Tuple[List, object]:
     """
