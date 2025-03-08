@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-WHYcast Transcribe - v0.0.3
+WHYcast Transcribe - v0.0.4
 
 A tool for transcribing audio files and generating summaries using OpenAI GPT models.
 Supports downloading the latest episode from podcast feeds.
@@ -1083,7 +1083,7 @@ if __name__ == "__main__":
     
     args = parser.parse_args()
     
-    logging.info(f"WHYcast Transcribe v{VERSION} starting up")
+    logging.info(f"WHYcast Transcribe {VERSION} starting up")
     
     # Set logging level based on verbosity
     if args.verbose:
