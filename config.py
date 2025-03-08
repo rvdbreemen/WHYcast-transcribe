@@ -29,10 +29,13 @@ USE_RECURSIVE_SUMMARIZATION = os.environ.get("USE_RECURSIVE_SUMMARIZATION", "Tru
 MAX_CHUNK_SIZE = int(os.environ.get("MAX_CHUNK_SIZE", "40000"))  # Maximum size of each chunk for recursive summarization
 CHUNK_OVERLAP = int(os.environ.get("CHUNK_OVERLAP", "1000"))  # Overlap between chunks to maintain context
 
-# File paths for prompt files
-PROMPT_CLEANUP_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'prompts', 'cleanup_prompt.txt')
-PROMPT_SUMMARY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'prompts', 'summary_prompt.txt')
-PROMPT_BLOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'prompts', 'blog_prompt.txt')
+# Prompt file paths - using absolute paths to ensure they're found regardless of working directory
+base_dir = os.path.dirname(os.path.abspath(__file__))
+
+# Update paths to point to the prompts subdirectory with correct filenames
+PROMPT_CLEANUP_FILE = os.path.join(base_dir, "prompts", "cleanup_prompt.txt")
+PROMPT_SUMMARY_FILE = os.path.join(base_dir, "prompts", "summary_prompt.txt")
+PROMPT_BLOG_FILE = os.path.join(base_dir, "prompts", "blog_prompt.txt")
 
 # Custom vocabulary settings
 USE_CUSTOM_VOCABULARY = True  # Set to False to disable

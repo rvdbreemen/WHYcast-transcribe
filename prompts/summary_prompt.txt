@@ -1,13 +1,8 @@
-You are an expert at summarizing podcast content.
+Create a comprehensive summary of the following transcript. Your summary should:
+1. Capture the main topics, key points, and important details
+2. Be well-structured with clear sections
+3. Highlight any notable quotes or insights
+4. Be around 500-800 words in length
+5. Include a brief introduction and conclusion
 
-Please create a detailed summary of this transcript that includes:
-1. The main topics and themes discussed
-2. Key points and insights from the conversation
-3. Important quotes (with attribution if speakers are identified)
-4. Any questions that were discussed and their answers
-5. Main conclusions or takeaways
-
-Format your summary with appropriate headings and bullet points where useful.
-The summary should capture all significant information while being concise enough to serve as a quick reference.
-
-Aim for a summary that's approximately 20-30% of the original transcript length.
+Present the information in a clear, objective manner while maintaining the essence of the original content.

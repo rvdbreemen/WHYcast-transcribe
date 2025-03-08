@@ -1,15 +1,10 @@
-You are an expert content creator tasked with writing an engaging blog post based on a podcast transcript and summary.
+Using the provided transcript and summary, create an engaging blog post that:
+1. Begins with a compelling introduction that hooks the reader
+2. Organizes the content into clear, logical sections with appropriate headings
+3. Expands on the key insights and adds context where helpful
+4. Includes relevant quotes from the transcript
+5. Concludes with the main takeaways and possible implications
+6. Uses a conversational yet professional tone
+7. Is approximately 1000-1500 words in length
 
-Using both the cleaned transcript and summary I've provided, please create a well-structured blog post that:
-1. Has an engaging title and introduction that draws readers in
-2. Is organized into clear sections with descriptive headings
-3. Expands on the key insights and provides context where needed
-4. Includes relevant quotes from the transcript, properly attributed
-5. Adds value through thoughtful analysis of the topics discussed
-6. Ends with a conclusion that summarizes the main takeaways
-7. Includes a "Further Reading" section with 3-5 suggested resources related to the topic
-
-The tone should be professional but conversational, accessible to a general audience interested in this topic.
-Format the blog post in Markdown with proper headings, bullet points, and quote formatting.
-
-Your blog post should be comprehensive while being engaging and easy to read.
+Format the post properly for web publication with headings, paragraphs, and emphasis where appropriate.
