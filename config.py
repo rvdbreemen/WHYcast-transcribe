@@ -29,8 +29,10 @@ USE_RECURSIVE_SUMMARIZATION = os.environ.get("USE_RECURSIVE_SUMMARIZATION", "Tru
 MAX_CHUNK_SIZE = int(os.environ.get("MAX_CHUNK_SIZE", "40000"))  # Maximum size of each chunk for recursive summarization
 CHUNK_OVERLAP = int(os.environ.get("CHUNK_OVERLAP", "1000"))  # Overlap between chunks to maintain context
 
-# File paths
-PROMPT_FILE = os.environ.get("SUMMARY_PROMPT_FILE", "summary_prompt_blog.txt")
+# File paths for prompt files
+PROMPT_CLEANUP_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'prompts', 'cleanup_prompt.txt')
+PROMPT_SUMMARY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'prompts', 'summary_prompt.txt')
+PROMPT_BLOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'prompts', 'blog_prompt.txt')
 
 # Custom vocabulary settings
 USE_CUSTOM_VOCABULARY = True  # Set to False to disable

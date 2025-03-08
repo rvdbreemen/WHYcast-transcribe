@@ -34,7 +34,7 @@ try:
         VERSION, MODEL_SIZE, DEVICE, COMPUTE_TYPE, BEAM_SIZE,
         OPENAI_MODEL, OPENAI_LARGE_CONTEXT_MODEL, 
         TEMPERATURE, MAX_TOKENS, MAX_INPUT_TOKENS, CHARS_PER_TOKEN,
-        PROMPT_FILE, MAX_FILE_SIZE_KB,
+        PROMPT_CLEANUP_FILE, PROMPT_SUMMARY_FILE, PROMPT_BLOG_FILE, MAX_FILE_SIZE_KB,
         USE_RECURSIVE_SUMMARIZATION, MAX_CHUNK_SIZE, CHUNK_OVERLAP,
         VOCABULARY_FILE, USE_CUSTOM_VOCABULARY
     )
@@ -127,9 +127,9 @@ def ensure_api_key() -> str:
         raise ValueError("OPENAI_API_KEY environment variable is not set")
     return api_key
 
-def read_summary_prompt(prompt_file: str = PROMPT_FILE) -> Optional[str]:
+def read_prompt_file(prompt_file: str) -> Optional[str]:
     """
-    Read the summary prompt from file.
+    Read a prompt from file.
     
     Args:
         prompt_file: Path to the prompt file
@@ -141,7 +141,7 @@ def read_summary_prompt(prompt_file: str = PROMPT_FILE) -> Optional[str]:
         with open(prompt_file, 'r', encoding='utf-8') as file:
             return file.read()
     except Exception as e:
-        logging.error(f"Error reading prompt file: {str(e)}")
+        logging.error(f"Error reading prompt file {prompt_file}: {str(e)}")
         return None
 
 def estimate_token_count(text: str) -> int:
@@ -320,6 +320,146 @@ def summarize_large_transcript(transcript: str, prompt: str, client: OpenAI) -> 
     except Exception as e:
         logging.error(f"Error generating final summary: {str(e)}")
         return None
+
+def process_with_openai(text: str, prompt: str, model_name: str, max_tokens: int = MAX_TOKENS) -> Optional[str]:
+    """
+    Process text with OpenAI model using the specified prompt.
+    
+    Args:
+        text: The text to process
+        prompt: Instructions for the AI
+        model_name: Name of the model to use
+        max_tokens: Maximum tokens for output
+        
+    Returns:
+        The generated text or None if there was an error
+    """
+    try:
+        api_key = ensure_api_key()
+        client = OpenAI(api_key=api_key)
+        
+        estimated_tokens = estimate_token_count(text)
+        logging.info(f"Processing text with OpenAI (~{estimated_tokens} tokens)")
+        
+        # If text is too long, truncate it
+        if estimated_tokens > MAX_INPUT_TOKENS:
+            logging.warning(f"Text too long (~{estimated_tokens} tokens > {MAX_INPUT_TOKENS} limit), truncating...")
+            text = truncate_transcript(text, MAX_INPUT_TOKENS)
+        
+        try:
+            response = client.chat.completions.create(
+                model=model_name,
+                messages=[
+                    {"role": "system", "content": "You are a helpful assistant that processes transcripts."},
+                    {"role": "user", "content": f"{prompt}\n\nHere's the text to process:\n\n{text}"}
+                ],
+                temperature=TEMPERATURE,
+                max_tokens=max_tokens
+            )
+            return response.choices[0].message.content
+        except BadRequestError as e:
+            if "maximum context length" in str(e).lower():
+                # Try with more aggressive truncation
+                logging.warning(f"Context length exceeded. Retrying with further truncation...")
+                text = truncate_transcript(text, MAX_INPUT_TOKENS // 2)
+                logging.info(f"Retrying with reduced text (~{estimate_token_count(text)} tokens)...")
+                response = client.chat.completions.create(
+                    model=model_name,
+                    messages=[
+                        {"role": "system", "content": "You are a helpful assistant that processes transcripts."},
+                        {"role": "user", "content": f"{prompt}\n\nHere's the text to process:\n\n{text}"}
+                    ],
+                    temperature=TEMPERATURE,
+                    max_tokens=max_tokens
+                )
+                return response.choices[0].message.content
+            else:
+                raise
+    except Exception as e:
+        logging.error(f"Error processing with OpenAI: {str(e)}")
+        return None
+
+def process_transcript_workflow(transcript: str) -> Optional[Dict[str, str]]:
+    """
+    Process transcript through the multi-step workflow: cleanup -> summary -> blog
+    
+    Args:
+        transcript: The raw transcript text
+        
+    Returns:
+        Dictionary with cleaned_transcript, summary, and blog, or None if failed
+    """
+    results = {}
+    
+    # Step 1: Clean up the transcript
+    cleanup_prompt = read_prompt_file(PROMPT_CLEANUP_FILE)
+    if not cleanup_prompt:
+        logging.warning("Cleanup prompt file not found or empty, skipping cleanup step")
+        cleaned_transcript = transcript
+    else:
+        logging.info("Step 1: Cleaning up transcript...")
+        model_to_use = choose_appropriate_model(transcript)
+        cleaned_transcript = process_with_openai(transcript, cleanup_prompt, model_to_use)
+        if not cleaned_transcript:
+            logging.warning("Transcript cleanup failed, using original transcript")
+            cleaned_transcript = transcript
+    
+    results['cleaned_transcript'] = cleaned_transcript
+    
+    # Step 2: Generate summary
+    summary_prompt = read_prompt_file(PROMPT_SUMMARY_FILE)
+    if not summary_prompt:
+        logging.warning("Summary prompt file not found or empty, skipping summary generation")
+        results['summary'] = None
+    else:
+        logging.info("Step 2: Generating summary...")
+        model_to_use = choose_appropriate_model(cleaned_transcript)
+        summary = process_with_openai(cleaned_transcript, summary_prompt, model_to_use)
+        results['summary'] = summary
+    
+    # Step 3: Generate blog post
+    blog_prompt = read_prompt_file(PROMPT_BLOG_FILE)
+    if not blog_prompt:
+        logging.warning("Blog prompt file not found or empty, skipping blog generation")
+        results['blog'] = None
+    else:
+        logging.info("Step 3: Generating blog post...")
+        # Use both the cleaned transcript and summary for blog generation
+        input_text = f"CLEANED TRANSCRIPT:\n{cleaned_transcript}\n\nSUMMARY:\n{results.get('summary', 'No summary available')}"
+        model_to_use = choose_appropriate_model(input_text)
+        blog = process_with_openai(input_text, blog_prompt, model_to_use, max_tokens=MAX_TOKENS * 2)
+        results['blog'] = blog
+    
+    return results
+
+def write_workflow_outputs(results: Dict[str, str], output_base: str) -> None:
+    """
+    Write the outputs from the workflow to files.
+    
+    Args:
+        results: Dictionary with cleaned_transcript, summary, and blog
+        output_base: Base path for output files
+    """
+    # Write cleaned transcript
+    if 'cleaned_transcript' in results and results['cleaned_transcript']:
+        cleaned_path = f"{output_base}_cleaned.txt"
+        with open(cleaned_path, "w", encoding="utf-8") as f:
+            f.write(results['cleaned_transcript'])
+        logging.info(f"Cleaned transcript saved to: {cleaned_path}")
+    
+    # Write summary
+    if 'summary' in results and results['summary']:
+        summary_path = f"{output_base}_summary.txt"
+        with open(summary_path, "w", encoding="utf-8") as f:
+            f.write(results['summary'])
+        logging.info(f"Summary saved to: {summary_path}")
+    
+    # Write blog post
+    if 'blog' in results and results['blog']:
+        blog_path = f"{output_base}_blog.txt"
+        with open(blog_path, "w", encoding="utf-8") as f:
+            f.write(results['blog'])
+        logging.info(f"Blog post saved to: {blog_path}")
 
 def generate_summary_and_blog(transcript: str, prompt: str) -> Optional[str]:
     """
@@ -638,27 +778,23 @@ def process_summary(full_transcript: str, output_summary_file: str, output_blog_
     Args:
         full_transcript: The complete transcript text
         output_summary_file: Path to save the summary
-        output_blog_file: Path to save the blog (ignored - all content saved to summary file)
+        output_blog_file: Path to save the blog
         
     Returns:
         Success status (True/False)
     """
-    summary_prompt = read_summary_prompt()
-    if not summary_prompt:
-        logging.warning("Summary prompt file not found or empty, skipping summary generation")
+    # Use the multi-step workflow
+    results = process_transcript_workflow(full_transcript)
+    
+    if not results:
+        logging.error("Failed to process transcript")
         return False
     
-    logging.info("Generating summary and blog post...")
-    summary_and_blog = generate_summary_and_blog(full_transcript, summary_prompt)
+    # Get the base output path
+    output_base = os.path.splitext(output_summary_file)[0].replace('_summary', '')
     
-    if not summary_and_blog:
-        logging.error("Failed to generate summary and blog post")
-        return False
-    
-    # Save combined output to summary file (no longer splitting)
-    with open(output_summary_file, "w", encoding="utf-8") as f_summary:
-        f_summary.write(summary_and_blog)
-    logging.info(f"Summary and blog post saved to: {output_summary_file}")
+    # Write outputs to files
+    write_workflow_outputs(results, output_base)
     
     return True
 
