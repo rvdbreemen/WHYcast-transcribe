@@ -944,19 +944,16 @@ def episode_already_processed(episode: Dict, download_dir: str) -> bool:
     Returns:
         True if already processed, False otherwise
     """
-    # Create a unique identifier for the episode
-    if 'guid' in episode and episode['guid']:
-        # Use last part of GUID if available
-        episode_id = episode['guid'].split('/')[-1]
-    else:
-        # Create hash from title and published date
-        episode_id = hashlib.md5(f"{episode['title']}-{episode['published']}".encode()).hexdigest()
+    # Check if the episode ID is in our tracking file
+    processed_episodes = load_processed_episodes(download_dir)
+    episode_id = get_episode_id(episode)
+    if episode_id in processed_episodes:
+        return True
     
-    # Check if episode file exists
+    # Also check if the file exists (legacy method)
     filename = get_episode_filename(episode)
     full_path = os.path.join(download_dir, filename)
     
-    # Check if the file exists
     if os.path.exists(full_path):
         return True
         
@@ -1024,10 +1021,232 @@ def download_latest_episode(feed_url: str, download_dir: str) -> Optional[str]:
                 pass
         return None
 
-# ==================== MAIN FUNCTION ====================
+def get_all_episodes(feed_url: str) -> List[Dict]:
+    """
+    Get all episodes from a podcast RSS feed.
+    
+    Args:
+        feed_url: URL of the RSS feed
+        
+    Returns:
+        List of dictionaries with episode info
+    """
+    try:
+        logging.info(f"Fetching podcast feed from {feed_url}")
+        feed = feedparser.parse(feed_url)
+        
+        if not feed.entries:
+            logging.warning("No episodes found in the feed")
+            return []
+        
+        episodes = []
+        for entry in feed.entries:
+            # Find the audio file URL
+            audio_url = None
+            for enclosure in entry.enclosures:
+                if enclosure.type.startswith('audio/'):
+                    audio_url = enclosure.href
+                    break
+                    
+            if not audio_url:
+                logging.warning(f"No audio file found for episode: {entry.title}")
+                continue
+                
+            episodes.append({
+                'title': entry.title,
+                'published': entry.published if hasattr(entry, 'published') else '',
+                'audio_url': audio_url,
+                'description': entry.description if hasattr(entry, 'description') else '',
+                'guid': entry.id if hasattr(entry, 'id') else ''
+            })
+        
+        logging.info(f"Found {len(episodes)} episodes in the feed")
+        return episodes
+    except Exception as e:
+        logging.error(f"Error fetching podcast feed: {str(e)}")
+        return []
+
+def load_processed_episodes(download_dir: str) -> set:
+    """
+    Load the set of already processed episode IDs.
+    
+    Args:
+        download_dir: Directory where episodes are stored
+        
+    Returns:
+        Set of processed episode IDs
+    """
+    processed_file = os.path.join(download_dir, "processed_episodes.txt")
+    processed = set()
+    
+    if os.path.exists(processed_file):
+        try:
+            with open(processed_file, 'r', encoding='utf-8') as f:
+                for line in f:
+                    processed.add(line.strip())
+            logging.info(f"Loaded {len(processed)} previously processed episodes")
+        except Exception as e:
+            logging.error(f"Error loading processed episodes: {str(e)}")
+    
+    return processed
+
+def mark_episode_processed(episode: Dict, download_dir: str) -> None:
+    """
+    Mark an episode as processed by storing its ID.
+    
+    Args:
+        episode: Episode dictionary
+        download_dir: Directory where episodes are stored
+    """
+    # Create a unique identifier for the episode
+    if 'guid' in episode and episode['guid']:
+        episode_id = episode['guid']
+    else:
+        # Create hash from title and published date
+        episode_id = hashlib.md5(f"{episode['title']}-{episode['published']}".encode()).hexdigest()
+    
+    processed_file = os.path.join(download_dir, "processed_episodes.txt")
+    try:
+        with open(processed_file, 'a', encoding='utf-8') as f:
+            f.write(f"{episode_id}\n")
+    except Exception as e:
+        logging.error(f"Error marking episode as processed: {str(e)}")
+
+def get_episode_id(episode: Dict) -> str:
+    """
+    Get a unique ID for an episode.
+    
+    Args:
+        episode: Episode dictionary
+        
+    Returns:
+        Unique identifier for the episode
+    """
+    if 'guid' in episode and episode['guid']:
+        return episode['guid']
+    return hashlib.md5(f"{episode['title']}-{episode['published']}".encode()).hexdigest()
+
+def process_all_episodes(feed_url: str, download_dir: str, **kwargs) -> None:
+    """
+    Download and process all episodes from the podcast feed.
+    
+    Args:
+        feed_url: URL of the RSS feed
+        download_dir: Directory to save downloaded files
+        **kwargs: Additional arguments to pass to main()
+    """
+    # Create download directory if it doesn't exist
+    os.makedirs(download_dir, exist_ok=True)
+    
+    # Get all episodes
+    episodes = get_all_episodes(feed_url)
+    if not episodes:
+        logging.warning("No episodes found to process")
+        return
+    
+    # Load list of processed episodes
+    processed_episodes = load_processed_episodes(download_dir)
+    
+    # Filter out already processed episodes
+    new_episodes = []
+    for episode in episodes:
+        episode_id = get_episode_id(episode)
+        if episode_id not in processed_episodes:
+            new_episodes.append(episode)
+    
+    if not new_episodes:
+        logging.info("All episodes have already been processed")
+        return
+    
+    logging.info(f"Found {len(new_episodes)} episodes to process")
+    
+    # Sort episodes by publication date if available (newest first is typical feed order)
+    try:
+        from dateutil import parser as date_parser
+        new_episodes.sort(key=lambda ep: date_parser.parse(ep['published']) if ep['published'] else datetime.now(), 
+                        reverse=True)
+    except ImportError:
+        logging.warning("dateutil module not available, episodes will be processed in feed order")
+    
+    # Initialize the model once and reuse it for all episodes
+    model_size = kwargs.get('model_size') or MODEL_SIZE
+    model = setup_model(model_size)
+    logging.info(f"Initialized {model_size} model for processing {len(new_episodes)} episodes")
+    
+    # Process each episode
+    for i, episode in enumerate(new_episodes, 1):
+        logging.info(f"Processing episode {i}/{len(new_episodes)}: {episode['title']}")
+        
+        # Generate filename
+        filename = get_episode_filename(episode)
+        full_path = os.path.join(download_dir, filename)
+        
+        # Track processing status
+        processing_success = False
+        
+        # Download the file
+        try:
+            logging.info(f"Downloading episode: {episode['title']}")
+            response = requests.get(episode['audio_url'], stream=True)
+            response.raise_for_status()
+            
+            total_size = int(response.headers.get('content-length', 0))
+            block_size = 8192
+            
+            with open(full_path, 'wb') as f:
+                with tqdm(total=total_size, unit='B', unit_scale=True, desc="Downloading") as progress_bar:
+                    for chunk in response.iter_content(chunk_size=block_size):
+                        if chunk:
+                            f.write(chunk)
+                            progress_bar.update(len(chunk))
+            
+            logging.info(f"Downloaded episode to {full_path}")
+            
+            # Process the downloaded file - pass the model instance
+            kwargs_with_model = dict(kwargs)
+            kwargs_with_model['model'] = model  # Pass the model to main()
+            main(full_path, is_batch_mode=True, **kwargs_with_model)
+            
+            # If we got this far, processing was successful
+            processing_success = True
+            
+            # Clean GPU memory but keep the model
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                    logging.info("CUDA cache cleared between episodes")
+            except Exception as e:
+                logging.warning(f"Error clearing CUDA cache: {str(e)}")
+                
+            # Force garbage collection
+            import gc
+            gc.collect()
+            
+        except Exception as e:
+            logging.error(f"Error processing episode {episode['title']}: {str(e)}")
+            # Clean up partial download if it exists
+            if os.path.exists(full_path):
+                try:
+                    os.remove(full_path)
+                except:
+                    pass
+        
+        # Only mark as processed if we were successful
+        if processing_success:
+            mark_episode_processed(episode, download_dir)
+            logging.info(f"Successfully processed episode: {episode['title']}")
+        else:
+            logging.warning(f"Failed to process episode: {episode['title']}, will retry next time")
+    
+    # Final cleanup of model after all episodes are processed
+    cleanup_resources(model)
+    logging.info("Completed processing all episodes")
+
 def main(input_file: str, model_size: Optional[str] = None, output_dir: Optional[str] = None, 
          skip_summary: bool = False, force: bool = False, is_batch_mode: bool = False,
-         regenerate_summary_only: bool = False, skip_vocabulary: bool = False) -> None:
+         regenerate_summary_only: bool = False, skip_vocabulary: bool = False,
+         model: Optional[WhisperModel] = None) -> None:
     """
     Main function to process an audio file.
     
@@ -1040,6 +1259,7 @@ def main(input_file: str, model_size: Optional[str] = None, output_dir: Optional
         is_batch_mode: Flag indicating if running as part of batch processing
         regenerate_summary_only: Flag to only regenerate summary from existing transcript file
         skip_vocabulary: Flag to skip vocabulary corrections
+        model: Optional pre-initialized WhisperModel to use (to avoid reloading)
     """
     try:
         # Process for summary regeneration
@@ -1078,9 +1298,6 @@ def main(input_file: str, model_size: Optional[str] = None, output_dir: Optional
             logging.info(f"Skipping {input_file} - transcription already exists (use --force to override)")
             return
         
-        # Use provided model size or MODEL_SIZE
-        model_size = model_size or MODEL_SIZE
-        
         # Setup output directory and create if necessary
         if output_dir:
             os.makedirs(output_dir, exist_ok=True)
@@ -1094,8 +1311,10 @@ def main(input_file: str, model_size: Optional[str] = None, output_dir: Optional
         output_summary_file = f"{output_base}_summary.txt"
         output_blog_file = f"{output_base}_blog.txt"
         
-        # Setup model
-        model = setup_model(model_size)
+        # Setup model if not provided
+        if model is None:
+            model_size = model_size or MODEL_SIZE
+            model = setup_model(model_size)
         
         # Transcribe
         segments, info = transcribe_audio(model, input_file)
@@ -1140,7 +1359,9 @@ def process_batch(input_pattern: str, **kwargs) -> None:
     for file in tqdm(files, desc="Processing files"):
         logging.info(f"Processing file: {file}")
         # Pass the model instance to avoid reloading for each file
-        main(file, is_batch_mode=True, model=model, **kwargs)
+        kwargs_with_model = dict(kwargs)
+        kwargs_with_model['model'] = model
+        main(file, is_batch_mode=True, **kwargs_with_model)
         
     # Clean up after processing all files
     cleanup_resources(model)
@@ -1217,6 +1438,10 @@ if __name__ == "__main__":
     parser.add_argument('--no-download', '-N', action='store_true', 
                        help='Disable automatic podcast download')
     
+    # Add new argument for processing all episodes
+    parser.add_argument('--all-episodes', '-A', action='store_true', 
+                       help='Process all episodes from the podcast feed instead of just the latest')
+    
     args = parser.parse_args()
     
     logging.info(f"WHYcast Transcribe {VERSION} starting up")
@@ -1225,9 +1450,26 @@ if __name__ == "__main__":
     if args.verbose:
         logging.getLogger().setLevel(logging.DEBUG)
     
-    # Determine if we should check the podcast feed
-    # Default behavior: check feed if no specific input is provided and no special mode is requested
+    # Check if we should process all episodes
+    should_process_all_episodes = (args.all_episodes and 
+                                not args.no_download and
+                                not args.input and 
+                                not args.regenerate_all_summaries and 
+                                not args.regenerate_summary)
+    
+    if should_process_all_episodes:
+        feed_url = args.feed
+        download_dir = args.download_dir
+        
+        logging.info(f"Processing all episodes from {feed_url}")
+        process_all_episodes(feed_url, download_dir, model_size=args.model, 
+                           output_dir=args.output_dir, skip_summary=args.skip_summary, 
+                           force=args.force)
+        sys.exit(0)
+    
+    # Determine if we should check the podcast feed for latest episode (original behavior)
     should_check_feed = (not args.no_download and 
+                         not args.all_episodes and
                          not args.input and 
                          not args.regenerate_all_summaries and 
                          not args.regenerate_summary)
