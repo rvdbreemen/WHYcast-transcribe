@@ -456,7 +456,13 @@ def write_workflow_outputs(results: Dict[str, str], output_base: str) -> None:
     
     # Write blog post
     if 'blog' in results and results['blog']:
-        blog_path = f"{output_base}_blog.txt"
+        # Get base filename without any special suffixes
+        base_filename = os.path.basename(output_base)
+        if base_filename.endswith('_cleaned'):
+            base_filename = base_filename[:-8]  # remove "_cleaned"
+        output_dir = os.path.dirname(output_base)
+        blog_path = os.path.join(output_dir, f"{base_filename}_blog.txt")
+        
         with open(blog_path, "w", encoding="utf-8") as f:
             f.write(results['blog'])
         logging.info(f"Blog post saved to: {blog_path}")
@@ -903,22 +909,36 @@ def regenerate_blog_only(transcript_file: str, summary_file: str) -> bool:
         with open(summary_file, 'r', encoding='utf-8') as f:
             summary = f.read()
         
-        # Create path for blog output file
-        base = os.path.splitext(transcript_file)[0]
-        blog_file = f"{base}_blog.txt"
+        # Get base filename without path and extension
+        base_filename = os.path.splitext(os.path.basename(transcript_file))[0]
+        # Remove any _cleaned suffix if present for base name consistency
+        if base_filename.endswith('_cleaned'):
+            base_filename = base_filename[:-8]  # remove "_cleaned"
         
-        # Backup existing blog file if it exists
-        if os.path.exists(blog_file):
-            backup_file = f"{blog_file}.bk"
-            try:
-                # Remove old backup if it exists
-                if os.path.exists(backup_file):
-                    os.remove(backup_file)
-                # Create backup
-                os.rename(blog_file, backup_file)
-                logging.info(f"Backed up existing blog file to {backup_file}")
-            except Exception as e:
-                logging.warning(f"Could not back up existing blog file: {str(e)}")
+        # Create path for output directory (same as transcript file directory)
+        output_dir = os.path.dirname(transcript_file)
+        # Create the consistent blog file path
+        blog_file = os.path.join(output_dir, f"{base_filename}_blog.txt")
+        
+        # Check for existing blog files with different patterns for backward compatibility
+        potential_blog_files = [
+            blog_file,
+            os.path.join(output_dir, f"{base_filename}_cleaned_blog.txt"),
+        ]
+        
+        # Backup existing blog files
+        for existing_blog_file in potential_blog_files:
+            if os.path.exists(existing_blog_file):
+                backup_file = f"{existing_blog_file}.bk"
+                try:
+                    # Remove old backup if it exists
+                    if os.path.exists(backup_file):
+                        os.remove(backup_file)
+                    # Create backup
+                    os.rename(existing_blog_file, backup_file)
+                    logging.info(f"Backed up existing blog file to {backup_file}")
+                except Exception as e:
+                    logging.warning(f"Could not back up existing blog file: {str(e)}")
         
         # Read the blog prompt
         blog_prompt = read_prompt_file(PROMPT_BLOG_FILE)
@@ -947,7 +967,7 @@ def regenerate_blog_only(transcript_file: str, summary_file: str) -> bool:
             )
             blog = response.choices[0].message.content
             
-            # Save the blog post
+            # Save the blog post to the correct path
             with open(blog_file, 'w', encoding='utf-8') as f:
                 f.write(blog)
                 
