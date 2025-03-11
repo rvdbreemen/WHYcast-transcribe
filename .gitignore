@@ -172,3 +172,4 @@ cython_debug/
 # Folder that needs to be ignored
 /faster-whisper
 /podcasts
+.aider*

@@ -4,7 +4,7 @@ Configuration settings for the transcription system.
 import os
 
 # Version information
-VERSION = "v0.0.4"
+VERSION = "0.0.6"
 
 # Model configuration
 MODEL_SIZE = os.environ.get("WHISPER_MODEL_SIZE", "large-v3")

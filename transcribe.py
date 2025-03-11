@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-WHYcast Transcribe - v0.0.4
+WHYcast Transcribe - v0.0.6
 
 A tool for transcribing audio files and generating summaries using OpenAI GPT models.
 Supports downloading the latest episode from podcast feeds.
@@ -849,11 +849,16 @@ def regenerate_all_summaries(directory: str) -> None:
     Args:
         directory: Directory containing transcript files
     """
+    # Create directory if it doesn't exist (especially for default 'podcasts' directory)
+    try:
+        os.makedirs(directory, exist_ok=True)
+    except Exception as e:
+        logging.error(f"Could not create or access directory {directory}: {str(e)}")
+        return
+    
     if not os.path.isdir(directory):
-        directory = os.path.dirname(directory) or '.'
-        if not os.path.isdir(directory):
-            logging.error(f"Invalid directory: {directory}")
-            return
+        logging.error(f"Invalid directory: {directory}")
+        return
     
     # Look for transcript files (txt files that don't have "_ts" or "_summary" in their name)
     files = glob.glob(os.path.join(directory, "*.txt"))
@@ -870,6 +875,153 @@ def regenerate_all_summaries(directory: str) -> None:
         # Force garbage collection to release GPU memory
         import gc
         gc.collect()
+
+def regenerate_blog_only(transcript_file: str, summary_file: str) -> bool:
+    """
+    Regenerate only the blog post from existing transcript and summary files.
+    
+    Args:
+        transcript_file: Path to the transcript file
+        summary_file: Path to the summary file
+        
+    Returns:
+        Success status (True/False)
+    """
+    if not os.path.exists(transcript_file):
+        logging.error(f"Transcript file does not exist: {transcript_file}")
+        return False
+        
+    if not os.path.exists(summary_file):
+        logging.error(f"Summary file does not exist: {summary_file}")
+        return False
+    
+    try:
+        # Read the transcript and summary
+        with open(transcript_file, 'r', encoding='utf-8') as f:
+            transcript = f.read()
+            
+        with open(summary_file, 'r', encoding='utf-8') as f:
+            summary = f.read()
+        
+        # Create path for blog output file
+        base = os.path.splitext(transcript_file)[0]
+        blog_file = f"{base}_blog.txt"
+        
+        # Backup existing blog file if it exists
+        if os.path.exists(blog_file):
+            backup_file = f"{blog_file}.bk"
+            try:
+                # Remove old backup if it exists
+                if os.path.exists(backup_file):
+                    os.remove(backup_file)
+                # Create backup
+                os.rename(blog_file, backup_file)
+                logging.info(f"Backed up existing blog file to {backup_file}")
+            except Exception as e:
+                logging.warning(f"Could not back up existing blog file: {str(e)}")
+        
+        # Read the blog prompt
+        blog_prompt = read_prompt_file(PROMPT_BLOG_FILE)
+        if not blog_prompt:
+            logging.warning("Blog prompt file not found or empty, cannot regenerate blog")
+            return False
+        
+        logging.info("Generating blog post...")
+        
+        # Combine transcript and summary for input
+        input_text = f"CLEANED TRANSCRIPT:\n{transcript}\n\nSUMMARY:\n{summary}"
+        model_to_use = choose_appropriate_model(input_text)
+        
+        try:
+            api_key = ensure_api_key()
+            client = OpenAI(api_key=api_key)
+            
+            response = client.chat.completions.create(
+                model=model_to_use,
+                messages=[
+                    {"role": "system", "content": "You are a helpful assistant that creates blog posts from transcripts."},
+                    {"role": "user", "content": f"{blog_prompt}\n\n{input_text}"}
+                ],
+                temperature=TEMPERATURE,
+                max_tokens=MAX_TOKENS * 2  # Allow more tokens for blog generation
+            )
+            blog = response.choices[0].message.content
+            
+            # Save the blog post
+            with open(blog_file, 'w', encoding='utf-8') as f:
+                f.write(blog)
+                
+            logging.info(f"Blog post saved to: {blog_file}")
+            return True
+            
+        except Exception as e:
+            logging.error(f"Error generating blog post: {str(e)}")
+            # If we failed to generate a new blog but backed up the old one, restore it
+            backup_file = f"{blog_file}.bk"
+            if os.path.exists(backup_file) and not os.path.exists(blog_file):
+                try:
+                    os.rename(backup_file, blog_file)
+                    logging.info(f"Restored previous blog from backup after failed generation")
+                except Exception as restore_err:
+                    logging.error(f"Failed to restore blog from backup: {str(restore_err)}")
+            return False
+            
+    except Exception as e:
+        logging.error(f"Error regenerating blog: {str(e)}")
+        return False
+
+def regenerate_all_blogs(directory: str) -> None:
+    """
+    Regenerate blog posts for all transcript/summary pairs in the directory.
+    
+    Args:
+        directory: Directory containing transcript and summary files
+    """
+    # Create directory if it doesn't exist (especially for default 'podcasts' directory)
+    try:
+        os.makedirs(directory, exist_ok=True)
+    except Exception as e:
+        logging.error(f"Could not create or access directory {directory}: {str(e)}")
+        return
+    
+    if not os.path.isdir(directory):
+        logging.error(f"Invalid directory: {directory}")
+        return
+    
+    # Look for transcript files (txt files that don't have "_ts", "_summary", or "_blog" in their name)
+    files = glob.glob(os.path.join(directory, "*.txt"))
+    transcript_files = [f for f in files if "_ts.txt" not in f and "_summary.txt" not in f and "_blog.txt" not in f and "_cleaned.txt" not in f]
+    
+    if not transcript_files:
+        logging.warning(f"No transcript files found in directory: {directory}")
+        return
+    
+    logging.info(f"Found {len(transcript_files)} transcript files to process")
+    processed_count = 0
+    
+    for transcript_file in tqdm(transcript_files, desc="Regenerating blogs"):
+        base = os.path.splitext(transcript_file)[0]
+        summary_file = f"{base}_summary.txt"
+        
+        # First check for a cleaned transcript if it exists
+        cleaned_transcript_file = f"{base}_cleaned.txt"
+        if os.path.exists(cleaned_transcript_file):
+            transcript_source = cleaned_transcript_file
+        else:
+            transcript_source = transcript_file
+        
+        # Check if summary exists
+        if os.path.exists(summary_file):
+            logging.info(f"Regenerating blog for: {transcript_file}")
+            if regenerate_blog_only(transcript_source, summary_file):
+                processed_count += 1
+            # Force garbage collection to release memory
+            import gc
+            gc.collect()
+        else:
+            logging.warning(f"Skipping {transcript_file}: No matching summary file found")
+    
+    logging.info(f"Successfully regenerated {processed_count} blog posts out of {len(transcript_files)} transcript files")
 
 # ==================== PODCAST FEED FUNCTIONS ====================
 def get_latest_episode(feed_url: str) -> Optional[Dict]:
@@ -1417,7 +1569,7 @@ def process_all_mp3s(directory: str, **kwargs) -> None:
 # ==================== ENTRY POINT ====================
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=f'WHYcast Transcribe v{VERSION} - Transcribe audio files and generate summaries')
-    parser.add_argument('input', nargs='?', help='Path to the input audio file, directory, or glob pattern')
+    parser.add_argument('input', nargs='?', help='Path to the input audio file, directory, or glob pattern (default: current directory for regeneration options)')
     parser.add_argument('--batch', '-b', action='store_true', help='Process multiple files matching pattern')
     parser.add_argument('--all-mp3s', '-a', action='store_true', help='Process all MP3 files in directory')
     parser.add_argument('--model', '-m', help='Model size (e.g., "large-v3", "medium", "small")')
@@ -1427,7 +1579,10 @@ if __name__ == "__main__":
     parser.add_argument('--verbose', '-v', action='store_true', help='Enable verbose logging')
     parser.add_argument('--version', action='version', version=f'WHYcast Transcribe v{VERSION}')
     parser.add_argument('--regenerate-summary', '-r', action='store_true', help='Regenerate summary and blog from existing transcript')
-    parser.add_argument('--regenerate-all-summaries', '-R', action='store_true', help='Regenerate summaries for all transcripts in directory')
+    parser.add_argument('--regenerate-all-summaries', '-R', action='store_true', 
+                         help='Regenerate summaries for all transcripts in directory (uses current dir if no input)')
+    parser.add_argument('--regenerate-all-blogs', '-B', action='store_true', 
+                         help='Regenerate only blog posts for all transcripts in directory (uses current dir if no input)')
     parser.add_argument('--skip-vocabulary', action='store_true', help='Skip custom vocabulary corrections')
     
     # Add podcast feed arguments
@@ -1454,7 +1609,8 @@ if __name__ == "__main__":
     should_process_all_episodes = (args.all_episodes and 
                                 not args.no_download and
                                 not args.input and 
-                                not args.regenerate_all_summaries and 
+                                not args.regenerate_all_summaries and
+                                not args.regenerate_all_blogs and
                                 not args.regenerate_summary)
     
     if should_process_all_episodes:
@@ -1471,7 +1627,8 @@ if __name__ == "__main__":
     should_check_feed = (not args.no_download and 
                          not args.all_episodes and
                          not args.input and 
-                         not args.regenerate_all_summaries and 
+                         not args.regenerate_all_summaries and
+                         not args.regenerate_all_blogs and
                          not args.regenerate_summary)
     
     if should_check_feed:
@@ -1491,12 +1648,19 @@ if __name__ == "__main__":
             sys.exit(0)
     
     # Continue with existing functionality if input is provided or special mode is requested
-    if not args.input:
+    if args.regenerate_all_blogs:
+        # Allow regenerate_all_blogs without an input by using podcasts directory
+        directory = args.input if args.input else args.download_dir
+        logging.info(f"Regenerating all blogs in directory: {directory}")
+        regenerate_all_blogs(directory)
+    elif args.regenerate_all_summaries:
+        # Allow regenerate_all_summaries without an input by using podcasts directory
+        directory = args.input if args.input else args.download_dir
+        logging.info(f"Regenerating all summaries in directory: {directory}")
+        regenerate_all_summaries(directory)
+    elif not args.input:
         parser.print_help()
         sys.exit(1)
-        
-    if args.regenerate_all_summaries:
-        regenerate_all_summaries(args.input)
     elif args.regenerate_summary:
         if os.path.isdir(args.input):
             logging.error("Please specify a transcript file when using --regenerate-summary, not a directory")

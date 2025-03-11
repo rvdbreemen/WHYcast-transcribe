@@ -3,6 +3,7 @@ python-dotenv>=0.19.0
 tqdm>=4.62.0
 openai>=1.0.0
 faster-whisper>=0.9.0
+python-dateutil
 
 # Podcast feed and downloading
 feedparser>=6.0.0
