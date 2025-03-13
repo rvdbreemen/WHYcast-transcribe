@@ -501,7 +501,7 @@ def generate_summary_and_blog(transcript: str, prompt: str) -> Optional[str]:
         logging.info(f"Estimated transcript length: ~{estimated_tokens} tokens")
         
         # For very large transcripts, use recursive summarization
-        if USE_RECURSIVE_SUMMARIZATION and estimated_tokens > MAX_INPUT_TOKENS::
+        if USE_RECURSIVE_SUMMARIZATION and estimated_tokens > MAX_INPUT_TOKENS:
             logging.info(f"Transcript is very large ({estimated_tokens} tokens), using recursive summarization")
             return summarize_large_transcript(transcript, prompt, client)
         
@@ -964,7 +964,7 @@ def write_transcript_files(segments, output_file: str, output_file_timestamped: 
                 if i < len(original_timestamped):
                     ts_line = original_timestamped[i]
                     ts_match = re.match(r'^\[\s*(\d+\.\d+)s\s*->\s*(\d+\.\d+)s\s*\]', ts_line)
-                    if ts_match and line.strip()::
+                    if ts_match and line.strip():
                         start, end = ts_match.groups()
                         timestamped_lines.append(f"[{start}s -> {end}s] {line}")
                     elif line.strip():
