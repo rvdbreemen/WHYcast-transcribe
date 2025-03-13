@@ -38,5 +38,5 @@ PROMPT_SUMMARY_FILE = os.path.join(base_dir, "prompts", "summary_prompt.txt")
 PROMPT_BLOG_FILE = os.path.join(base_dir, "prompts", "blog_prompt.txt")
 
 # Custom vocabulary settings
-USE_CUSTOM_VOCABULARY = True  # Set to False to disable
+USE_CUSTOM_VOCABULARY = os.environ.get("USE_CUSTOM_VOCABULARY", "True").lower() in ("true", "1", "yes")
 VOCABULARY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "vocabulary.json")
