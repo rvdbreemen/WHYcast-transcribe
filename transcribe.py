@@ -27,6 +27,7 @@ import requests
 import hashlib
 from urllib.parse import urlparse
 from datetime import datetime
+import markdown  # New import for markdown to HTML conversion
 
 # Try to import configuration
 try:
@@ -466,6 +467,20 @@ def write_workflow_outputs(results: Dict[str, str], output_base: str) -> None:
         with open(blog_path, "w", encoding="utf-8") as f:
             f.write(results['blog'])
         logging.info(f"Blog post saved to: {blog_path}")
+        
+        # Generate and write HTML version
+        html_content = convert_markdown_to_html(results['blog'])
+        html_path = os.path.join(output_dir, f"{base_filename}_blog.html")
+        with open(html_path, "w", encoding="utf-8") as f:
+            f.write(html_content)
+        logging.info(f"HTML blog post saved to: {html_path}")
+        
+        # Generate and write Wiki version
+        wiki_content = convert_markdown_to_wiki(results['blog'])
+        wiki_path = os.path.join(output_dir, f"{base_filename}_blog.wiki")
+        with open(wiki_path, "w", encoding="utf-8") as f:
+            f.write(wiki_content)
+        logging.info(f"Wiki blog post saved to: {wiki_path}")
 
 def generate_summary_and_blog(transcript: str, prompt: str) -> Optional[str]:
     """
@@ -486,7 +501,7 @@ def generate_summary_and_blog(transcript: str, prompt: str) -> Optional[str]:
         logging.info(f"Estimated transcript length: ~{estimated_tokens} tokens")
         
         # For very large transcripts, use recursive summarization
-        if USE_RECURSIVE_SUMMARIZATION and estimated_tokens > MAX_INPUT_TOKENS:
+        if USE_RECURSIVE_SUMMARIZATION and estimated_tokens > MAX_INPUT_TOKENS::
             logging.info(f"Transcript is very large ({estimated_tokens} tokens), using recursive summarization")
             return summarize_large_transcript(transcript, prompt, client)
         
@@ -648,6 +663,189 @@ def process_transcript_with_vocabulary(transcript: str) -> str:
     return apply_vocabulary_corrections(transcript, vocab_mappings)
 
 
+# ==================== FORMAT CONVERSION FUNCTIONS ====================
+def convert_markdown_to_html(markdown_text: str) -> str:
+    """
+    Convert markdown text to HTML.
+    
+    Args:
+        markdown_text: The markdown text to convert
+        
+    Returns:
+        HTML formatted text
+    """
+    try:
+        # Use the markdown library to convert text to HTML
+        html = markdown.markdown(markdown_text, extensions=['extra', 'nl2br', 'sane_lists'])
+        
+        # Create a complete HTML document with basic styling
+        html_document = f"""<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WHYcast Blog</title>
+    <style>
+        body {{
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }}
+        h1, h2, h3 {{
+            color: #333;
+        }}
+        a {{
+            color: #0066cc;
+        }}
+        blockquote {{
+            border-left: 4px solid #ccc;
+            padding-left: 16px;
+            margin-left: 0;
+            color: #555;
+        }}
+        code {{
+            background-color: #f4f4f4;
+            padding: 2px 5px;
+            border-radius: 3px;
+        }}
+        pre {{
+            background-color: #f4f4f4;
+            padding: 10px;
+            border-radius: 5px;
+            overflow-x: auto;
+        }}
+    </style>
+</head>
+<body>
+    {html}
+</body>
+</html>
+"""
+        return html_document
+    except Exception as e:
+        logging.error(f"Error converting markdown to HTML: {str(e)}")
+        # Return basic HTML with the original text if conversion fails
+        return f"<!DOCTYPE html><html><body><pre>{markdown_text}</pre></body></html>"
+
+def convert_markdown_to_wiki(markdown_text: str) -> str:
+    """
+    Convert markdown text to Wiki markup.
+    
+    Args:
+        markdown_text: The markdown text to convert
+        
+    Returns:
+        Wiki markup formatted text
+    """
+    try:
+        # Basic conversion rules for common markdown to Wiki syntax
+        wiki_text = markdown_text
+        
+        # Headers: Convert markdown headers to wiki headers
+        # e.g., "# Heading 1" -> "= Heading 1 ="
+        wiki_text = re.sub(r'^# (.+)$', r'= \1 =', wiki_text, flags=re.MULTILINE)
+        wiki_text = re.sub(r'^## (.+)$', r'== \1 ==', wiki_text, flags=re.MULTILINE)
+        wiki_text = re.sub(r'^### (.+)$', r'=== \1 ===', wiki_text, flags=re.MULTILINE)
+        wiki_text = re.sub(r'^#### (.+)$', r'==== \1 ====', wiki_text, flags=re.MULTILINE)
+        
+        # Bold: Convert **text** or __text__ to '''text'''
+        wiki_text = re.sub(r'\*\*(.+?)\*\*', r"'''\1'''", wiki_text)
+        wiki_text = re.sub(r'__(.+?)__', r"'''\1'''", wiki_text)
+        
+        # Italic: Convert *text* or _text_ to ''text''
+        wiki_text = re.sub(r'\*([^*]+?)\*', r"''\1''", wiki_text)
+        wiki_text = re.sub(r'_([^_]+?)_', r"''\1''", wiki_text)
+        
+        # Lists: Convert markdown lists to wiki lists
+        # Unordered lists: "- item" -> "* item"
+        wiki_text = re.sub(r'^- (.+)$', r'* \1', wiki_text, flags=re.MULTILINE)
+        
+        # Ordered lists: "1. item" -> "# item"
+        wiki_text = re.sub(r'^\d+\. (.+)$', r'# \1', wiki_text, flags=re.MULTILINE)
+        
+        # Links: Convert [text](url) to [url text]
+        wiki_text = re.sub(r'\[(.+?)\]\((.+?)\)', r'[\2 \1]', wiki_text)
+        
+        # Code blocks: Convert ```code``` to <syntaxhighlight>code</syntaxhighlight>
+        wiki_text = re.sub(r'```(.+?)```', r'<syntaxhighlight>\1</syntaxhighlight>', wiki_text, flags=re.DOTALL)
+        
+        # Inline code: Convert `code` to <code>code</code>
+        wiki_text = re.sub(r'`(.+?)`', r'<code>\1</code>', wiki_text)
+        
+        # Blockquotes: Convert > quote to <blockquote>quote</blockquote>
+        # First, group consecutive blockquote lines
+        blockquote_blocks = re.findall(r'((?:^> .+\n?)+)', wiki_text, flags=re.MULTILINE)
+        for block in blockquote_blocks:
+            # Remove the > prefix from each line and wrap in blockquote tags
+            cleaned_block = re.sub(r'^> (.+)$', r'\1', block, flags=re.MULTILINE).strip()
+            wiki_text = wiki_text.replace(block, f'<blockquote>{cleaned_block}</blockquote>\n\n')
+        
+        return wiki_text
+    except Exception as e:
+        logging.error(f"Error converting markdown to Wiki markup: {str(e)}")
+        return markdown_text  # Return original text if conversion fails
+
+def convert_existing_blogs(directory: str) -> None:
+    """
+    Convert all existing blog.txt files in the given directory to HTML and Wiki formats.
+    
+    Args:
+        directory: Directory containing blog text files
+    """
+    try:
+        # Create directory if it doesn't exist
+        os.makedirs(directory, exist_ok=True)
+    except Exception as e:
+        logging.error(f"Could not create or access directory {directory}: {str(e)}")
+        return
+    
+    if not os.path.isdir(directory):
+        logging.error(f"Invalid directory: {directory}")
+        return
+    
+    # Look for blog files (txt files that have "_blog" in their name)
+    blog_pattern = os.path.join(directory, "*_blog.txt")
+    blog_files = glob.glob(blog_pattern)
+    
+    if not blog_files:
+        logging.warning(f"No blog files found in directory: {directory}")
+        return
+    
+    logging.info(f"Found {len(blog_files)} blog files to convert")
+    converted_count = 0
+    
+    for blog_file in tqdm(blog_files, desc="Converting blogs"):
+        base_filename = os.path.splitext(blog_file)[0]  # Remove .txt extension
+        
+        # Define output paths
+        html_path = f"{base_filename}.html"
+        wiki_path = f"{base_filename}.wiki"
+        
+        try:
+            # Read the blog content
+            with open(blog_file, 'r', encoding='utf-8') as f:
+                blog_content = f.read()
+            
+            # Convert to HTML and save
+            html_content = convert_markdown_to_html(blog_content)
+            with open(html_path, "w", encoding="utf-8") as f:
+                f.write(html_content)
+                
+            # Convert to Wiki and save
+            wiki_content = convert_markdown_to_wiki(blog_content)
+            with open(wiki_path, "w", encoding="utf-8") as f:
+                f.write(wiki_content)
+            
+            logging.info(f"Converted {os.path.basename(blog_file)} to HTML and Wiki formats")
+            converted_count += 1
+            
+        except Exception as e:
+            logging.error(f"Error converting {blog_file}: {str(e)}")
+    
+    logging.info(f"Successfully converted {converted_count} out of {len(blog_files)} blog files")
+
 # ==================== TRANSCRIPTION FUNCTIONS ====================
 def setup_model(model_size: str = MODEL_SIZE) -> WhisperModel:
     """
@@ -766,7 +964,7 @@ def write_transcript_files(segments, output_file: str, output_file_timestamped: 
                 if i < len(original_timestamped):
                     ts_line = original_timestamped[i]
                     ts_match = re.match(r'^\[\s*(\d+\.\d+)s\s*->\s*(\d+\.\d+)s\s*\]', ts_line)
-                    if ts_match and line.strip():
+                    if ts_match and line.strip()::
                         start, end = ts_match.groups()
                         timestamped_lines.append(f"[{start}s -> {end}s] {line}")
                     elif line.strip():
@@ -971,7 +1169,21 @@ def regenerate_blog_only(transcript_file: str, summary_file: str) -> bool:
             with open(blog_file, 'w', encoding='utf-8') as f:
                 f.write(blog)
                 
+            # Generate and save HTML version
+            html_content = convert_markdown_to_html(blog)
+            html_path = os.path.join(output_dir, f"{base_filename}_blog.html")
+            with open(html_path, "w", encoding="utf-8") as f:
+                f.write(html_content)
+            
+            # Generate and save Wiki version
+            wiki_content = convert_markdown_to_wiki(blog)
+            wiki_path = os.path.join(output_dir, f"{base_filename}_blog.wiki")
+            with open(wiki_path, "w", encoding="utf-8") as f:
+                f.write(wiki_content)
+                
             logging.info(f"Blog post saved to: {blog_file}")
+            logging.info(f"HTML blog post saved to: {html_path}")
+            logging.info(f"Wiki blog post saved to: {wiki_path}")
             return True
             
         except Exception as e:
@@ -1040,6 +1252,34 @@ def regenerate_all_blogs(directory: str) -> None:
             gc.collect()
         else:
             logging.warning(f"Skipping {transcript_file}: No matching summary file found")
+    
+    # Also regenerate HTML and Wiki versions if blog regeneration was successful
+    if processed_count > 0:
+        logging.info("Ensuring HTML and Wiki versions exist for all blog posts")
+        blog_files = glob.glob(os.path.join(directory, "*_blog.txt"))
+        for blog_file in blog_files:
+            base_filename = os.path.splitext(os.path.basename(blog_file))[0].replace('_blog', '')
+            try:
+                with open(blog_file, 'r', encoding='utf-8') as f:
+                    blog_content = f.read()
+                
+                # Generate HTML version
+                html_path = os.path.join(directory, f"{base_filename}_blog.html")
+                if not os.path.exists(html_path):
+                    html_content = convert_markdown_to_html(blog_content)
+                    with open(html_path, "w", encoding="utf-8") as f:
+                        f.write(html_content)
+                    logging.info(f"Generated missing HTML version: {html_path}")
+                
+                # Generate Wiki version
+                wiki_path = os.path.join(directory, f"{base_filename}_blog.wiki")
+                if not os.path.exists(wiki_path):
+                    wiki_content = convert_markdown_to_wiki(blog_content)
+                    with open(wiki_path, "w", encoding="utf-8") as f:
+                        f.write(wiki_content)
+                    logging.info(f"Generated missing Wiki version: {wiki_path}")
+            except Exception as e:
+                logging.error(f"Error generating formats for {blog_file}: {str(e)}")
     
     logging.info(f"Successfully regenerated {processed_count} blog posts out of {len(transcript_files)} transcript files")
 
@@ -1617,6 +1857,10 @@ if __name__ == "__main__":
     parser.add_argument('--all-episodes', '-A', action='store_true', 
                        help='Process all episodes from the podcast feed instead of just the latest')
     
+    # Add new argument for converting existing blogs to HTML and Wiki formats
+    parser.add_argument('--convert-blogs', '-C', action='store_true',
+                       help='Convert existing blog text files to HTML and Wiki formats')
+    
     args = parser.parse_args()
     
     logging.info(f"WHYcast Transcribe {VERSION} starting up")
@@ -1624,6 +1868,13 @@ if __name__ == "__main__":
     # Set logging level based on verbosity
     if args.verbose:
         logging.getLogger().setLevel(logging.DEBUG)
+    
+    # Check if we should convert blogs
+    if args.convert_blogs:
+        directory = args.input if args.input else args.download_dir
+        logging.info(f"Converting all blog files in directory: {directory}")
+        convert_existing_blogs(directory)
+        sys.exit(0)
     
     # Check if we should process all episodes
     should_process_all_episodes = (args.all_episodes and 
