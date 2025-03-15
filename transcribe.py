@@ -20,8 +20,7 @@ import glob
 import argparse
 import json
 import re
-import openai
-from openai.error import OpenAIError
+from openai import OpenAI, BadRequestError
 from faster_whisper import WhisperModel
 import feedparser
 import requests
@@ -359,7 +358,7 @@ def process_with_openai(text: str, prompt: str, model_name: str, max_tokens: int
                 max_tokens=max_tokens
             )
             return response.choices[0].message.content
-        except OpenAIError as e:
+        except BadRequestError as e:
             if "maximum context length" in str(e).lower():
                 # Try with more aggressive truncation
                 logging.warning(f"Context length exceeded. Retrying with further truncation...")
@@ -528,7 +527,7 @@ def generate_summary_and_blog(transcript: str, prompt: str) -> Optional[str]:
                 max_tokens=MAX_TOKENS
             )
             return response.choices[0].message.content
-        except OpenAIError as e:
+        except BadRequestError as e:
             if "maximum context length" in str(e).lower():
                 # Try with more aggressive truncation
                 logging.warning(f"Context length exceeded. Retrying with further truncation...")
