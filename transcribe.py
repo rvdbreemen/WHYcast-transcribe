@@ -1117,27 +1117,7 @@ def regenerate_blog_only(transcript_file: str, summary_file: str) -> bool:
         output_dir = os.path.dirname(transcript_file)
         # Create the consistent blog file path
         blog_file = os.path.join(output_dir, f"{base_filename}_blog.txt")
-        
-        # Check for existing blog files with different patterns for backward compatibility
-        potential_blog_files = [
-            blog_file,
-            os.path.join(output_dir, f"{base_filename}_cleaned_blog.txt"),
-        ]
-        
-        # Backup existing blog files
-        for existing_blog_file in potential_blog_files:
-            if os.path.exists(existing_blog_file):
-                backup_file = f"{existing_blog_file}.bk"
-                try:
-                    # Remove old backup if it exists
-                    if os.path.exists(backup_file):
-                        os.remove(backup_file)
-                    # Create backup
-                    os.rename(existing_blog_file, backup_file)
-                    logging.info(f"Backed up existing blog file to {backup_file}")
-                except Exception as e:
-                    logging.warning(f"Could not back up existing blog file: {str(e)}")
-        
+                
         # Read the blog prompt
         blog_prompt = read_prompt_file(PROMPT_BLOG_FILE)
         if not blog_prompt:
