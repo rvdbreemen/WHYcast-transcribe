@@ -35,7 +35,7 @@ try:
         VERSION, MODEL_SIZE, DEVICE, COMPUTE_TYPE, BEAM_SIZE,
         OPENAI_MODEL, OPENAI_LARGE_CONTEXT_MODEL, 
         TEMPERATURE, MAX_TOKENS, MAX_INPUT_TOKENS, CHARS_PER_TOKEN,
-        PROMPT_CLEANUP_FILE, PROMPT_SUMMARY_FILE, PROMPT_BLOG_FILE, MAX_FILE_SIZE_KB,
+        PROMPT_CLEANUP_FILE, PROMPT_SUMMARY_FILE, PROMPT_BLOG_FILE, PROMPT_BLOG_ALT1_FILE, MAX_FILE_SIZE_KB,
         USE_RECURSIVE_SUMMARIZATION, MAX_CHUNK_SIZE, CHUNK_OVERLAP,
         VOCABULARY_FILE, USE_CUSTOM_VOCABULARY
     )
@@ -430,6 +430,27 @@ def process_transcript_workflow(transcript: str) -> Optional[Dict[str, str]]:
         model_to_use = choose_appropriate_model(input_text)
         blog = process_with_openai(input_text, blog_prompt, model_to_use, max_tokens=MAX_TOKENS * 2)
         results['blog'] = blog
+        
+    # Step 4: Generate blog post
+    # Log the filename before reading
+    logging.info(f"Reading prompt file: {PROMPT_BLOG_ALT1_FILE}")
+    blog_alt1_prompt = read_prompt_file(PROMPT_BLOG_ALT1_FILE)
+    
+    # Log the content if it was read successfully
+    if blog_alt1_prompt:
+        logging.info(f"Prompt file content: {blog_alt1_prompt[:100]}..." if len(blog_alt1_prompt) > 100 else blog_alt1_prompt)
+    else:
+        logging.warning(f"Failed to read prompt file: {PROMPT_BLOG_ALT1_FILE}")
+    if not blog_alt1_prompt:
+        logging.warning("Blog prompt alt1 file not found or empty, skipping blog generation")
+        results['blog_alt1'] = None
+    else:
+        logging.info("Step 4: Generating blog alt1 post...")
+        # Use both the cleaned transcript and summary for blog generation
+        input_text = f"CLEANED TRANSCRIPT:\n{cleaned_transcript}\n\nSUMMARY:\n{results.get('summary', 'No summary available')}"
+        model_to_use = choose_appropriate_model(input_text)
+        blog_alt1 = process_with_openai(input_text, blog_prompt, model_to_use, max_tokens=MAX_TOKENS * 2)
+        results['blog_alt1'] = blog_alt1
     
     return results
 
@@ -459,8 +480,6 @@ def write_workflow_outputs(results: Dict[str, str], output_base: str) -> None:
     if 'blog' in results and results['blog']:
         # Get base filename without any special suffixes
         base_filename = os.path.basename(output_base)
-        if base_filename.endswith('_cleaned'):
-            base_filename = base_filename[:-8]  # remove "_cleaned"
         output_dir = os.path.dirname(output_base)
         blog_path = os.path.join(output_dir, f"{base_filename}_blog.txt")
         
@@ -481,6 +500,31 @@ def write_workflow_outputs(results: Dict[str, str], output_base: str) -> None:
         with open(wiki_path, "w", encoding="utf-8") as f:
             f.write(wiki_content)
         logging.info(f"Wiki blog post saved to: {wiki_path}")
+        
+    # Write blog post
+    if 'blog_alt1' in results and results['blog_alt1']:
+        # Get base filename without any special suffixes
+        base_filename = os.path.basename(output_base)
+        output_dir = os.path.dirname(output_base)
+        blog_alt1_path = os.path.join(output_dir, f"{base_filename}_blog_alt1.txt")
+        
+        with open(blog_alt1_path, "w", encoding="utf-8") as f:
+            f.write(results['blog_alt1'])
+        logging.info(f"Blog alt1 post saved to: {blog_alt1_path}")
+        
+        # Generate and write HTML version
+        html_content = convert_markdown_to_html(results['blog_alt1'])
+        html_path = os.path.join(output_dir, f"{base_filename}_blog_alt1.html")
+        with open(html_path, "w", encoding="utf-8") as f:
+            f.write(html_content)
+        logging.info(f"HTML blog alt 1post saved to: {html_path}")
+        
+        # Generate and write Wiki version
+        wiki_content = convert_markdown_to_wiki(results['blog_alt1'])
+        wiki_path = os.path.join(output_dir, f"{base_filename}_blog_alt1.wiki")
+        with open(wiki_path, "w", encoding="utf-8") as f:
+            f.write(wiki_content)
+        logging.info(f"Wiki blog alt1 post saved to: {wiki_path}")
 
 def generate_summary_and_blog(transcript: str, prompt: str) -> Optional[str]:
     """
@@ -847,9 +891,29 @@ def convert_existing_blogs(directory: str) -> None:
     logging.info(f"Successfully converted {converted_count} out of {len(blog_files)} blog files")
 
 # ==================== TRANSCRIPTION FUNCTIONS ====================
+def is_cuda_available() -> bool:
+    """
+    Check if CUDA is available for GPU acceleration.
+    
+    Returns:
+        True if CUDA is available, False otherwise
+    """
+    try:
+        import torch
+        cuda_available = torch.cuda.is_available()
+        if cuda_available:
+            # Log CUDA device information for better diagnostics
+            device_count = torch.cuda.device_count()
+            device_name = torch.cuda.get_device_name(0) if device_count > 0 else "unknown"
+            logging.info(f"CUDA is available: {device_count} device(s) - {device_name}")
+        return cuda_available
+    except ImportError:
+        return False
+
 def setup_model(model_size: str = MODEL_SIZE) -> WhisperModel:
     """
     Initialize and return the Whisper model.
+    Automatically uses CUDA if available with optimized settings.
     
     Args:
         model_size: The model size to use
@@ -857,11 +921,40 @@ def setup_model(model_size: str = MODEL_SIZE) -> WhisperModel:
     Returns:
         The initialized WhisperModel
     """
-    return WhisperModel(model_size, device=DEVICE, compute_type=COMPUTE_TYPE)
+    # Override device setting if CUDA is available
+    device = "cuda" if is_cuda_available() else DEVICE
+    
+    # If using CUDA, prefer float16 for better performance unless specified otherwise
+    compute_type = "float16" if device == "cuda" and COMPUTE_TYPE == "default" else COMPUTE_TYPE
+    
+    logging.info(f"Using device: {device} with compute type: {compute_type}")
+    if device == "cuda":
+        logging.info("CUDA is available - GPU acceleration will be used")
+        
+        # Try to optimize CUDA performance with environment variables
+        os.environ['CUDA_LAUNCH_BLOCKING'] = '0'  # Non-blocking CUDA launches
+        try:
+            # Check available GPU memory
+            import torch
+            gpu_mem = torch.cuda.get_device_properties(0).total_memory / (1024 ** 3)  # Convert to GB
+            logging.info(f"GPU has {gpu_mem:.2f} GB of total memory")
+        except Exception as e:
+            logging.warning(f"Could not query GPU memory: {e}")
+    else:
+        logging.warning("CUDA is not available - using CPU which may be significantly slower")
+    
+    # Create model with optimized parameters
+    return WhisperModel(
+        model_size, 
+        device=device, 
+        compute_type=compute_type,
+        cpu_threads=8 if device == "cpu" else 0,  # More threads for CPU, default for GPU
+        num_workers=2  # Number of workers for faster data loading
+    )
 
 def transcribe_audio(model: WhisperModel, audio_file: str) -> Tuple[List, object]:
     """
-    Transcribe an audio file using the provided model.
+    Transcribe an audio file using the provided model with optimized settings.
     
     Args:
         model: The WhisperModel to use
@@ -874,10 +967,107 @@ def transcribe_audio(model: WhisperModel, audio_file: str) -> Tuple[List, object
     if USE_CUSTOM_VOCABULARY:
         logging.info("Vocabulary corrections will be applied during transcription")
     
-    return model.transcribe(
+    # Monitor GPU memory before transcription if possible
+    try:
+        if model.device == "cuda":
+            import torch
+            before_mem = torch.cuda.memory_allocated() / (1024 ** 3)  # GB
+            logging.info(f"GPU memory in use before transcription: {before_mem:.2f} GB")
+    except Exception:
+        pass
+    
+    start_time = datetime.now()
+    
+    # Use optimized transcription parameters
+    result = model.transcribe(
         audio_file,
-        beam_size=BEAM_SIZE
+        beam_size=BEAM_SIZE,
+        best_of=5,         # Consider more candidates for better results
+        vad_filter=True,   # Voice activity detection to skip silence
+        vad_parameters={"min_silence_duration_ms": 500},  # Adjust silence detection
+        initial_prompt=None,  # Can set an initial prompt if needed for better context
+        condition_on_previous_text=True,  # Use previous text as context
+        temperature=[0.0, 0.2, 0.4, 0.6, 0.8, 1.0]  # Temperature fallback for difficult audio
     )
+    
+    end_time = datetime.now()
+    duration = (end_time - start_time).total_seconds()
+    audio_duration = get_audio_duration(audio_file)
+    if audio_duration > 0:
+        speed_factor = audio_duration / duration
+        logging.info(f"Transcription completed in {duration:.2f} seconds (audio length: {audio_duration:.2f}s, {speed_factor:.2f}x real-time speed)")
+    else:
+        logging.info(f"Transcription completed in {duration:.2f} seconds")
+    
+    # Monitor GPU memory after transcription
+    try:
+        if model.device == "cuda":
+            import torch
+            after_mem = torch.cuda.memory_allocated() / (1024 ** 3)  # GB
+            logging.info(f"GPU memory in use after transcription: {after_mem:.2f} GB")
+            # Clear cache immediately after transcription to free memory
+            torch.cuda.empty_cache()
+    except Exception:
+        pass
+    
+    return result
+
+# New function to get audio duration for performance metrics
+def get_audio_duration(audio_file: str) -> float:
+    """
+    Get the duration of an audio file in seconds.
+    
+    Args:
+        audio_file: Path to the audio file
+        
+    Returns:
+        Duration in seconds or 0 if cannot be determined
+    """
+    try:
+        import librosa
+        duration = librosa.get_duration(path=audio_file)
+        return duration
+    except Exception:
+        # Try with pydub if librosa fails
+        try:
+            from pydub import AudioSegment
+            audio = AudioSegment.from_file(audio_file)
+            return len(audio) / 1000.0  # Convert ms to seconds
+        except Exception:
+            return 0  # Return 0 if duration cannot be determined
+
+def cleanup_resources(model=None):
+    """
+    Clean up resources after processing.
+    More aggressive memory cleanup to prevent memory leaks.
+    
+    Args:
+        model: The WhisperModel instance to clean up (if provided)
+    """
+    try:
+        # Clear CUDA cache if available
+        import torch
+        if torch.cuda.is_available():
+            # More aggressive memory cleanup
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()  # Make sure all CUDA operations are complete
+            logging.info("CUDA cache cleared")
+            
+            # Log memory stats
+            allocated = torch.cuda.memory_allocated() / (1024 ** 3)  # GB
+            reserved = torch.cuda.memory_reserved() / (1024 ** 3)    # GB
+            logging.info(f"GPU memory: allocated={allocated:.2f}GB, reserved={reserved:.2f}GB")
+        
+        # Delete model to free up memory
+        if model is not None:
+            del model
+            logging.info("Model resources released")
+        
+        # Force garbage collection
+        import gc
+        gc.collect()
+    except Exception as e:
+        logging.warning(f"Error during resource cleanup: {str(e)}")
 
 def create_output_paths(input_file: str) -> Tuple[str, str, str]:
     """
@@ -1117,67 +1307,97 @@ def regenerate_blog_only(transcript_file: str, summary_file: str) -> bool:
         output_dir = os.path.dirname(transcript_file)
         # Create the consistent blog file path
         blog_file = os.path.join(output_dir, f"{base_filename}_blog.txt")
-                
+        
+        # Create the consistent blog alt1 file path
+        blog_alt1_file = os.path.join(output_dir, f"{base_filename}_blog_alt1.txt")
+        
         # Read the blog prompt
         blog_prompt = read_prompt_file(PROMPT_BLOG_FILE)
         if not blog_prompt:
             logging.warning("Blog prompt file not found or empty, cannot regenerate blog")
             return False
-        
+
         logging.info("Generating blog post...")
         
         # Combine transcript and summary for input
         input_text = f"CLEANED TRANSCRIPT:\n{transcript}\n\nSUMMARY:\n{summary}"
         model_to_use = choose_appropriate_model(input_text)
         
-        try:
-            api_key = ensure_api_key()
-            client = OpenAI(api_key=api_key)
+
+        api_key = ensure_api_key()
+        client = OpenAI(api_key=api_key)
             
-            response = client.chat.completions.create(
-                model=model_to_use,
-                messages=[
-                    {"role": "system", "content": "You are a helpful assistant that creates blog posts from transcripts."},
-                    {"role": "user", "content": f"{blog_prompt}\n\n{input_text}"}
-                ],
-                temperature=TEMPERATURE,
-                max_tokens=MAX_TOKENS * 2  # Allow more tokens for blog generation
-            )
-            blog = response.choices[0].message.content
-            
-            # Save the blog post to the correct path
-            with open(blog_file, 'w', encoding='utf-8') as f:
-                f.write(blog)
-                
-            # Generate and save HTML version
-            html_content = convert_markdown_to_html(blog)
-            html_path = os.path.join(output_dir, f"{base_filename}_blog.html")
-            with open(html_path, "w", encoding="utf-8") as f:
-                f.write(html_content)
-            
-            # Generate and save Wiki version
-            wiki_content = convert_markdown_to_wiki(blog)
-            wiki_path = os.path.join(output_dir, f"{base_filename}_blog.wiki")
-            with open(wiki_path, "w", encoding="utf-8") as f:
-                f.write(wiki_content)
-                
+        response = client.chat.completions.create(
+            model=model_to_use,
+            messages=[
+                {"role": "system", "content": "You are a helpful assistant that creates blog posts from transcripts."},
+                {"role": "user", "content": f"{blog_prompt}\n\n{input_text}"}
+            ],
+            temperature=TEMPERATURE,
+            max_tokens=MAX_TOKENS * 2  # Allow more tokens for blog generation
+        )
+        blog = response.choices[0].message.content
+        
+        # Save the blog post to the correct path
+        with open(blog_file, 'w', encoding='utf-8') as f:
+            f.write(blog)
             logging.info(f"Blog post saved to: {blog_file}")
+        
+        
+        # Only generate alternative blog post if the alternative prompt file exists
+        if os.path.isfile(PROMPT_BLOG_ALT1_FILE):
+            # Creating the alternative blogpost
+            logging.info("Generating blog alt 1 post...")
+            
+            # Read the blog prompt
+            blog_alt1_prompt = read_prompt_file(PROMPT_BLOG_ALT1_FILE)
+            if blog_alt1_prompt:
+                # Combine transcript and summary for input
+                input_text = f"CLEANED TRANSCRIPT:\n{transcript}\n\nSUMMARY:\n{summary}"
+                model_to_use = choose_appropriate_model(input_text)
+                
+                api_key = ensure_api_key()
+                client = OpenAI(api_key=api_key)
+                    
+                #use the openai api to generate a second blog post
+                response = client.chat.completions.create(
+                    model=model_to_use,
+                    messages=[
+                    {"role": "system", "content": "You are a helpful assistant that creates blog posts from transcripts."},
+                    {"role": "user", "content": f"{blog_alt1_prompt}\n\n{input_text}"}
+                    ],
+                    temperature=TEMPERATURE,
+                    max_tokens=MAX_TOKENS * 2  # Allow more tokens for blog generation
+                )
+                blog_alt1 = response.choices[0].message.content
+                
+                # Save the blog post to the correct path
+                with open(blog_alt1_file, 'w', encoding='utf-8') as f:
+                    f.write(blog_alt1)
+                    logging.info(f"Blog alt1 post saved to: {blog_alt1_file}")
+            else:
+                logging.warning("Blog prompt alt1 file exists but is empty, skipping blog alt1 generation")
+        else:
+            logging.info(f"Blog prompt alt1 file {PROMPT_BLOG_ALT1_FILE} not found, skipping alternative blog generation")
+        
+        # Generate and save HTML version
+        logging.info(f"Converting blog post to HTML format...")    
+        html_content = convert_markdown_to_html(blog)
+        html_path = os.path.join(output_dir, f"{base_filename}_blog.html")
+        with open(html_path, "w", encoding="utf-8") as f:
+            f.write(html_content)
             logging.info(f"HTML blog post saved to: {html_path}")
+            
+        # Generate and save Wiki version
+        logging.info(f"Converting blog post to Wiki format...")    
+        wiki_content = convert_markdown_to_wiki(blog)
+        wiki_path = os.path.join(output_dir, f"{base_filename}_blog.wiki")
+        with open(wiki_path, "w", encoding="utf-8") as f:
+            f.write(wiki_content)
             logging.info(f"Wiki blog post saved to: {wiki_path}")
-            return True
-            
-        except Exception as e:
-            logging.error(f"Error generating blog post: {str(e)}")
-            # If we failed to generate a new blog but backed up the old one, restore it
-            backup_file = f"{blog_file}.bk"
-            if os.path.exists(backup_file) and not os.path.exists(blog_file):
-                try:
-                    os.rename(backup_file, blog_file)
-                    logging.info(f"Restored previous blog from backup after failed generation")
-                except Exception as restore_err:
-                    logging.error(f"Failed to restore blog from backup: {str(restore_err)}")
-            return False
-            
+        
+        return True
+                        
     except Exception as e:
         logging.error(f"Error regenerating blog: {str(e)}")
         return False

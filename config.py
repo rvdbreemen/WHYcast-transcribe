@@ -9,7 +9,7 @@ VERSION = "0.0.6"
 # Model configuration
 MODEL_SIZE = os.environ.get("WHISPER_MODEL_SIZE", "large-v3")
 DEVICE = os.environ.get("WHISPER_DEVICE", "cuda")
-COMPUTE_TYPE = os.environ.get("WHISPER_COMPUTE_TYPE", "int8")
+COMPUTE_TYPE = os.environ.get("WHISPER_COMPUTE_TYPE", "float16")
 BEAM_SIZE = int(os.environ.get("WHISPER_BEAM_SIZE", "5"))
 
 # OpenAI configuration
@@ -36,6 +36,7 @@ base_dir = os.path.dirname(os.path.abspath(__file__))
 PROMPT_CLEANUP_FILE = os.path.join(base_dir, "prompts", "cleanup_prompt.txt")
 PROMPT_SUMMARY_FILE = os.path.join(base_dir, "prompts", "summary_prompt.txt")
 PROMPT_BLOG_FILE = os.path.join(base_dir, "prompts", "blog_prompt.txt")
+PROMPT_BLOG_ALT1_FILE = os.path.join(base_dir, "prompts", "blog_alt1_prompt.txt")
 
 # Custom vocabulary settings
 USE_CUSTOM_VOCABULARY = True  # Set to False to disable
