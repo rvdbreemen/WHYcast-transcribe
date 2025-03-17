@@ -348,16 +348,45 @@ def process_with_openai(text: str, prompt: str, model_name: str, max_tokens: int
             text = truncate_transcript(text, MAX_INPUT_TOKENS)
         
         try:
-            response = client.chat.completions.create(
-                model=model_name,
-                messages=[
-                    {"role": "system", "content": "You are a helpful assistant that processes transcripts."},
-                    {"role": "user", "content": f"{prompt}\n\nHere's the text to process:\n\n{text}"}
-                ],
-                temperature=TEMPERATURE,
-                max_tokens=max_tokens
-            )
-            return response.choices[0].message.content
+            # For transcript cleanup, we need to ensure we get complete output by using a higher max_tokens limit
+            if "clean" in prompt.lower() and "transcript" in prompt.lower():
+                # For cleanup, give more tokens for output - use at least text length or double MAX_TOKENS
+                cleanup_max_tokens = max(estimate_token_count(text), MAX_TOKENS * 2)
+                logging.info(f"Using expanded token limit for cleanup: {cleanup_max_tokens}")
+                
+                # Check if text needs to be processed in chunks due to size
+                if estimated_tokens > MAX_INPUT_TOKENS // 2:
+                    return process_large_text_in_chunks(text, prompt, model_name, client)
+                
+                response = client.chat.completions.create(
+                    model=model_name,
+                    messages=[
+                        {"role": "system", "content": "You are a helpful assistant that processes transcripts."},
+                        {"role": "user", "content": f"{prompt}\n\nHere's the text to process:\n\n{text}"}
+                    ],
+                    temperature=TEMPERATURE,
+                    max_tokens=cleanup_max_tokens
+                )
+            else:
+                # Regular processing for non-cleanup tasks
+                response = client.chat.completions.create(
+                    model=model_name,
+                    messages=[
+                        {"role": "system", "content": "You are a helpful assistant that processes transcripts."},
+                        {"role": "user", "content": f"{prompt}\n\nHere's the text to process:\n\n{text}"}
+                    ],
+                    temperature=TEMPERATURE,
+                    max_tokens=max_tokens
+                )
+                
+            result = response.choices[0].message.content
+            
+            # Check if result might be truncated (ends abruptly without proper punctuation)
+            if len(result) > 100 and not result.rstrip().endswith(('.', '!', '?', '"', ':', ';', ')', ']', '}')):
+                logging.warning("Generated text may be truncated (doesn't end with punctuation)")
+                
+            return result
+                
         except BadRequestError as e:
             if "maximum context length" in str(e).lower():
                 # Try with more aggressive truncation
@@ -380,6 +409,78 @@ def process_with_openai(text: str, prompt: str, model_name: str, max_tokens: int
         logging.error(f"Error processing with OpenAI: {str(e)}")
         return None
 
+def process_large_text_in_chunks(text: str, prompt: str, model_name: str, client: OpenAI) -> str:
+    """
+    Process very large text by breaking it into chunks and reassembling the results.
+    
+    Args:
+        text: The text to process
+        prompt: The processing instructions
+        model_name: Model to use
+        client: OpenAI client
+        
+    Returns:
+        Combined processed text
+    """
+    logging.info("Text is very large, processing in chunks")
+    chunks = split_into_chunks(text, max_chunk_size=MAX_CHUNK_SIZE*2)
+    logging.info(f"Split text into {len(chunks)} chunks")
+    
+    modified_prompt = f"{prompt}\n\nThis is a chunk of a longer transcript. Process this chunk following the instructions."
+    processed_chunks = []
+    
+    # Add progress bar for chunk processing
+    for i, chunk in enumerate(tqdm(chunks, desc="Processing chunks")):
+        logging.info(f"Processing chunk {i+1}/{len(chunks)}")
+        try:
+            response = client.chat.completions.create(
+                model=model_name,
+                messages=[
+                    {"role": "system", "content": "You are a helpful assistant that processes transcript chunks."},
+                    {"role": "user", "content": f"{modified_prompt}\n\nChunk {i+1}/{len(chunks)}:\n\n{chunk}"}
+                ],
+                temperature=TEMPERATURE,
+                max_tokens=MAX_TOKENS * 2  # Use larger output limit for chunks
+            )
+            processed_chunks.append(response.choices[0].message.content)
+            logging.info(f"Successfully processed chunk {i+1}")
+        except Exception as e:
+            logging.error(f"Error processing chunk {i+1}: {str(e)}")
+            # If processing fails, include original chunk to avoid data loss
+            processed_chunks.append(chunk)
+    
+    # Combine processed chunks
+    combined_text = "\n\n".join(processed_chunks)
+    
+    # Optionally, run a final pass to ensure consistency across chunk boundaries
+    if len(processed_chunks) > 1:
+        try:
+            logging.info("Running final pass to ensure consistency across chunk boundaries")
+            # Estimate token count of combined text
+            combined_tokens = estimate_token_count(combined_text)
+            
+            # If combined text is still too large, just return it as is
+            if combined_tokens > MAX_INPUT_TOKENS:
+                logging.warning(f"Combined text is too large for final pass (~{combined_tokens} tokens)")
+                return combined_text
+                
+            consistency_prompt = "This is a processed transcript that was handled in chunks. Please ensure consistency across chunk boundaries and fix any obvious issues."
+            response = client.chat.completions.create(
+                model=model_name,
+                messages=[
+                    {"role": "system", "content": "You are a helpful assistant that ensures transcript consistency."},
+                    {"role": "user", "content": f"{consistency_prompt}\n\n{combined_text}"}
+                ],
+                temperature=TEMPERATURE,
+                max_tokens=MAX_TOKENS
+            )
+            return response.choices[0].message.content
+        except Exception as e:
+            logging.error(f"Error in final consistency pass: {str(e)}")
+            return combined_text
+    
+    return combined_text
+
 def process_transcript_workflow(transcript: str) -> Optional[Dict[str, str]]:
     """
     Process transcript through the multi-step workflow: cleanup -> summary -> blog
@@ -400,9 +501,21 @@ def process_transcript_workflow(transcript: str) -> Optional[Dict[str, str]]:
     else:
         logging.info("Step 1: Cleaning up transcript...")
         model_to_use = choose_appropriate_model(transcript)
-        cleaned_transcript = process_with_openai(transcript, cleanup_prompt, model_to_use)
+        
+        # For cleanup, explicitly use a higher token limit
+        estimated_tokens = estimate_token_count(transcript)
+        logging.info(f"Transcript size: ~{estimated_tokens} tokens")
+        
+        # Process with OpenAI, giving plenty of room for output
+        cleaned_transcript = process_with_openai(transcript, cleanup_prompt, model_to_use, max_tokens=MAX_TOKENS * 2)
+        
+        # Check if the cleaning was successful and not truncated
         if not cleaned_transcript:
             logging.warning("Transcript cleanup failed, using original transcript")
+            cleaned_transcript = transcript
+        elif len(cleaned_transcript) < len(transcript) * 0.5:
+            logging.warning(f"Cleaned transcript is suspiciously short ({len(cleaned_transcript)} chars vs original {len(transcript)} chars)")
+            logging.warning("This may indicate truncation. Using original transcript instead.")
             cleaned_transcript = transcript
     
     results['cleaned_transcript'] = cleaned_transcript

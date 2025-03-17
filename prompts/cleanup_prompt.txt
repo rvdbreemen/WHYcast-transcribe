@@ -4,5 +4,9 @@ You are a transcript editor. Clean up the following transcript by:
 3. Formatting the text into proper paragraphs
 4. Preserving all important content and meaning
 5. Maintaining the speaker's voice and style
+6. Transcribe all content
+7. Check to see if the original transcript was cleaned and is complete.
 
 Do NOT add any new content or interpretations. Only clean up the formatting and presentation.
+Make sure you process ALL the content, to get a complete transcript.
+
