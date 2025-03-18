@@ -257,14 +257,13 @@ def split_into_chunks(text: str, max_chunk_size: int = MAX_CHUNK_SIZE, overlap: 
         
     return chunks
 
-def summarize_large_transcript(transcript: str, prompt: str, client: OpenAI) -> Optional[str]:
+def summarize_large_transcript(transcript: str, prompt: str) -> Optional[str]:
     """
     Handle very large transcripts by chunking and recursive summarization.
     
     Args:
         transcript: The transcript text
         prompt: The summarization prompt
-        client: OpenAI client
         
     Returns:
         Generated summary or None if failed
@@ -276,25 +275,20 @@ def summarize_large_transcript(transcript: str, prompt: str, client: OpenAI) -> 
     chunks = split_into_chunks(transcript)
     logging.info(f"Split transcript into {len(chunks)} chunks")
     
-    # Process each chunk
+    # Process each chunk using process_with_openai
     intermediate_summaries = []
     for i, chunk in enumerate(chunks):
         logging.info(f"Processing chunk {i+1}/{len(chunks)}")
         
         try:
             chunk_prompt = "This is part of a longer transcript. Please summarize just this section, focusing on key points."
-            response = client.chat.completions.create(
-                model=OPENAI_MODEL,
-                messages=[
-                    {"role": "system", "content": "You are a helpful assistant that creates concise summaries."},
-                    {"role": "user", "content": f"{chunk_prompt}\n\n{chunk}"}
-                ],
-                temperature=TEMPERATURE,
-                max_tokens=MAX_TOKENS // 2  # Shorter summaries for intermediate steps
-            )
-            summary = response.choices[0].message.content
-            intermediate_summaries.append(summary)
-            logging.info(f"Completed summary for chunk {i+1}")
+            summary = process_with_openai(chunk, chunk_prompt, OPENAI_MODEL, max_tokens=MAX_TOKENS // 2)
+            
+            if summary:
+                intermediate_summaries.append(summary)
+                logging.info(f"Completed summary for chunk {i+1}")
+            else:
+                logging.warning(f"Failed to summarize chunk {i+1}")
         except Exception as e:
             logging.error(f"Error summarizing chunk {i+1}: {str(e)}")
             # Continue with partial results if available
@@ -306,21 +300,9 @@ def summarize_large_transcript(transcript: str, prompt: str, client: OpenAI) -> 
     # Combine intermediate summaries into a final summary
     combined_text = "\n\n".join(intermediate_summaries)
     
-    try:
-        logging.info("Generating final summary from intermediate summaries")
-        response = client.chat.completions.create(
-            model=OPENAI_LARGE_CONTEXT_MODEL,
-            messages=[
-                {"role": "system", "content": "You are a helpful assistant that summarizes transcripts."},
-                {"role": "user", "content": f"{prompt}\n\nHere are summaries from different parts of the transcript. Please combine them into a cohesive summary and blog post:\n\n{combined_text}"}
-            ],
-            temperature=TEMPERATURE,
-            max_tokens=MAX_TOKENS
-        )
-        return response.choices[0].message.content
-    except Exception as e:
-        logging.error(f"Error generating final summary: {str(e)}")
-        return None
+    # Use process_with_openai for final combination
+    final_prompt = f"{prompt}\n\nHere are summaries from different parts of the transcript. Please combine them into a cohesive summary and blog post:"
+    return process_with_openai(combined_text, final_prompt, OPENAI_LARGE_CONTEXT_MODEL, max_tokens=MAX_TOKENS)
 
 def process_with_openai(text: str, prompt: str, model_name: str, max_tokens: int = MAX_TOKENS) -> Optional[str]:
     """
@@ -562,7 +544,8 @@ def process_transcript_workflow(transcript: str) -> Optional[Dict[str, str]]:
         # Use both the cleaned transcript and summary for blog generation
         input_text = f"CLEANED TRANSCRIPT:\n{cleaned_transcript}\n\nSUMMARY:\n{results.get('summary', 'No summary available')}"
         model_to_use = choose_appropriate_model(input_text)
-        blog_alt1 = process_with_openai(input_text, blog_prompt, model_to_use, max_tokens=MAX_TOKENS * 2)
+        # Fix: blog_alt1 should use blog_alt1_prompt, not blog_prompt
+        blog_alt1 = process_with_openai(input_text, blog_alt1_prompt, model_to_use, max_tokens=MAX_TOKENS * 2)
         results['blog_alt1'] = blog_alt1
     
     return results
@@ -651,57 +634,21 @@ def generate_summary_and_blog(transcript: str, prompt: str) -> Optional[str]:
         The generated summary and blog or None if there was an error
     """
     try:
-        api_key = ensure_api_key()
-        client = OpenAI(api_key=api_key)
-        
         estimated_tokens = estimate_token_count(transcript)
         logging.info(f"Estimated transcript length: ~{estimated_tokens} tokens")
         
         # For very large transcripts, use recursive summarization
         if USE_RECURSIVE_SUMMARIZATION and estimated_tokens > MAX_INPUT_TOKENS:
             logging.info(f"Transcript is very large ({estimated_tokens} tokens), using recursive summarization")
-            return summarize_large_transcript(transcript, prompt, client)
+            return summarize_large_transcript(transcript, prompt)
         
         # Choose appropriate model based on length
         model_to_use = choose_appropriate_model(transcript)
         
-        # If transcript is still too long, truncate it
-        if estimated_tokens > MAX_INPUT_TOKENS:
-            logging.warning(f"Transcript too long (~{estimated_tokens} tokens > {MAX_INPUT_TOKENS} limit), truncating...")
-            transcript = truncate_transcript(transcript, MAX_INPUT_TOKENS)
-        
-        logging.info(f"Sending transcript to OpenAI for summary and blog generation using {model_to_use}...")
-        logging.info(f"Estimated input size: ~{estimate_token_count(transcript)} tokens")
-        
-        try:
-            response = client.chat.completions.create(
-                model=model_to_use,
-                messages=[
-                    {"role": "system", "content": "You are a helpful assistant that summarizes transcripts."},
-                    {"role": "user", "content": f"{prompt}\n\nHere's the transcript to summarize:\n\n{transcript}"}
-                ],
-                temperature=TEMPERATURE,
-                max_tokens=MAX_TOKENS
-            )
-            return response.choices[0].message.content
-        except BadRequestError as e:
-            if "maximum context length" in str(e).lower():
-                # Try with more aggressive truncation
-                logging.warning(f"Context length exceeded. Retrying with further truncation...")
-                transcript = truncate_transcript(transcript, MAX_INPUT_TOKENS // 2)
-                logging.info(f"Retrying with reduced transcript (~{estimate_token_count(transcript)} tokens)...")
-                response = client.chat.completions.create(
-                    model=model_to_use,
-                    messages=[
-                        {"role": "system", "content": "You are a helpful assistant that summarizes transcripts."},
-                        {"role": "user", "content": f"{prompt}\n\nHere's the transcript to summarize:\n\n{transcript}"}
-                    ],
-                    temperature=TEMPERATURE,
-                    max_tokens=MAX_TOKENS
-                )
-                return response.choices[0].message.content
-            else:
-                raise
+        # Use process_with_openai instead of direct API call for consistent handling
+        logging.info(f"Generating summary and blog using {model_to_use}...")
+        return process_with_openai(transcript, prompt, model_to_use, max_tokens=MAX_TOKENS)
+    
     except Exception as e:
         logging.error(f"Error generating summary: {str(e)}")
         return None
@@ -1436,26 +1383,22 @@ def regenerate_blog_only(transcript_file: str, summary_file: str) -> bool:
         input_text = f"CLEANED TRANSCRIPT:\n{transcript}\n\nSUMMARY:\n{summary}"
         model_to_use = choose_appropriate_model(input_text)
         
-
-        api_key = ensure_api_key()
-        client = OpenAI(api_key=api_key)
-            
-        response = client.chat.completions.create(
-            model=model_to_use,
-            messages=[
-                {"role": "system", "content": "You are a helpful assistant that creates blog posts from transcripts."},
-                {"role": "user", "content": f"{blog_prompt}\n\n{input_text}"}
-            ],
-            temperature=TEMPERATURE,
-            max_tokens=MAX_TOKENS * 2  # Allow more tokens for blog generation
+        # Use process_with_openai instead of direct API call for consistent handling
+        blog = process_with_openai(
+            input_text, 
+            blog_prompt, 
+            model_to_use, 
+            max_tokens=MAX_TOKENS * 2
         )
-        blog = response.choices[0].message.content
         
+        if not blog:
+            logging.error("Failed to generate blog post")
+            return False
+            
         # Save the blog post to the correct path
         with open(blog_file, 'w', encoding='utf-8') as f:
             f.write(blog)
             logging.info(f"Blog post saved to: {blog_file}")
-        
         
         # Only generate alternative blog post if the alternative prompt file exists
         if os.path.isfile(PROMPT_BLOG_ALT1_FILE):
@@ -1465,35 +1408,27 @@ def regenerate_blog_only(transcript_file: str, summary_file: str) -> bool:
             # Read the blog prompt
             blog_alt1_prompt = read_prompt_file(PROMPT_BLOG_ALT1_FILE)
             if blog_alt1_prompt:
-                # Combine transcript and summary for input
-                input_text = f"CLEANED TRANSCRIPT:\n{transcript}\n\nSUMMARY:\n{summary}"
-                model_to_use = choose_appropriate_model(input_text)
-                
-                api_key = ensure_api_key()
-                client = OpenAI(api_key=api_key)
-                    
-                #use the openai api to generate a second blog post
-                response = client.chat.completions.create(
-                    model=model_to_use,
-                    messages=[
-                    {"role": "system", "content": "You are a helpful assistant that creates blog posts from transcripts."},
-                    {"role": "user", "content": f"{blog_alt1_prompt}\n\n{input_text}"}
-                    ],
-                    temperature=TEMPERATURE,
-                    max_tokens=MAX_TOKENS * 2  # Allow more tokens for blog generation
+                # Use process_with_openai instead of direct API call
+                blog_alt1 = process_with_openai(
+                    input_text, 
+                    blog_alt1_prompt, 
+                    model_to_use, 
+                    max_tokens=MAX_TOKENS * 2
                 )
-                blog_alt1 = response.choices[0].message.content
                 
-                # Save the blog post to the correct path
-                with open(blog_alt1_file, 'w', encoding='utf-8') as f:
-                    f.write(blog_alt1)
-                    logging.info(f"Blog alt1 post saved to: {blog_alt1_file}")
+                if blog_alt1:
+                    # Save the blog post to the correct path
+                    with open(blog_alt1_file, 'w', encoding='utf-8') as f:
+                        f.write(blog_alt1)
+                        logging.info(f"Blog alt1 post saved to: {blog_alt1_file}")
+                else:
+                    logging.error("Failed to generate alternative blog post")
             else:
                 logging.warning("Blog prompt alt1 file exists but is empty, skipping blog alt1 generation")
         else:
             logging.info(f"Blog prompt alt1 file {PROMPT_BLOG_ALT1_FILE} not found, skipping alternative blog generation")
         
-        # Generate and save HTML version
+        # Generate and write HTML version
         logging.info(f"Converting blog post to HTML format...")    
         html_content = convert_markdown_to_html(blog)
         html_path = os.path.join(output_dir, f"{base_filename}_blog.html")
@@ -1595,6 +1530,180 @@ def regenerate_all_blogs(directory: str) -> None:
                 logging.error(f"Error generating formats for {blog_file}: {str(e)}")
     
     logging.info(f"Successfully regenerated {processed_count} blog posts out of {len(transcript_files)} transcript files")
+
+def regenerate_cleaned_transcript(transcript_file: str) -> bool:
+    """
+    Regenerate cleaned version of a transcript file.
+    
+    Args:
+        transcript_file: Path to the transcript file
+        
+    Returns:
+        Success status (True/False)
+    """
+    if not os.path.exists(transcript_file):
+        logging.error(f"Transcript file does not exist: {transcript_file}")
+        return False
+    
+    try:
+        # Read the transcript
+        with open(transcript_file, 'r', encoding='utf-8') as f:
+            transcript = f.read()
+        
+        # Create path for output file
+        base = os.path.splitext(transcript_file)[0]
+        cleaned_file = f"{base}_cleaned.txt"
+        
+        # Read the cleanup prompt
+        cleanup_prompt = read_prompt_file(PROMPT_CLEANUP_FILE)
+        if not cleanup_prompt:
+            logging.warning("Cleanup prompt file not found or empty, cannot regenerate cleaned transcript")
+            return False
+
+        logging.info("Generating cleaned transcript...")
+        
+        # Choose appropriate model based on transcript length
+        model_to_use = choose_appropriate_model(transcript)
+        
+        # Use process_with_openai for consistent handling
+        cleaned_transcript = process_with_openai(
+            transcript, 
+            cleanup_prompt, 
+            model_to_use, 
+            max_tokens=MAX_TOKENS * 2
+        )
+        
+        if not cleaned_transcript:
+            logging.error("Failed to generate cleaned transcript")
+            return False
+            
+        # Save the cleaned transcript
+        with open(cleaned_file, 'w', encoding='utf-8') as f:
+            f.write(cleaned_transcript)
+            logging.info(f"Cleaned transcript saved to: {cleaned_file}")
+        
+        return True
+                        
+    except Exception as e:
+        logging.error(f"Error regenerating cleaned transcript: {str(e)}")
+        return False
+
+def regenerate_all_cleaned(directory: str) -> None:
+    """
+    Regenerate cleaned transcript for all transcript files in the given directory.
+    It processes files that do not already have a _cleaned, _ts, _summary, or _blog suffix.
+    
+    Args:
+        directory: Directory containing transcript files
+    """
+    import os
+    import glob
+    import logging
+
+    if not os.path.isdir(directory):
+        logging.error(f"Invalid directory: {directory}")
+        return
+
+    transcript_files = glob.glob(os.path.join(directory, "*.txt"))
+    # Filter out files that are already processed as cleaned or have other suffixes
+    original_files = [f for f in transcript_files if not any(suffix in f for suffix in ["_cleaned.txt", "_ts.txt", "_summary.txt", "_blog.txt"])]
+    
+    if not original_files:
+        logging.warning(f"No original transcript files found in directory: {directory}")
+        return
+
+    logging.info(f"Found {len(original_files)} transcript files for cleaning regeneration")
+    processed_count = 0
+    for transcript_file in original_files:
+        logging.info(f"Regenerating cleaned transcript for: {transcript_file}")
+        success = regenerate_cleaned_transcript(transcript_file)
+        if success:
+            processed_count += 1
+
+    logging.info(f"Regenerated cleaned transcripts for {processed_count} out of {len(original_files)} files")
+
+def regenerate_full_workflow(input_file: str) -> None:
+    """
+    Regenerate workflow outputs for an existing transcript file.
+    
+    Args:
+        input_file: Path to the transcript file
+    """
+    # Normalize path by removing any trailing slashes
+    input_file = input_file.rstrip(os.path.sep)
+    
+    # Verify this is a file, not a directory
+    if os.path.isdir(input_file):
+        logging.error(f"Input must be a file, not a directory: {input_file}")
+        return
+        
+    # Continue with existing logic
+    base_path, _ = os.path.splitext(input_file)
+    ts_file = f"{base_path}_ts.txt"
+    if not os.path.exists(ts_file):
+        logging.error(f"No timestamped file found: {ts_file}, skipping re-transcription.")
+        return
+    transcript_file = f"{base_path}.txt"
+    if not os.path.exists(transcript_file):
+        logging.error(f"No transcript file found: {transcript_file}, cannot proceed.")
+        return
+    
+    # Get the base name without any suffixes for consistent output file naming
+    base_name = os.path.basename(base_path)
+    # Remove any known suffixes to get the pure base name
+    known_suffixes = ["_cleaned", "_ts", "_summary", "_blog", "_blog_alt1"]
+    for suffix in known_suffixes:
+        if base_name.endswith(suffix):
+            base_name = base_name[:-len(suffix)]
+            break
+    
+    # Reconstruct full output base path
+    output_dir = os.path.dirname(base_path)
+    output_base = os.path.join(output_dir, base_name)
+    
+    logging.info(f"Running full workflow on existing transcript: {transcript_file}")
+    with open(transcript_file, "r", encoding="utf-8") as f:
+        full_transcript = f.read()
+    results = process_transcript_workflow(full_transcript)
+    if not results:
+        logging.error("Failed to process transcript workflow.")
+        return
+    
+    write_workflow_outputs(results, output_base)
+
+def regenerate_all_full_workflow(directory: str) -> None:
+    """
+    Run the full workflow regeneration on all transcript files in the given directory.
+    
+    Args:
+        directory: Directory containing transcript files
+    """
+    if not os.path.isdir(directory):
+        logging.error(f"Invalid directory: {directory}")
+        return
+
+    # Find all transcript files (txt files that don't have special suffixes)
+    transcript_files = glob.glob(os.path.join(directory, "*.txt"))
+    base_transcripts = [f for f in transcript_files 
+                       if not any(suffix in f for suffix in 
+                                ["_ts.txt", "_summary.txt", "_blog.txt", "_cleaned.txt", "_blog_alt1.txt"])]
+    
+    if not base_transcripts:
+        logging.warning(f"No original transcript files found in directory: {directory}")
+        return
+
+    logging.info(f"Found {len(base_transcripts)} transcript files to process with full workflow")
+    processed_count = 0
+    
+    for transcript_file in tqdm(base_transcripts, desc="Regenerating full workflow"):
+        try:
+            logging.info(f"Running full workflow on: {transcript_file}")
+            regenerate_full_workflow(transcript_file)
+            processed_count += 1
+        except Exception as e:
+            logging.error(f"Error processing {transcript_file}: {str(e)}")
+
+    logging.info(f"Completed full workflow regeneration for {processed_count} out of {len(base_transcripts)} files")
 
 # ==================== PODCAST FEED FUNCTIONS ====================
 def get_latest_episode(feed_url: str) -> Optional[Dict]:
@@ -2156,7 +2265,13 @@ if __name__ == "__main__":
                          help='Regenerate summaries for all transcripts in directory (uses current dir if no input)')
     parser.add_argument('--regenerate-all-blogs', '-B', action='store_true', 
                          help='Regenerate only blog posts for all transcripts in directory (uses current dir if no input)')
+    parser.add_argument('--regenerate-cleaned', '-rc', action='store_true', 
+                         help='Regenerate cleaned version from existing transcript')
     parser.add_argument('--skip-vocabulary', action='store_true', help='Skip custom vocabulary corrections')
+    parser.add_argument('--regenerate-all-cleaned', action='store_true',
+                        help='Regenerate cleaned transcripts for all transcript files in directory (uses input dir or download-dir if not provided)')
+    parser.add_argument('--regenerate-full-workflow', action='store_true',
+                        help='Run a single workflow to generate cleaned, summary, blog, and blog_alt1 from existing transcript')
     
     # Add podcast feed arguments
     parser.add_argument('--feed', '-F', default="https://whycast.podcast.audio/@whycast/feed.xml", 
@@ -2242,9 +2357,24 @@ if __name__ == "__main__":
         directory = args.input if args.input else args.download_dir
         logging.info(f"Regenerating all summaries in directory: {directory}")
         regenerate_all_summaries(directory)
+    elif args.regenerate_all_cleaned:
+        directory = args.input if args.input else args.download_dir
+        logging.info(f"Regenerating all cleaned transcripts in directory: {directory}")
+        regenerate_all_cleaned(directory)
     elif not args.input:
         parser.print_help()
         sys.exit(1)
+    elif args.regenerate_cleaned:
+        if os.path.isdir(args.input):
+            logging.error("Please specify a transcript file when using --regenerate-cleaned, not a directory")
+            sys.exit(1)
+        elif not os.path.isfile(args.input):
+            logging.error(f"Input file does not exist: {args.input}")
+            sys.exit(1)
+        else:
+            success = regenerate_cleaned_transcript(args.input)
+            if not success:
+                sys.exit(1)
     elif args.regenerate_summary:
         if os.path.isdir(args.input):
             logging.error("Please specify a transcript file when using --regenerate-summary, not a directory")
@@ -2254,6 +2384,19 @@ if __name__ == "__main__":
             sys.exit(1)
         else:
             main(args.input, regenerate_summary_only=True, skip_vocabulary=args.skip_vocabulary)
+    elif args.regenerate_full_workflow:
+        if not args.input:
+            logging.error("You must specify an input file or directory with --regenerate-full-workflow.")
+            sys.exit(1)
+        
+        if os.path.isdir(args.input):
+            # Process all transcripts in directory
+            logging.info(f"Running full workflow for all transcripts in directory: {args.input}")
+            regenerate_all_full_workflow(args.input)
+        else:
+            # Process single file
+            regenerate_full_workflow(args.input)
+        sys.exit(0)
     elif args.all_mp3s:
         process_all_mp3s(args.input, model_size=args.model, output_dir=args.output_dir, skip_summary=args.skip_summary,
                          force=args.force, skip_vocabulary=args.skip_vocabulary)
