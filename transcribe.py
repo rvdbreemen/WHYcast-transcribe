@@ -1705,6 +1705,52 @@ def regenerate_all_full_workflow(directory: str) -> None:
 
     logging.info(f"Completed full workflow regeneration for {processed_count} out of {len(base_transcripts)} files")
 
+def regenerate_blogs_from_cleaned(directory: str) -> None:
+    """
+    Regenerate blog posts specifically from cleaned transcripts in the given directory.
+    
+    Args:
+        directory: Directory containing cleaned transcript files
+    """
+    # Create directory if it doesn't exist
+    try:
+        os.makedirs(directory, exist_ok=True)
+    except Exception as e:
+        logging.error(f"Could not create or access directory {directory}: {str(e)}")
+        return
+    
+    if not os.path.isdir(directory):
+        logging.error(f"Invalid directory: {directory}")
+        return
+    
+    # Look specifically for cleaned transcript files
+    cleaned_files = glob.glob(os.path.join(directory, "*_cleaned.txt"))
+    
+    if not cleaned_files:
+        logging.warning(f"No cleaned transcript files found in directory: {directory}")
+        return
+    
+    logging.info(f"Found {len(cleaned_files)} cleaned transcript files to process")
+    processed_count = 0
+    
+    for cleaned_file in tqdm(cleaned_files, desc="Regenerating blogs from cleaned transcripts"):
+        # Derive base name without the "_cleaned" suffix
+        base_path = cleaned_file.replace("_cleaned.txt", "")
+        summary_file = f"{base_path}_summary.txt"
+        
+        # Check if summary exists
+        if os.path.exists(summary_file):
+            logging.info(f"Regenerating blog from cleaned transcript: {cleaned_file}")
+            if regenerate_blog_only(cleaned_file, summary_file):
+                processed_count += 1
+            # Force garbage collection to release memory
+            import gc
+            gc.collect()
+        else:
+            logging.warning(f"Skipping {cleaned_file}: No matching summary file found")
+    
+    logging.info(f"Successfully regenerated {processed_count} blog posts from cleaned transcripts")
+
 # ==================== PODCAST FEED FUNCTIONS ====================
 def get_latest_episode(feed_url: str) -> Optional[Dict]:
     """
@@ -2272,6 +2318,8 @@ if __name__ == "__main__":
                         help='Regenerate cleaned transcripts for all transcript files in directory (uses input dir or download-dir if not provided)')
     parser.add_argument('--regenerate-full-workflow', action='store_true',
                         help='Run a single workflow to generate cleaned, summary, blog, and blog_alt1 from existing transcript')
+    parser.add_argument('--regenerate-blogs-from-cleaned', action='store_true',
+                       help='Regenerate blog posts using only cleaned transcripts')
     
     # Add podcast feed arguments
     parser.add_argument('--feed', '-F', default="https://whycast.podcast.audio/@whycast/feed.xml", 
@@ -2310,6 +2358,7 @@ if __name__ == "__main__":
                                 not args.input and 
                                 not args.regenerate_all_summaries and
                                 not args.regenerate_all_blogs and
+                                not args.regenerate_blogs_from_cleaned and
                                 not args.regenerate_summary)
     
     if should_process_all_episodes:
@@ -2328,6 +2377,7 @@ if __name__ == "__main__":
                          not args.input and 
                          not args.regenerate_all_summaries and
                          not args.regenerate_all_blogs and
+                         not args.regenerate_blogs_from_cleaned and
                          not args.regenerate_summary)
     
     if should_check_feed:
@@ -2347,7 +2397,11 @@ if __name__ == "__main__":
             sys.exit(0)
     
     # Continue with existing functionality if input is provided or special mode is requested
-    if args.regenerate_all_blogs:
+    if args.regenerate_blogs_from_cleaned:
+        directory = args.input if args.input else args.download_dir
+        logging.info(f"Regenerating blogs from cleaned transcripts in directory: {directory}")
+        regenerate_blogs_from_cleaned(directory)
+    elif args.regenerate_all_blogs:
         # Allow regenerate_all_blogs without an input by using podcasts directory
         directory = args.input if args.input else args.download_dir
         logging.info(f"Regenerating all blogs in directory: {directory}")
