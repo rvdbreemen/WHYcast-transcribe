@@ -1151,7 +1151,7 @@ def write_transcript_files(segments, output_file: str, output_file_timestamped: 
     Write transcript files and return the full transcript.
     
     Args:
-        segments: Transcript segments from WhisperModel (potentially with speaker labels)
+        segments: Transcript segments from WhisperModel
         output_file: Path for plain text output
         output_file_timestamped: Path for timestamped output
         
@@ -1159,38 +1159,69 @@ def write_transcript_files(segments, output_file: str, output_file_timestamped: 
         The full transcript as a string
     """
     full_transcript = ""
-    current_speaker = None
     
     with open(output_file, "w", encoding="utf-8") as f_plain, open(output_file_timestamped, "w", encoding="utf-8") as f_timestamped:
+        
         for segment in segments:
-            # Extract speaker info if available
-            has_speaker = hasattr(segment, 'speaker')
-            speaker = getattr(segment, 'speaker', None)
+            # Get the original segment text
             segment_text = segment.text
             
             # Apply vocabulary corrections to segment text if enabled
             if USE_CUSTOM_VOCABULARY:
                 segment_text = apply_vocabulary_corrections(segment_text, load_vocabulary_mappings(VOCABULARY_FILE))
             
-            # Add speaker label if available and different from previous speaker
-            speaker_prefix = ""
-            if has_speaker and speaker != current_speaker:
-                speaker_prefix = f"\n[Speaker {speaker}]: "
-                current_speaker = speaker
+            # Store for OpenAI processing
+            full_transcript += segment_text + "\n"
             
-            # Store for the full transcript
-            full_transcript += f"{speaker_prefix}{segment_text}\n"
+            # Write to plain text file without timestamps
+            f_plain.write(segment_text + "\n")
             
-            # Write to plain text file
-            f_plain.write(f"{speaker_prefix}{segment_text}\n")
+            # Write to timestamped file with timestamps
+            f_timestamped.write("[%.2fs -> %.2fs] %s\n" % (segment.start, segment.end, segment_text))
             
-            # Write to timestamped file
-            timestamp = f"[{segment.start:.2f}s -> {segment.end:.2f}s]"
-            speaker_info = f"[Speaker {speaker}] " if has_speaker else ""
-            f_timestamped.write(f"{speaker_info}{timestamp} {segment_text}\n")
+            # Print to console with timestamps - handle potential encoding errors
+            try:
+                logging.info("[%.2fs -> %.2fs] %s", segment.start, segment.end, segment_text)
+            except UnicodeEncodeError:
+                # Fall back to ASCII if Unicode fails
+                safe_text = segment_text.encode('ascii', 'replace').decode('ascii')
+                logging.info("[%.2fs -> %.2fs] %s", segment.start, segment.end, safe_text)
     
     logging.info(f"Transcription saved to: {output_file}")
     logging.info(f"Timestamped transcription saved to: {output_file_timestamped}")
+    
+    # Apply a final pass of vocabulary corrections to the full transcript if enabled
+    # This catches any patterns that might span across segments
+    if USE_CUSTOM_VOCABULARY:
+        original_transcript = full_transcript
+        full_transcript = apply_vocabulary_corrections(full_transcript, load_vocabulary_mappings(VOCABULARY_FILE))
+        
+        # If the final pass made additional corrections, update the saved files
+        if full_transcript != original_transcript:
+            logging.info("Applying final vocabulary correction pass to catch cross-segment patterns")
+            with open(output_file, "w", encoding="utf-8") as f_plain:
+                f_plain.write(full_transcript)
+            
+            # Simplification: regenerate timestamped file from full transcript
+            # This is imperfect since timestamps might not perfectly align with corrected text
+            lines = full_transcript.split('\n')
+            timestamped_lines = []
+            with open(output_file_timestamped, "r", encoding="utf-8") as f_original:
+                original_timestamped = f_original.readlines()
+                
+            # Try to maintain timestamp information while updating text
+            for i, line in enumerate(lines):
+                if i < len(original_timestamped):
+                    ts_line = original_timestamped[i]
+                    ts_match = re.match(r'^\[\s*(\d+\.\d+)s\s*->\s*(\d+\.\d+)s\s*\]', ts_line)
+                    if ts_match and line.strip():
+                        start, end = ts_match.groups()
+                        timestamped_lines.append(f"[{start}s -> {end}s] {line}")
+                    elif line.strip():
+                        timestamped_lines.append(line)
+            
+            with open(output_file_timestamped, "w", encoding="utf-8") as f_updated:
+                f_updated.write('\n'.join(timestamped_lines))
     
     return full_transcript
 
@@ -1720,160 +1751,260 @@ def regenerate_blogs_from_cleaned(directory: str) -> None:
     
     logging.info(f"Successfully regenerated {processed_count} blog posts from cleaned transcripts")
 
-# Speaker Diarization functions
-def perform_diarization(audio_file: str) -> Dict:
+# ==================== PODCAST FEED FUNCTIONS ====================
+def get_latest_episode(feed_url: str) -> Optional[Dict]:
     """
-    Perform speaker diarization on an audio file.
+    Get the latest episode from a podcast RSS feed.
     
     Args:
-        audio_file: Path to the audio file
+        feed_url: URL of the RSS feed
         
     Returns:
-        Dictionary with speaker diarization information
+        Dictionary with episode info or None if failed
     """
-    # Check if pyannote.audio is installed
     try:
-        import torch
-        import pyannote.audio
-    except ImportError as e:
-        missing_package = 'torch' if 'torch' in str(e) else 'pyannote.audio'
-        logging.error(f"Error during speaker diarization: {str(e)}")
-        logging.error(f"The {missing_package} package is required for speaker diarization.")
-        logging.error(f"Please install it using the following command:")
+        logging.info(f"Fetching podcast feed from {feed_url}")
+        feed = feedparser.parse(feed_url)
         
-        if missing_package == 'pyannote.audio':
-            logging.error("pip install pyannote.audio")
-            logging.error("You may also need to authenticate with Hugging Face:")
-            logging.error("1. Get a token from https://hf.co/settings/tokens")
-            logging.error("2. Add HF_TOKEN=your_token to your .env file")
-        else:
-            logging.error("pip install torch")
+        if not feed.entries:
+            logging.warning("No episodes found in the feed")
+            return None
             
-        logging.warning("Continuing without speaker diarization")
-        return {"speakers": [], "segments": []}
-    
-    try:
-        from pyannote.audio import Pipeline
+        # Get the latest episode (first entry)
+        latest = feed.entries[0]
         
-        logging.info(f"Performing speaker diarization on {audio_file}...")
-        
-        # Check for HF_TOKEN in environment
-        auth_token = os.environ.get("HF_TOKEN")
-        if not auth_token:
-            logging.warning("No Hugging Face token found in environment. Diarization may fail.")
-            logging.warning("Set HF_TOKEN in your .env file. Get a token from https://hf.co/settings/tokens")
-        
-        # Initialize diarization pipeline
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        pipeline = Pipeline.from_pretrained(
-            "pyannote/speaker-diarization-3.0",
-            use_auth_token=auth_token
-        ).to(device)
-        
-        # Perform diarization
-        diarization = pipeline(audio_file)
-        
-        # Convert diarization result to a usable format
-        speakers = {}
-        for turn, _, speaker in diarization.itertracks(yield_label=True):
-            if speaker not in speakers:
-                speakers[speaker] = []
-            speakers[speaker].append({
-                "start": turn.start,
-                "end": turn.end
-            })
-        
-        # Create segments with proper format
-        segments = []
-        for speaker, turns in speakers.items():
-            for turn in turns:
-                segments.append({
-                    "speaker": speaker,
-                    "start": turn["start"],
-                    "end": turn["end"]
-                })
-        
-        # Sort segments by start time
-        segments.sort(key=lambda x: x["start"])
-        
-        logging.info(f"Diarization completed. Identified {len(speakers)} speakers.")
+        # Find the audio file URL
+        audio_url = None
+        for enclosure in latest.enclosures:
+            if enclosure.type.startswith('audio/'):
+                audio_url = enclosure.href
+                break
+                
+        if not audio_url:
+            logging.warning("No audio file found in the latest episode")
+            return None
+            
         return {
-            "speakers": list(speakers.keys()),
-            "segments": segments
+            'title': latest.title,
+            'published': latest.published if hasattr(latest, 'published') else '',
+            'audio_url': audio_url,
+            'description': latest.description if hasattr(latest, 'description') else '',
+            'guid': latest.id if hasattr(latest, 'id') else ''
         }
     except Exception as e:
-        logging.error(f"Error during speaker diarization: {str(e)}")
-        logging.warning("Continuing without speaker diarization")
-        return {"speakers": [], "segments": []}
+        logging.error(f"Error fetching podcast feed: {str(e)}")
+        return None
 
-def transcribe_with_diarization(model: WhisperModel, audio_file: str) -> Tuple[List, object]:
+def get_episode_filename(episode: Dict) -> str:
     """
-    Transcribe audio and add speaker diarization.
+    Generate a filename for the episode based on its title.
     
     Args:
-        model: The WhisperModel to use
-        audio_file: Path to the audio file
+        episode: Episode dictionary from get_latest_episode()
         
     Returns:
-        Tuple of (segments with speakers, info)
+        Sanitized filename
     """
-    # Get audio duration for logging
-    duration = get_audio_duration(audio_file)
-    if duration:
-        logging.info(f"Processing {os.path.basename(audio_file)} ({duration:.2f} seconds)")
-    
-    # Step 1: Transcribe with faster-whisper as usual
-    segments, info = transcribe_audio(model, audio_file)
-    
-    # Step 2: Run speaker diarization
-    diarization_result = perform_diarization(audio_file)
-    
-    # Step 3: Merge the results
-    segments_with_speakers = assign_speakers_to_transcript(segments, diarization_result)
-    
-    return segments_with_speakers, info
+    # Clean the title to make it suitable for a filename
+    title = episode['title'].lower()
+    # Replace special chars with underscores
+    title = re.sub(r'[^\w\s-]', '_', title)
+    # Replace whitespace with underscores
+    title = re.sub(r'\s+', '_', title)
+    return f"{title}.mp3"
 
-def assign_speakers_to_transcript(transcript_segments, diarization_result: Dict) -> List:
+def episode_already_processed(episode: Dict, download_dir: str) -> bool:
     """
-    Assign speakers to transcript segments based on diarization results.
+    Check if an episode has already been processed.
     
     Args:
-        transcript_segments: Segments from faster-whisper
-        diarization_result: Result from diarization
+        episode: Episode dictionary
+        download_dir: Directory where episodes are stored
         
     Returns:
-        Transcript segments with speaker information
+        True if already processed, False otherwise
     """
-    # If no diarization data, return original segments
-    if not diarization_result or not diarization_result.get("segments"):
-        return transcript_segments
+    # Check if the episode ID is in our tracking file
+    processed_episodes = load_processed_episodes(download_dir)
+    episode_id = get_episode_id(episode)
+    if episode_id in processed_episodes:
+        return True
     
-    diarization_segments = diarization_result["segments"]
-    enriched_segments = []
+    # Also check if the file exists (legacy method)
+    filename = get_episode_filename(episode)
+    full_path = os.path.join(download_dir, filename)
     
-    for ts_segment in transcript_segments:
-        # Find matching diarization segment with most overlap
-        segment_start = ts_segment.start
-        segment_end = ts_segment.end
-        max_overlap = 0
-        assigned_speaker = "Unknown"
+    if os.path.exists(full_path):
+        return True
         
-        for d_segment in diarization_segments:
-            # Calculate overlap
-            overlap_start = max(segment_start, d_segment["start"])
-            overlap_end = min(segment_end, d_segment["end"])
-            overlap = max(0, overlap_end - overlap_start)
-            
-            if overlap > max_overlap:
-                max_overlap = overlap
-                assigned_speaker = d_segment["speaker"]
-        
-        # Create a new segment with speaker information
-        new_segment = ts_segment
-        setattr(new_segment, 'speaker', assigned_speaker)
-        enriched_segments.append(new_segment)
+    # Check if a transcription of this file exists
+    transcript_file = os.path.splitext(full_path)[0] + ".txt"
+    if os.path.exists(transcript_file):
+        return True
     
-    return enriched_segments
+    return False
+
+def download_latest_episode(feed_url: str, download_dir: str) -> Optional[str]:
+    """
+    Download the latest episode from the podcast feed if not already processed.
+    
+    Args:
+        feed_url: URL of the RSS feed
+        download_dir: Directory to save the downloaded file
+        
+    Returns:
+        Path to the downloaded file or None if no new episode or error
+    """
+    # Create download directory if it doesn't exist
+    os.makedirs(download_dir, exist_ok=True)
+    
+    # Get latest episode info
+    episode = get_latest_episode(feed_url)
+    if not episode:
+        logging.warning("No episode found to download")
+        return None
+    
+    # Check if already processed
+    if episode_already_processed(episode, download_dir):
+        logging.info(f"Episode '{episode['title']}' has already been processed, skipping")
+        return None
+    
+    # Generate filename
+    filename = get_episode_filename(episode)
+    full_path = os.path.join(download_dir, filename)
+    
+    # Download the file
+    try:
+        logging.info(f"Downloading episode: {episode['title']}")
+        response = requests.get(episode['audio_url'], stream=True)
+        response.raise_for_status()
+        
+        total_size = int(response.headers.get('content-length', 0))
+        block_size = 8192
+        
+        with open(full_path, 'wb') as f:
+            with tqdm(total=total_size, unit='B', unit_scale=True, desc="Downloading") as progress_bar:
+                for chunk in response.iter_content(chunk_size=block_size):
+                    if chunk:
+                        f.write(chunk)
+                        progress_bar.update(len(chunk))
+        
+        logging.info(f"Downloaded episode to {full_path}")
+        return full_path
+    except Exception as e:
+        logging.error(f"Error downloading episode: {str(e)}")
+        # Clean up partial download if it exists
+        if os.path.exists(full_path):
+            try:
+                os.remove(full_path)
+            except:
+                pass
+        return None
+
+def get_all_episodes(feed_url: str) -> List[Dict]:
+    """
+    Get all episodes from a podcast RSS feed.
+    
+    Args:
+        feed_url: URL of the RSS feed
+        
+    Returns:
+        List of dictionaries with episode info
+    """
+    try:
+        logging.info(f"Fetching podcast feed from {feed_url}")
+        feed = feedparser.parse(feed_url)
+        
+        if not feed.entries:
+            logging.warning("No episodes found in the feed")
+            return []
+        
+        episodes = []
+        for entry in feed.entries:
+            # Find the audio file URL
+            audio_url = None
+            for enclosure in entry.enclosures:
+                if enclosure.type.startswith('audio/'):
+                    audio_url = enclosure.href
+                    break
+                    
+            if not audio_url:
+                logging.warning(f"No audio file found for episode: {entry.title}")
+                continue
+                
+            episodes.append({
+                'title': entry.title,
+                'published': entry.published if hasattr(entry, 'published') else '',
+                'audio_url': audio_url,
+                'description': entry.description if hasattr(entry, 'description') else '',
+                'guid': entry.id if hasattr(entry, 'id') else ''
+            })
+        
+        logging.info(f"Found {len(episodes)} episodes in the feed")
+        return episodes
+    except Exception as e:
+        logging.error(f"Error fetching podcast feed: {str(e)}")
+        return []
+
+def load_processed_episodes(download_dir: str) -> set:
+    """
+    Load the set of already processed episode IDs.
+    
+    Args:
+        download_dir: Directory where episodes are stored
+        
+    Returns:
+        Set of processed episode IDs
+    """
+    processed_file = os.path.join(download_dir, "processed_episodes.txt")
+    processed = set()
+    
+    if os.path.exists(processed_file):
+        try:
+            with open(processed_file, 'r', encoding='utf-8') as f:
+                for line in f:
+                    processed.add(line.strip())
+            logging.info(f"Loaded {len(processed)} previously processed episodes")
+        except Exception as e:
+            logging.error(f"Error loading processed episodes: {str(e)}")
+    
+    return processed
+
+def mark_episode_processed(episode: Dict, download_dir: str) -> None:
+    """
+    Mark an episode as processed by storing its ID.
+    
+    Args:
+        episode: Episode dictionary
+        download_dir: Directory where episodes are stored
+    """
+    # Create a unique identifier for the episode
+    if 'guid' in episode and episode['guid']:
+        episode_id = episode['guid']
+    else:
+        # Create hash from title and published date
+        episode_id = hashlib.md5(f"{episode['title']}-{episode['published']}".encode()).hexdigest()
+    
+    processed_file = os.path.join(download_dir, "processed_episodes.txt")
+    try:
+        with open(processed_file, 'a', encoding='utf-8') as f:
+            f.write(f"{episode_id}\n")
+    except Exception as e:
+        logging.error(f"Error marking episode as processed: {str(e)}")
+
+def get_episode_id(episode: Dict) -> str:
+    """
+    Get a unique ID for an episode.
+    
+    Args:
+        episode: Episode dictionary
+        
+    Returns:
+        Unique identifier for the episode
+    """
+    if 'guid' in episode and episode['guid']:
+        return episode['guid']
+    return hashlib.md5(f"{episode['title']}-{episode['published']}".encode()).hexdigest()
 
 def process_all_episodes(feed_url: str, download_dir: str, **kwargs) -> None:
     """
@@ -1992,10 +2123,10 @@ def process_all_episodes(feed_url: str, download_dir: str, **kwargs) -> None:
     cleanup_resources(model)
     logging.info("Completed processing all episodes")
 
-def main(input_file: str, model: Optional[WhisperModel] = None, model_size: Optional[str] = None, 
-         output_dir: Optional[str] = None, skip_summary: bool = False, force: bool = False, 
-         is_batch_mode: bool = False, regenerate_summary_only: bool = False, 
-         skip_vocabulary: bool = False, enable_diarization: bool = False) -> None:
+def main(input_file: str, model_size: Optional[str] = None, output_dir: Optional[str] = None, 
+         skip_summary: bool = False, force: bool = False, is_batch_mode: bool = False,
+         regenerate_summary_only: bool = False, skip_vocabulary: bool = False,
+         model: Optional[WhisperModel] = None) -> None:
     """
     Main function to process an audio file.
     
@@ -2009,7 +2140,6 @@ def main(input_file: str, model: Optional[WhisperModel] = None, model_size: Opti
         regenerate_summary_only: Flag to only regenerate summary from existing transcript file
         skip_vocabulary: Flag to skip vocabulary corrections
         model: Optional pre-initialized WhisperModel to use (to avoid reloading)
-        enable_diarization: Flag to enable speaker diarization
     """
     try:
         # Process for summary regeneration
@@ -2066,13 +2196,8 @@ def main(input_file: str, model: Optional[WhisperModel] = None, model_size: Opti
             model_size = model_size or MODEL_SIZE
             model = setup_model(model_size)
         
-        # Transcribe with or without diarization
-        if enable_diarization:
-            logging.info(f"Transcribing {input_file} with speaker diarization...")
-            segments, info = transcribe_with_diarization(model, input_file)
-        else:
-            segments, info = transcribe_audio(model, input_file)
-            
+        # Transcribe
+        segments, info = transcribe_audio(model, input_file)
         logging.info(f"Detected language '{info.language}' with probability {info.language_probability}")
         
         # Write transcript files
@@ -2169,233 +2294,6 @@ def process_all_mp3s(directory: str, **kwargs) -> None:
         logging.info(f"Processing file: {file}")
         main(file, is_batch_mode=True, **kwargs)
 
-# ==================== PODCAST FUNCTIONS ====================
-def download_latest_episode(feed_url: str, download_dir: str) -> Optional[str]:
-    """
-    Download the latest episode from a podcast feed if it hasn't been downloaded already.
-    
-    Args:
-        feed_url: URL of the RSS feed
-        download_dir: Directory to save downloaded files
-        
-    Returns:
-        Path to the downloaded file, or None if no new episode was downloaded
-    """
-    try:
-        # Create download directory if it doesn't exist
-        os.makedirs(download_dir, exist_ok=True)
-        
-        # Parse the feed
-        logging.info(f"Parsing podcast feed: {feed_url}")
-        feed = feedparser.parse(feed_url)
-        
-        if not feed.entries:
-            logging.warning("No episodes found in feed")
-            return None
-        
-        # Get the latest episode
-        latest_entry = feed.entries[0]
-        
-        # Extract audio URL
-        audio_url = None
-        for link in latest_entry.get('links', []):
-            if link.get('type', '').startswith('audio/'):
-                audio_url = link.get('href')
-                break
-                
-        if not audio_url:
-            for enclosure in latest_entry.get('enclosures', []):
-                if enclosure.get('type', '').startswith('audio/'):
-                    audio_url = enclosure.get('href')
-                    break
-        
-        if not audio_url:
-            logging.warning("Could not find audio URL in the latest episode")
-            return None
-        
-        # Generate a unique ID for the episode
-        episode_id = get_episode_id(latest_entry)
-        
-        # Check if we've already processed this episode
-        processed_episodes = load_processed_episodes(download_dir)
-        if episode_id in processed_episodes:
-            logging.info(f"Episode {latest_entry.get('title', 'Unknown')} already processed")
-            return None
-        
-        # Generate filename for the episode
-        filename = get_episode_filename(latest_entry)
-        full_path = os.path.join(download_dir, filename)
-        
-        # Download the file
-        logging.info(f"Downloading episode: {latest_entry.get('title', 'Unknown')}")
-        response = requests.get(audio_url, stream=True)
-        response.raise_for_status()
-        
-        total_size = int(response.headers.get('content-length', 0))
-        block_size = 8192
-        
-        with open(full_path, 'wb') as f:
-            with tqdm(total=total_size, unit='B', unit_scale=True, desc="Downloading") as progress_bar:
-                for chunk in response.iter_content(chunk_size=block_size):
-                    if chunk:
-                        f.write(chunk)
-                        progress_bar.update(len(chunk))
-        
-        logging.info(f"Downloaded episode to {full_path}")
-        
-        # Return the path to the downloaded file
-        return full_path
-    except Exception as e:
-        logging.error(f"Error downloading latest episode: {str(e)}")
-        return None
-
-def get_all_episodes(feed_url: str) -> List[Dict]:
-    """
-    Get all episodes from a podcast feed.
-    
-    Args:
-        feed_url: URL of the RSS feed
-        
-    Returns:
-        List of episode dictionaries with title, audio_url, and published date
-    """
-    try:
-        logging.info(f"Fetching all episodes from podcast feed: {feed_url}")
-        feed = feedparser.parse(feed_url)
-        
-        if not feed.entries:
-            logging.warning("No episodes found in feed")
-            return []
-        
-        episodes = []
-        for entry in feed.entries:
-            # Extract audio URL
-            audio_url = None
-            for link in entry.get('links', []):
-                if link.get('type', '').startswith('audio/'):
-                    audio_url = link.get('href')
-                    break
-                    
-            if not audio_url:
-                for enclosure in entry.get('enclosures', []):
-                    if enclosure.get('type', '').startswith('audio/'):
-                        audio_url = enclosure.get('href')
-                        break
-            
-            if not audio_url:
-                logging.warning(f"Could not find audio URL for episode: {entry.get('title', 'Unknown')}")
-                continue
-            
-            episodes.append({
-                'title': entry.get('title', 'Unknown'),
-                'audio_url': audio_url,
-                'published': entry.get('published', ''),
-                'id': get_episode_id(entry),
-                'entry': entry  # Store the full entry for additional processing
-            })
-        
-        logging.info(f"Found {len(episodes)} episodes in feed")
-        return episodes
-    except Exception as e:
-        logging.error(f"Error getting all episodes: {str(e)}")
-        return []
-
-def load_processed_episodes(download_dir: str) -> List[str]:
-    """
-    Load the list of processed episode IDs.
-    
-    Args:
-        download_dir: Directory containing processed episodes
-        
-    Returns:
-        List of processed episode IDs
-    """
-    processed_file = os.path.join(download_dir, "processed_episodes.json")
-    if not os.path.exists(processed_file):
-        return []
-    
-    try:
-        with open(processed_file, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    except Exception as e:
-        logging.error(f"Error loading processed episodes: {str(e)}")
-        return []
-
-def mark_episode_processed(episode: Dict, download_dir: str) -> None:
-    """
-    Mark an episode as processed by adding its ID to the processed list.
-    
-    Args:
-        episode: The episode dictionary
-        download_dir: Directory containing processed episodes
-    """
-    processed_file = os.path.join(download_dir, "processed_episodes.json")
-    processed_episodes = load_processed_episodes(download_dir)
-    
-    # Add this episode ID if not already present
-    episode_id = episode['id']
-    if episode_id not in processed_episodes:
-        processed_episodes.append(episode_id)
-    
-    # Save the updated list
-    try:
-        with open(processed_file, 'w', encoding='utf-8') as f:
-            json.dump(processed_episodes, f)
-    except Exception as e:
-        logging.error(f"Error saving processed episodes: {str(e)}")
-
-def get_episode_id(entry: Dict) -> str:
-    """
-    Generate a unique ID for an episode based on its content.
-    
-    Args:
-        entry: The feedparser entry for the episode
-        
-    Returns:
-        A unique ID string
-    """
-    # Use a combination of title, guid, and published date if available
-    id_parts = [
-        entry.get('title', ''),
-        entry.get('id', ''),
-        entry.get('guid', ''),
-        entry.get('published', '')
-    ]
-    
-    # Create a string representation and hash it
-    id_string = '|'.join(str(part) for part in id_parts if part)
-    return hashlib.md5(id_string.encode('utf-8')).hexdigest()
-
-def get_episode_filename(entry: Dict) -> str:
-    """
-    Generate a filename for an episode that is safe for file systems.
-    
-    Args:
-        entry: The entry dictionary for the episode
-        
-    Returns:
-        A safe filename string
-    """
-    # Use the title, sanitized for file system
-    title = entry.get('title', 'unknown_episode')
-    
-    # Replace unsafe characters with underscores
-    safe_title = re.sub(r'[\\/*?:"<>|]', "_", title)
-    safe_title = re.sub(r'\s+', "_", safe_title)
-    
-    # Extract extension from URL if possible
-    audio_url = entry.get('audio_url', '')
-    _, ext = os.path.splitext(urlparse(audio_url).path)
-    
-    # Default to .mp3 if no extension found
-    if not ext:
-        ext = '.mp3'
-    
-    # Add a timestamp to make it unique
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    
-    return f"{safe_title}_{timestamp}{ext}"
-
 # ==================== ENTRY POINT ====================
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=f'WHYcast Transcribe v{VERSION} - Transcribe audio files and generate summaries')
@@ -2439,10 +2337,6 @@ if __name__ == "__main__":
     parser.add_argument('--convert-blogs', '-C', action='store_true',
                        help='Convert existing blog text files to HTML and Wiki formats')
     
-    # Add diarization argument
-    parser.add_argument('--diarize', '-d', action='store_true', 
-                       help='Enable speaker diarization (identify different speakers)')
-    
     args = parser.parse_args()
     
     logging.info(f"WHYcast Transcribe {VERSION} starting up")
@@ -2474,7 +2368,7 @@ if __name__ == "__main__":
         logging.info(f"Processing all episodes from {feed_url}")
         process_all_episodes(feed_url, download_dir, model_size=args.model, 
                            output_dir=args.output_dir, skip_summary=args.skip_summary, 
-                           force=args.force, enable_diarization=args.diarize)
+                           force=args.force)
         sys.exit(0)
     
     # Determine if we should check the podcast feed for latest episode (original behavior)
@@ -2496,7 +2390,7 @@ if __name__ == "__main__":
         if episode_file:
             logging.info(f"Processing newly downloaded episode: {episode_file}")
             main(episode_file, model_size=args.model, output_dir=args.output_dir, 
-                 skip_summary=args.skip_summary, force=args.force, enable_diarization=args.diarize)
+                 skip_summary=args.skip_summary, force=args.force)
             sys.exit(0)
         else:
             logging.info("No new episode to download or process")
@@ -2559,11 +2453,11 @@ if __name__ == "__main__":
         sys.exit(0)
     elif args.all_mp3s:
         process_all_mp3s(args.input, model_size=args.model, output_dir=args.output_dir, skip_summary=args.skip_summary,
-                         force=args.force, skip_vocabulary=args.skip_vocabulary, enable_diarization=args.diarize)
+                         force=args.force, skip_vocabulary=args.skip_vocabulary)
     elif args.batch:
         process_batch(args.input, model_size=args.model, output_dir=args.output_dir, skip_summary=args.skip_summary,
-                      force=args.force, skip_vocabulary=args.skip_vocabulary, enable_diarization=args.diarize)
+                      force=args.force, skip_vocabulary=args.skip_vocabulary)
     else:
         main(args.input, model_size=args.model, output_dir=args.output_dir, skip_summary=args.skip_summary,
              force=args.force, regenerate_summary_only=args.regenerate_summary,
-             skip_vocabulary=args.skip_vocabulary, enable_diarization=args.diarize)
+             skip_vocabulary=args.skip_vocabulary)
