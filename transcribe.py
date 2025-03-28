@@ -37,7 +37,8 @@ try:
         TEMPERATURE, MAX_TOKENS, MAX_INPUT_TOKENS, CHARS_PER_TOKEN,
         PROMPT_CLEANUP_FILE, PROMPT_SUMMARY_FILE, PROMPT_BLOG_FILE, PROMPT_BLOG_ALT1_FILE, MAX_FILE_SIZE_KB,
         USE_RECURSIVE_SUMMARIZATION, MAX_CHUNK_SIZE, CHUNK_OVERLAP,
-        VOCABULARY_FILE, USE_CUSTOM_VOCABULARY
+        VOCABULARY_FILE, USE_CUSTOM_VOCABULARY,
+        USE_SPEAKER_DIARIZATION, DIARIZATION_MODEL, DIARIZATION_MIN_SPEAKERS, DIARIZATION_MAX_SPEAKERS
     )
 except ImportError as e:
     sys.stderr.write(f"Error: Could not import configuration - {str(e)}\n")
@@ -1146,7 +1147,7 @@ def create_output_paths(input_file: str) -> Tuple[str, str, str]:
         f"{base}_summary.txt",     # For summary
     )
 
-def write_transcript_files(segments, output_file: str, output_file_timestamped: str) -> str:
+def write_transcript_files(segments, output_file: str, output_file_timestamped: str, speaker_segments: Optional[List[Dict]] = None) -> str:
     """
     Write transcript files and return the full transcript.
     
@@ -1154,6 +1155,7 @@ def write_transcript_files(segments, output_file: str, output_file_timestamped: 
         segments: Transcript segments from WhisperModel
         output_file: Path for plain text output
         output_file_timestamped: Path for timestamped output
+        speaker_segments: Optional speaker diarization segments
         
     Returns:
         The full transcript as a string
@@ -1170,22 +1172,31 @@ def write_transcript_files(segments, output_file: str, output_file_timestamped: 
             if USE_CUSTOM_VOCABULARY:
                 segment_text = apply_vocabulary_corrections(segment_text, load_vocabulary_mappings(VOCABULARY_FILE))
             
+            # Find matching speaker if available
+            speaker_label = ""
+            if speaker_segments:
+                for speaker_segment in speaker_segments:
+                    if (segment.start >= speaker_segment['start'] and 
+                        segment.end <= speaker_segment['end']):
+                        speaker_label = f"[{speaker_segment['speaker']}] "
+                        break
+            
             # Store for OpenAI processing
-            full_transcript += segment_text + "\n"
+            full_transcript += speaker_label + segment_text + "\n"
             
             # Write to plain text file without timestamps
-            f_plain.write(segment_text + "\n")
+            f_plain.write(speaker_label + segment_text + "\n")
             
             # Write to timestamped file with timestamps
-            f_timestamped.write("[%.2fs -> %.2fs] %s\n" % (segment.start, segment.end, segment_text))
+            f_timestamped.write("[%.2fs -> %.2fs] %s%s\n" % (segment.start, segment.end, speaker_label, segment_text))
             
             # Print to console with timestamps - handle potential encoding errors
             try:
-                logging.info("[%.2fs -> %.2fs] %s", segment.start, segment.end, segment_text)
+                logging.info("[%.2fs -> %.2fs] %s%s", segment.start, segment.end, speaker_label, segment_text)
             except UnicodeEncodeError:
                 # Fall back to ASCII if Unicode fails
                 safe_text = segment_text.encode('ascii', 'replace').decode('ascii')
-                logging.info("[%.2fs -> %.2fs] %s", segment.start, segment.end, safe_text)
+                logging.info("[%.2fs -> %.2fs] %s%s", segment.start, segment.end, speaker_label, safe_text)
     
     logging.info(f"Transcription saved to: {output_file}")
     logging.info(f"Timestamped transcription saved to: {output_file_timestamped}")
@@ -2123,6 +2134,57 @@ def process_all_episodes(feed_url: str, download_dir: str, **kwargs) -> None:
     cleanup_resources(model)
     logging.info("Completed processing all episodes")
 
+def perform_speaker_diarization(audio_file: str) -> Optional[List[Dict]]:
+    """
+    Perform speaker diarization on an audio file using pyannote.audio.
+    
+    Args:
+        audio_file: Path to the audio file
+        
+    Returns:
+        List of dictionaries containing speaker segments or None if failed
+    """
+    try:
+        from pyannote.audio import Pipeline
+        
+        # Check if speaker diarization is enabled
+        if not USE_SPEAKER_DIARIZATION:
+            logging.info("Speaker diarization is disabled")
+            return None
+            
+        # Check for HuggingFace token
+        if not os.environ.get("HUGGINGFACE_TOKEN"):
+            logging.warning("HUGGINGFACE_TOKEN not found. Speaker diarization requires a HuggingFace token.")
+            return None
+        
+        # Initialize the pipeline
+        pipeline = Pipeline.from_pretrained(
+            DIARIZATION_MODEL,
+            use_auth_token=os.environ.get("HUGGINGFACE_TOKEN")
+        )
+        
+        # Run diarization with configured parameters
+        diarization = pipeline(
+            audio_file,
+            min_speakers=DIARIZATION_MIN_SPEAKERS,
+            max_speakers=DIARIZATION_MAX_SPEAKERS
+        )
+        
+        # Convert to list of segments
+        segments = []
+        for turn, _, speaker in diarization.itertracks(yield_label=True):
+            segments.append({
+                'start': turn.start,
+                'end': turn.end,
+                'speaker': speaker
+            })
+            
+        return segments
+        
+    except Exception as e:
+        logging.error(f"Error performing speaker diarization: {str(e)}")
+        return None
+
 def main(input_file: str, model_size: Optional[str] = None, output_dir: Optional[str] = None, 
          skip_summary: bool = False, force: bool = False, is_batch_mode: bool = False,
          regenerate_summary_only: bool = False, skip_vocabulary: bool = False,
@@ -2196,12 +2258,22 @@ def main(input_file: str, model_size: Optional[str] = None, output_dir: Optional
             model_size = model_size or MODEL_SIZE
             model = setup_model(model_size)
         
+        # Perform speaker diarization if enabled
+        speaker_segments = None
+        if USE_SPEAKER_DIARIZATION:
+            logging.info("Performing speaker diarization...")
+            speaker_segments = perform_speaker_diarization(input_file)
+            if speaker_segments:
+                logging.info(f"Identified {len(set(s['speaker'] for s in speaker_segments))} unique speakers")
+            else:
+                logging.warning("Speaker diarization failed or was skipped")
+        
         # Transcribe
         segments, info = transcribe_audio(model, input_file)
         logging.info(f"Detected language '{info.language}' with probability {info.language_probability}")
         
-        # Write transcript files
-        full_transcript = write_transcript_files(segments, output_file, output_file_timestamped)
+        # Write transcript files with speaker information
+        full_transcript = write_transcript_files(segments, output_file, output_file_timestamped, speaker_segments)
         
         # Check output file size before summary
         if not skip_summary and os.path.exists(output_file):

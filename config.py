@@ -29,6 +29,12 @@ USE_RECURSIVE_SUMMARIZATION = os.environ.get("USE_RECURSIVE_SUMMARIZATION", "Tru
 MAX_CHUNK_SIZE = int(os.environ.get("MAX_CHUNK_SIZE", "40000"))  # Maximum size of each chunk for recursive summarization
 CHUNK_OVERLAP = int(os.environ.get("CHUNK_OVERLAP", "1000"))  # Overlap between chunks to maintain context
 
+# Speaker diarization settings
+USE_SPEAKER_DIARIZATION = os.environ.get("USE_SPEAKER_DIARIZATION", "True").lower() in ("true", "1", "yes")
+DIARIZATION_MODEL = os.environ.get("DIARIZATION_MODEL", "pyannote/speaker-verification")
+DIARIZATION_MIN_SPEAKERS = int(os.environ.get("DIARIZATION_MIN_SPEAKERS", "1"))
+DIARIZATION_MAX_SPEAKERS = int(os.environ.get("DIARIZATION_MAX_SPEAKERS", "10"))
+
 # Prompt file paths - using absolute paths to ensure they're found regardless of working directory
 base_dir = os.path.dirname(os.path.abspath(__file__))
 
