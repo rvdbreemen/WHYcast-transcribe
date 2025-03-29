@@ -28,6 +28,7 @@ import hashlib
 from urllib.parse import urlparse
 from datetime import datetime
 import markdown  # New import for markdown to HTML conversion
+import torch
 
 # Try to import configuration
 try:
@@ -981,36 +982,73 @@ def setup_model(model_size: str = MODEL_SIZE) -> WhisperModel:
     Returns:
         The initialized WhisperModel
     """
-    # Override device setting if CUDA is available
-    device = "cuda" if is_cuda_available() else DEVICE
-    
-    # If using CUDA, prefer float16 for better performance unless specified otherwise
-    compute_type = "float16" if device == "cuda" and COMPUTE_TYPE == "default" else COMPUTE_TYPE
-    
-    logging.info(f"Using device: {device} with compute type: {compute_type}")
-    if device == "cuda":
-        logging.info("CUDA is available - GPU acceleration will be used")
+    try:
+        import torch
         
-        # Try to optimize CUDA performance with environment variables
-        os.environ['CUDA_LAUNCH_BLOCKING'] = '0'  # Non-blocking CUDA launches
-        try:
-            # Check available GPU memory
-            import torch
+        # Log system information
+        logging.info("=== System Information ===")
+        logging.info(f"Python version: {sys.version}")
+        logging.info(f"PyTorch version: {torch.__version__}")
+        logging.info(f"CUDA available: {torch.cuda.is_available()}")
+        
+        if torch.cuda.is_available():
+            logging.info(f"CUDA version: {torch.version.cuda}")
+            logging.info(f"cuDNN version: {torch.backends.cudnn.version()}")
+            logging.info(f"GPU device count: {torch.cuda.device_count()}")
+            
+            for i in range(torch.cuda.device_count()):
+                props = torch.cuda.get_device_properties(i)
+                logging.info(f"GPU {i}: {props.name}")
+                logging.info(f"  Total memory: {props.total_memory / (1024**3):.2f} GB")
+                logging.info(f"  CUDA capability: {props.major}.{props.minor}")
+                logging.info(f"  Multi-processor count: {props.multi_processor_count}")
+            
+            # Optimize CUDA settings
+            torch.cuda.empty_cache()
+            torch.backends.cudnn.benchmark = True
+            torch.backends.cudnn.deterministic = False
+            
+            # Set number of workers based on GPU memory
             gpu_mem = torch.cuda.get_device_properties(0).total_memory / (1024 ** 3)  # Convert to GB
-            logging.info(f"GPU has {gpu_mem:.2f} GB of total memory")
-        except Exception as e:
-            logging.warning(f"Could not query GPU memory: {e}")
-    else:
-        logging.warning("CUDA is not available - using CPU which may be significantly slower")
-    
-    # Create model with optimized parameters
-    return WhisperModel(
-        model_size, 
-        device=device, 
-        compute_type=compute_type,
-        cpu_threads=8 if device == "cpu" else 0,  # More threads for CPU, default for GPU
-        num_workers=2  # Number of workers for faster data loading
-    )
+            if gpu_mem >= 16:  # High-end GPU
+                num_workers = 4
+            elif gpu_mem >= 8:  # Mid-range GPU
+                num_workers = 2
+            else:  # Lower-end GPU
+                num_workers = 1
+                
+            logging.info(f"Using {num_workers} workers for data loading")
+            device = "cuda"
+            compute_type = "float16"
+        else:
+            device = "cpu"
+            num_workers = 8  # More workers for CPU
+            compute_type = "int8"
+            logging.warning("CUDA is not available - using CPU which may be significantly slower")
+        
+        # Create model with optimized parameters
+        model = WhisperModel(
+            model_size, 
+            device=device, 
+            compute_type=compute_type,
+            cpu_threads=8 if device == "cpu" else 0,
+            num_workers=num_workers
+        )
+        
+        logging.info(f"Initialized {model_size} model on {device} with compute type {compute_type}")
+        return model
+        
+    except Exception as e:
+        logging.error(f"Error setting up model: {str(e)}")
+        # Fallback to CPU if CUDA setup fails
+        logging.warning("Falling back to CPU model")
+        return WhisperModel(
+            model_size,
+            device="cpu",
+            compute_type="int8",
+            cpu_threads=8,
+            num_workers=4
+        )
 
 def transcribe_audio(model: WhisperModel, audio_file: str) -> Tuple[List, object]:
     """
@@ -2461,3 +2499,18 @@ if __name__ == "__main__":
         main(args.input, model_size=args.model, output_dir=args.output_dir, skip_summary=args.skip_summary,
              force=args.force, regenerate_summary_only=args.regenerate_summary,
              skip_vocabulary=args.skip_vocabulary)
+
+print("=== CUDA Diagnostics ===")
+print(f"PyTorch version: {torch.__version__}")
+print(f"CUDA available: {torch.cuda.is_available()}")
+if torch.cuda.is_available():
+    print(f"CUDA version: {torch.version.cuda}")
+    print(f"GPU: {torch.cuda.get_device_name(0)}")
+    print(f"GPU Memory: {torch.cuda.get_device_properties(0).total_memory / (1024**3):.2f} GB")
+    
+    # Test CUDA met een eenvoudige operatie
+    x = torch.rand(5, 3)
+    print("\nTest CUDA operatie:")
+    print(f"Tensor op CPU: {x}")
+    x = x.cuda()
+    print(f"Tensor op GPU: {x}")
