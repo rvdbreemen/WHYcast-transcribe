@@ -10,6 +10,13 @@ WHYcast Transcribe is a tool for transcribing audio files and generating summari
 - Apply custom vocabulary corrections to transcripts
 - Batch processing of multiple audio files
 - Regenerate summaries from existing transcripts
+- Speaker diarization to identify different speakers
+- Timestamped transcripts for easy reference
+- Post-processing with punctuation and formatting
+- Automatic summarization using OpenAI GPT models
+- Automatic transcription using Whisper (via faster-whisper)
+- Local model caching for faster repeated use
+- Command-line interface with numerous options
 
 ## Requirements
 - CUDA enabled GPU (e.g. NVIDIA GeForce RTX 3060)
@@ -103,6 +110,63 @@ python transcribe.py --regenerate-all-summaries path/to/directory
 - `--limit, -l`: Limit the number of podcasts to process from RSS feed (default: RSS_DEFAULT_LIMIT)
 - `--clear-cache`: Clear model and vocabulary cache before processing
 
+## Speaker Diarization
+
+WHYcast Transcribe now supports speaker diarization which identifies and labels different speakers in the audio. This feature adds speaker labels like `[SPEAKER_00]` to the transcript, making it easier to follow conversations in podcasts or interviews.
+
+### Speaker Diarization Options
+
+- `--diarize`: Enable speaker diarization (override config setting)
+- `--no-diarize`: Disable speaker diarization (override config setting)
+- `--min-speakers`: Minimum number of speakers to identify (default: 1)
+- `--max-speakers`: Maximum number of speakers to identify (default: 10)
+
+### Requirements for Speaker Diarization
+
+Speaker diarization requires:
+1. PyAnnote Audio library (installed via requirements.txt)
+2. A HuggingFace token in your `.env` file:
+   ```
+   HUGGINGFACE_TOKEN=your_huggingface_token
+   ```
+3. **Important**: You must also explicitly accept the user conditions for the diarization model by:
+   - Log in to your HuggingFace account
+   - Visit https://hf.co/pyannote/speaker-diarization-3.1
+   - Click the "Access repository" button and accept the terms and conditions
+   - This step is mandatory even if you already have a HuggingFace token
+   - For better reliability, also visit https://hf.co/pyannote/segmentation-3.0 and accept those terms as well
+
+### Environment Variables for Speaker Diarization
+
+You can configure speaker diarization behavior through the following environment variables in your `.env` file:
+
+```
+# Enable or disable speaker diarization (True/False)
+USE_SPEAKER_DIARIZATION=True
+
+# Primary diarization model to use
+DIARIZATION_MODEL=pyannote/speaker-diarization-3.1
+
+# Alternative model if the primary one is not available
+DIARIZATION_ALTERNATIVE_MODEL=pyannote/segmentation-3.0
+
+# Speaker count limits
+DIARIZATION_MIN_SPEAKERS=1
+DIARIZATION_MAX_SPEAKERS=10
+```
+
+### Example Usage
+
+To transcribe an audio file with speaker diarization:
+```sh
+python transcribe.py path/to/audio/file.mp3 --diarize
+```
+
+To specify the expected number of speakers:
+```sh
+python transcribe.py path/to/audio/file.mp3 --diarize --min-speakers 2 --max-speakers 4
+```
+
 ## License
 
 This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
@@ -177,7 +241,7 @@ Once all the files are copied, run the following command to install TensorRT for
 pip install "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v11.8\python\tensorrt-8.6.1-cp311-none-win_amd64.whl"
 ```
 
-🚨 **Note:** If this step doesn’t work, double-check that the `.whl` file matches your Python version (e.g., `cp311` is for Python 3.11). Just locate the correct `.whl` file in the `python` folder and replace the path accordingly.
+🚨 **Note:** If this step doesn't work, double-check that the `.whl` file matches your Python version (e.g., `cp311` is for Python 3.11). Just locate the correct `.whl` file in the `python` folder and replace the path accordingly.
 
 ## 10. Set Your Environment Variables 🌎
 Add the following paths to your environment variables:

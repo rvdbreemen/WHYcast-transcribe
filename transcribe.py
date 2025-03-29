@@ -29,6 +29,7 @@ from urllib.parse import urlparse
 from datetime import datetime
 import markdown  # New import for markdown to HTML conversion
 import torch
+import time
 
 # Try to import configuration
 try:
@@ -39,7 +40,8 @@ try:
         PROMPT_CLEANUP_FILE, PROMPT_SUMMARY_FILE, PROMPT_BLOG_FILE, PROMPT_BLOG_ALT1_FILE, MAX_FILE_SIZE_KB,
         USE_RECURSIVE_SUMMARIZATION, MAX_CHUNK_SIZE, CHUNK_OVERLAP,
         VOCABULARY_FILE, USE_CUSTOM_VOCABULARY,
-        USE_SPEAKER_DIARIZATION, DIARIZATION_MODEL, DIARIZATION_MIN_SPEAKERS, DIARIZATION_MAX_SPEAKERS
+        USE_SPEAKER_DIARIZATION, DIARIZATION_MODEL, DIARIZATION_ALTERNATIVE_MODEL, 
+        DIARIZATION_MIN_SPEAKERS, DIARIZATION_MAX_SPEAKERS
     )
 except ImportError as e:
     sys.stderr.write(f"Error: Could not import configuration - {str(e)}\n")
@@ -113,6 +115,81 @@ def setup_logging():
     return logger
 
 logger = setup_logging()
+
+# ==================== HUGGINGFACE API FUNCTIONS ====================
+def set_huggingface_token(token: str) -> bool:
+    """
+    Set the HuggingFace token in the .env file.
+    
+    Args:
+        token: The HuggingFace API token
+        
+    Returns:
+        True if token was set successfully, False otherwise
+    """
+    try:
+        env_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env')
+        
+        # Read current .env file content
+        content = ""
+        if os.path.exists(env_file):
+            with open(env_file, 'r', encoding='utf-8') as f:
+                content = f.read()
+        
+        # Check if HUGGINGFACE_TOKEN already exists in the file
+        if 'HUGGINGFACE_TOKEN=' in content:
+            # Replace existing token
+            pattern = r'HUGGINGFACE_TOKEN=.*'
+            replacement = f'HUGGINGFACE_TOKEN={token}'
+            content = re.sub(pattern, replacement, content)
+        else:
+            # Add new token at the end
+            if content and not content.endswith('\n'):
+                content += '\n'
+            content += f'HUGGINGFACE_TOKEN={token}\n'
+        
+        # Write back to .env file
+        with open(env_file, 'w', encoding='utf-8') as f:
+            f.write(content)
+            
+        # Set in current environment
+        os.environ['HUGGINGFACE_TOKEN'] = token
+        
+        logging.info("HuggingFace token has been set successfully")
+        return True
+    except Exception as e:
+        logging.error(f"Error setting HuggingFace token: {str(e)}")
+        return False
+
+def get_huggingface_token(ask_if_missing: bool = True) -> Optional[str]:
+    """
+    Get the HuggingFace token from environment. Optionally prompt the user if it's missing.
+    
+    Args:
+        ask_if_missing: Whether to prompt the user for the token if it's missing
+        
+    Returns:
+        The token or None if not available
+    """
+    token = os.environ.get('HUGGINGFACE_TOKEN')
+    
+    if not token and ask_if_missing:
+        try:
+            logging.info("HuggingFace token is required for speaker diarization")
+            logging.info("You can get one from https://huggingface.co/settings/tokens")
+            print("\nPlease enter your HuggingFace token (will be saved to .env file):")
+            token = input().strip()
+            
+            if token:
+                set_huggingface_token(token)
+            else:
+                logging.warning("No token provided. Speaker diarization will be disabled.")
+                return None
+        except Exception as e:
+            logging.error(f"Error getting token from user: {str(e)}")
+            return None
+            
+    return token
 
 # ==================== API FUNCTIONS ====================
 def ensure_api_key() -> str:
@@ -465,821 +542,12 @@ def process_large_text_in_chunks(text: str, prompt: str, model_name: str, client
     
     return combined_text
 
-def process_transcript_workflow(transcript: str) -> Optional[Dict[str, str]]:
-    """
-    Process transcript through the multi-step workflow: cleanup -> summary -> blog
-    
-    Args:
-        transcript: The raw transcript text
-        
-    Returns:
-        Dictionary with cleaned_transcript, summary, and blog, or None if failed
-    """
-    results = {}
-    
-    # Step 1: Clean up the transcript
-    cleanup_prompt = read_prompt_file(PROMPT_CLEANUP_FILE)
-    if not cleanup_prompt:
-        logging.warning("Cleanup prompt file not found or empty, skipping cleanup step")
-        cleaned_transcript = transcript
-    else:
-        logging.info("Step 1: Cleaning up transcript...")
-        model_to_use = choose_appropriate_model(transcript)
-        
-        # For cleanup, explicitly use a higher token limit
-        estimated_tokens = estimate_token_count(transcript)
-        logging.info(f"Transcript size: ~{estimated_tokens} tokens")
-        
-        # Process with OpenAI, giving plenty of room for output
-        cleaned_transcript = process_with_openai(transcript, cleanup_prompt, model_to_use, max_tokens=MAX_TOKENS * 2)
-        
-        # Check if the cleaning was successful and not truncated
-        if not cleaned_transcript:
-            logging.warning("Transcript cleanup failed, using original transcript")
-            cleaned_transcript = transcript
-        elif len(cleaned_transcript) < len(transcript) * 0.5:
-            logging.warning(f"Cleaned transcript is suspiciously short ({len(cleaned_transcript)} chars vs original {len(transcript)} chars)")
-            logging.warning("This may indicate truncation. Using original transcript instead.")
-            cleaned_transcript = transcript
-    
-    results['cleaned_transcript'] = cleaned_transcript
-    
-    # Step 2: Generate summary
-    summary_prompt = read_prompt_file(PROMPT_SUMMARY_FILE)
-    if not summary_prompt:
-        logging.warning("Summary prompt file not found or empty, skipping summary generation")
-        results['summary'] = None
-    else:
-        logging.info("Step 2: Generating summary...")
-        model_to_use = choose_appropriate_model(cleaned_transcript)
-        summary = process_with_openai(cleaned_transcript, summary_prompt, model_to_use)
-        results['summary'] = summary
-    
-    # Step 3: Generate blog post
-    blog_prompt = read_prompt_file(PROMPT_BLOG_FILE)
-    if not blog_prompt:
-        logging.warning("Blog prompt file not found or empty, skipping blog generation")
-        results['blog'] = None
-    else:
-        logging.info("Step 3: Generating blog post...")
-        # Use both the cleaned transcript and summary for blog generation
-        input_text = f"CLEANED TRANSCRIPT:\n{cleaned_transcript}\n\nSUMMARY:\n{results.get('summary', 'No summary available')}"
-        model_to_use = choose_appropriate_model(input_text)
-        blog = process_with_openai(input_text, blog_prompt, model_to_use, max_tokens=MAX_TOKENS * 2)
-        results['blog'] = blog
-        
-    # Step 4: Generate blog post
-    # Log the filename before reading
-    logging.info(f"Reading prompt file: {PROMPT_BLOG_ALT1_FILE}")
-    blog_alt1_prompt = read_prompt_file(PROMPT_BLOG_ALT1_FILE)
-    
-    # Log the content if it was read successfully
-    if blog_alt1_prompt:
-        logging.info(f"Prompt file content: {blog_alt1_prompt[:100]}..." if len(blog_alt1_prompt) > 100 else blog_alt1_prompt)
-    else:
-        logging.warning(f"Failed to read prompt file: {PROMPT_BLOG_ALT1_FILE}")
-    if not blog_alt1_prompt:
-        logging.warning("Blog prompt alt1 file not found or empty, skipping blog generation")
-        results['blog_alt1'] = None
-    else:
-        logging.info("Step 4: Generating blog alt1 post...")
-        # Use both the cleaned transcript and summary for blog generation
-        input_text = f"CLEANED TRANSCRIPT:\n{cleaned_transcript}\n\nSUMMARY:\n{results.get('summary', 'No summary available')}"
-        model_to_use = choose_appropriate_model(input_text)
-        # Fix: blog_alt1 should use blog_alt1_prompt, not blog_prompt
-        blog_alt1 = process_with_openai(input_text, blog_alt1_prompt, model_to_use, max_tokens=MAX_TOKENS * 2)
-        results['blog_alt1'] = blog_alt1
-    
-    return results
-
-def write_workflow_outputs(results: Dict[str, str], output_base: str) -> None:
-    """
-    Write the outputs from the workflow to files.
-    
-    Args:
-        results: Dictionary with cleaned_transcript, summary, and blog
-        output_base: Base path for output files
-    """
-    # Write cleaned transcript
-    if 'cleaned_transcript' in results and results['cleaned_transcript']:
-        cleaned_path = f"{output_base}_cleaned.txt"
-        with open(cleaned_path, "w", encoding="utf-8") as f:
-            f.write(results['cleaned_transcript'])
-        logging.info(f"Cleaned transcript saved to: {cleaned_path}")
-    
-    # Write summary
-    if 'summary' in results and results['summary']:
-        summary_path = f"{output_base}_summary.txt"
-        with open(summary_path, "w", encoding="utf-8") as f:
-            f.write(results['summary'])
-        logging.info(f"Summary saved to: {summary_path}")
-    
-    # Write blog post
-    if 'blog' in results and results['blog']:
-        # Get base filename without any special suffixes
-        base_filename = os.path.basename(output_base)
-        output_dir = os.path.dirname(output_base)
-        blog_path = os.path.join(output_dir, f"{base_filename}_blog.txt")
-        
-        with open(blog_path, "w", encoding="utf-8") as f:
-            f.write(results['blog'])
-        logging.info(f"Blog post saved to: {blog_path}")
-        
-        # Generate and write HTML version
-        html_content = convert_markdown_to_html(results['blog'])
-        html_path = os.path.join(output_dir, f"{base_filename}_blog.html")
-        with open(html_path, "w", encoding="utf-8") as f:
-            f.write(html_content)
-        logging.info(f"HTML blog post saved to: {html_path}")
-        
-        # Generate and write Wiki version
-        wiki_content = convert_markdown_to_wiki(results['blog'])
-        wiki_path = os.path.join(output_dir, f"{base_filename}_blog.wiki")
-        with open(wiki_path, "w", encoding="utf-8") as f:
-            f.write(wiki_content)
-        logging.info(f"Wiki blog post saved to: {wiki_path}")
-        
-    # Write blog post
-    if 'blog_alt1' in results and results['blog_alt1']:
-        # Get base filename without any special suffixes
-        base_filename = os.path.basename(output_base)
-        output_dir = os.path.dirname(output_base)
-        blog_alt1_path = os.path.join(output_dir, f"{base_filename}_blog_alt1.txt")
-        
-        with open(blog_alt1_path, "w", encoding="utf-8") as f:
-            f.write(results['blog_alt1'])
-        logging.info(f"Blog alt1 post saved to: {blog_alt1_path}")
-        
-        # Generate and write HTML version
-        html_content = convert_markdown_to_html(results['blog_alt1'])
-        html_path = os.path.join(output_dir, f"{base_filename}_blog_alt1.html")
-        with open(html_path, "w", encoding="utf-8") as f:
-            f.write(html_content)
-        logging.info(f"HTML blog alt 1post saved to: {html_path}")
-        
-        # Generate and write Wiki version
-        wiki_content = convert_markdown_to_wiki(results['blog_alt1'])
-        wiki_path = os.path.join(output_dir, f"{base_filename}_blog_alt1.wiki")
-        with open(wiki_path, "w", encoding="utf-8") as f:
-            f.write(wiki_content)
-        logging.info(f"Wiki blog alt1 post saved to: {wiki_path}")
-
-def generate_summary_and_blog(transcript: str, prompt: str) -> Optional[str]:
-    """
-    Generate summary and blog post using OpenAI API.
-    
-    Args:
-        transcript: The transcript text to summarize
-        prompt: Instructions for the AI
-        
-    Returns:
-        The generated summary and blog or None if there was an error
-    """
-    try:
-        estimated_tokens = estimate_token_count(transcript)
-        logging.info(f"Estimated transcript length: ~{estimated_tokens} tokens")
-        
-        # For very large transcripts, use recursive summarization
-        if USE_RECURSIVE_SUMMARIZATION and estimated_tokens > MAX_INPUT_TOKENS:
-            logging.info(f"Transcript is very large ({estimated_tokens} tokens), using recursive summarization")
-            return summarize_large_transcript(transcript, prompt)
-        
-        # Choose appropriate model based on length
-        model_to_use = choose_appropriate_model(transcript)
-        
-        # Use process_with_openai instead of direct API call for consistent handling
-        logging.info(f"Generating summary and blog using {model_to_use}...")
-        return process_with_openai(transcript, prompt, model_to_use, max_tokens=MAX_TOKENS)
-    
-    except Exception as e:
-        logging.error(f"Error generating summary: {str(e)}")
-        return None
-
-# ==================== VOCABULARY PROCESSING FUNCTIONS ====================
-# Dictionary to cache vocabulary mappings
-_vocabulary_cache = {}
-
-def load_vocabulary_mappings(vocab_file: str) -> Dict[str, str]:
-    """
-    Load vocabulary mappings from a JSON file.
-    
-    Args:
-        vocab_file: Path to the vocabulary JSON file
-        
-    Returns:
-        Dictionary of {incorrect_term: correct_term} mappings
-    """
-    # Return cached vocabulary if available
-    if vocab_file in _vocabulary_cache:
-        return _vocabulary_cache[vocab_file]
-        
-    if not os.path.exists(vocab_file):
-        logging.warning(f"Vocabulary file not found: {vocab_file}")
-        return {}
-        
-    try:
-        # Read file content once to avoid reading twice in case of error
-        with open(vocab_file, 'r', encoding='utf-8') as f:
-            content = f.read()
-            
-        try:
-            mappings = json.loads(content)
-        except json.JSONDecodeError as json_err:
-            # Provide more detailed information about the JSON parsing error
-            logging.error(f"JSON syntax error in vocabulary file: {str(json_err)}")
-            logging.error(f"Check your vocabulary file for issues near character position {json_err.pos}")
-            # Show the problematic part of the JSON
-            start_pos = max(0, json_err.pos - 20)
-            end_pos = min(len(content), json_err.pos + 20)
-            context = content[start_pos:end_pos]
-            pointer = ' ' * (min(20, json_err.pos - start_pos)) + '^'
-            logging.error(f"Context: ...{context}...")
-            logging.error(f"Position: ...{pointer}...")
-            return {}
-        
-        if not isinstance(mappings, dict):
-            logging.error(f"Vocabulary file must contain a JSON object/dictionary")
-            return {}
-        
-        # Validate entries - ensure keys and values are strings and not empty
-        valid_mappings = {}
-        for key, value in mappings.items():
-            if not isinstance(key, str) or not key.strip():
-                logging.warning(f"Skipping invalid vocabulary mapping key: {key}")
-                continue
-            if not isinstance(value, str):
-                logging.warning(f"Skipping non-string value for key '{key}': {value}")
-                continue
-            valid_mappings[key] = value
-            
-        if len(valid_mappings) < len(mappings):
-            logging.warning(f"Removed {len(mappings) - len(valid_mappings)} invalid mappings")
-            
-        # Cache the validated mappings
-        _vocabulary_cache[vocab_file] = valid_mappings
-        logging.info(f"Loaded {len(valid_mappings)} vocabulary mappings")
-        return valid_mappings
-    except Exception as e:
-        logging.error(f"Error loading vocabulary file: {str(e)}")
-        return {}
-
-def apply_vocabulary_corrections(text: str, vocab_mappings: Dict[str, str]) -> str:
-    """
-    Apply vocabulary corrections to the transcribed text.
-    
-    Args:
-        text: The text to correct
-        vocab_mappings: Dictionary of word mappings
-        
-    Returns:
-        Corrected text
-    """
-    if not vocab_mappings:
-        return text
-    
-    corrected_text = text
-    
-    # Sort mappings by length (descending) to handle longer phrases first
-    sorted_mappings = sorted(vocab_mappings.items(), key=lambda x: len(x[0]), reverse=True)
-    
-    for incorrect, correct in sorted_mappings:
-        # Use word boundaries for more accurate replacement
-        pattern = r'\b' + re.escape(incorrect) + r'\b'
-        corrected_text = re.sub(pattern, correct, corrected_text, flags=re.IGNORECASE)
-    
-    return corrected_text
-
-def process_transcript_with_vocabulary(transcript: str) -> str:
-    """
-    Process a transcript with custom vocabulary corrections.
-    
-    Args:
-        transcript: The transcript text
-        
-    Returns:
-        The processed transcript
-    """
-    if not USE_CUSTOM_VOCABULARY:
-        return transcript
-    
-    vocab_mappings = load_vocabulary_mappings(VOCABULARY_FILE)
-    if not vocab_mappings:
-        return transcript
-    
-    return apply_vocabulary_corrections(transcript, vocab_mappings)
-
-
-# ==================== FORMAT CONVERSION FUNCTIONS ====================
-def convert_markdown_to_html(markdown_text: str) -> str:
-    """
-    Convert markdown text to HTML.
-    
-    Args:
-        markdown_text: The markdown text to convert
-        
-    Returns:
-        HTML formatted text
-    """
-    try:
-        # Use the markdown library to convert text to HTML
-        html = markdown.markdown(markdown_text, extensions=['extra', 'nl2br', 'sane_lists'])
-        
-        # Create a complete HTML document with basic styling
-        html_document = f"""<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>WHYcast Blog</title>
-    <style>
-        body {{
-            font-family: Arial, sans-serif;
-            line-height: 1.6;
-            max-width: 800px;
-            margin: 0 auto;
-            padding: 20px;
-        }}
-        h1, h2, h3 {{
-            color: #333;
-        }}
-        a {{
-            color: #0066cc;
-        }}
-        blockquote {{
-            border-left: 4px solid #ccc;
-            padding-left: 16px;
-            margin-left: 0;
-            color: #555;
-        }}
-        code {{
-            background-color: #f4f4f4;
-            padding: 2px 5px;
-            border-radius: 3px;
-        }}
-        pre {{
-            background-color: #f4f4f4;
-            padding: 10px;
-            border-radius: 5px;
-            overflow-x: auto;
-        }}
-    </style>
-</head>
-<body>
-    {html}
-</body>
-</html>
-"""
-        return html_document
-    except Exception as e:
-        logging.error(f"Error converting markdown to HTML: {str(e)}")
-        # Return basic HTML with the original text if conversion fails
-        return f"<!DOCTYPE html><html><body><pre>{markdown_text}</pre></body></html>"
-
-def convert_markdown_to_wiki(markdown_text: str) -> str:
-    """
-    Convert markdown text to Wiki markup.
-    
-    Args:
-        markdown_text: The markdown text to convert
-        
-    Returns:
-        Wiki markup formatted text
-    """
-    try:
-        # Basic conversion rules for common markdown to Wiki syntax
-        wiki_text = markdown_text
-        
-        # Headers: Convert markdown headers to wiki headers
-        # e.g., "# Heading 1" -> "= Heading 1 ="
-        wiki_text = re.sub(r'^# (.+)$', r'= \1 =', wiki_text, flags=re.MULTILINE)
-        wiki_text = re.sub(r'^## (.+)$', r'== \1 ==', wiki_text, flags=re.MULTILINE)
-        wiki_text = re.sub(r'^### (.+)$', r'=== \1 ===', wiki_text, flags=re.MULTILINE)
-        wiki_text = re.sub(r'^#### (.+)$', r'==== \1 ====', wiki_text, flags=re.MULTILINE)
-        
-        # Bold: Convert **text** or __text__ to '''text'''
-        wiki_text = re.sub(r'\*\*(.+?)\*\*', r"'''\1'''", wiki_text)
-        wiki_text = re.sub(r'__(.+?)__', r"'''\1'''", wiki_text)
-        
-        # Italic: Convert *text* or _text_ to ''text''
-        wiki_text = re.sub(r'\*([^*]+?)\*', r"''\1''", wiki_text)
-        wiki_text = re.sub(r'_([^_]+?)_', r"''\1''", wiki_text)
-        
-        # Lists: Convert markdown lists to wiki lists
-        # Unordered lists: "- item" -> "* item"
-        wiki_text = re.sub(r'^- (.+)$', r'* \1', wiki_text, flags=re.MULTILINE)
-        
-        # Ordered lists: "1. item" -> "# item"
-        wiki_text = re.sub(r'^\d+\. (.+)$', r'# \1', wiki_text, flags=re.MULTILINE)
-        
-        # Links: Convert [text](url) to [url text]
-        wiki_text = re.sub(r'\[(.+?)\]\((.+?)\)', r'[\2 \1]', wiki_text)
-        
-        # Code blocks: Convert ```code``` to <syntaxhighlight>code</syntaxhighlight>
-        wiki_text = re.sub(r'```(.+?)```', r'<syntaxhighlight>\1</syntaxhighlight>', wiki_text, flags=re.DOTALL)
-        
-        # Inline code: Convert `code` to <code>code</code>
-        wiki_text = re.sub(r'`(.+?)`', r'<code>\1</code>', wiki_text)
-        
-        # Blockquotes: Convert > quote to <blockquote>quote</blockquote>
-        # First, group consecutive blockquote lines
-        blockquote_blocks = re.findall(r'((?:^> .+\n?)+)', wiki_text, flags=re.MULTILINE)
-        for block in blockquote_blocks:
-            # Remove the > prefix from each line and wrap in blockquote tags
-            cleaned_block = re.sub(r'^> (.+)$', r'\1', block, flags=re.MULTILINE).strip()
-            wiki_text = wiki_text.replace(block, f'<blockquote>{cleaned_block}</blockquote>\n\n')
-        
-        return wiki_text
-    except Exception as e:
-        logging.error(f"Error converting markdown to Wiki markup: {str(e)}")
-        return markdown_text  # Return original text if conversion fails
-
-def convert_existing_blogs(directory: str) -> None:
-    """
-    Convert all existing blog.txt files in the given directory to HTML and Wiki formats.
-    
-    Args:
-        directory: Directory containing blog text files
-    """
-    try:
-        # Create directory if it doesn't exist
-        os.makedirs(directory, exist_ok=True)
-    except Exception as e:
-        logging.error(f"Could not create or access directory {directory}: {str(e)}")
-        return
-    
-    if not os.path.isdir(directory):
-        logging.error(f"Invalid directory: {directory}")
-        return
-    
-    # Look for blog files (txt files that have "_blog" in their name)
-    blog_pattern = os.path.join(directory, "*_blog.txt")
-    blog_files = glob.glob(blog_pattern)
-    
-    if not blog_files:
-        logging.warning(f"No blog files found in directory: {directory}")
-        return
-    
-    logging.info(f"Found {len(blog_files)} blog files to convert")
-    converted_count = 0
-    
-    for blog_file in tqdm(blog_files, desc="Converting blogs"):
-        base_filename = os.path.splitext(blog_file)[0]  # Remove .txt extension
-        
-        # Define output paths
-        html_path = f"{base_filename}.html"
-        wiki_path = f"{base_filename}.wiki"
-        
-        try:
-            # Read the blog content
-            with open(blog_file, 'r', encoding='utf-8') as f:
-                blog_content = f.read()
-            
-            # Convert to HTML and save
-            html_content = convert_markdown_to_html(blog_content)
-            with open(html_path, "w", encoding="utf-8") as f:
-                f.write(html_content)
-                
-            # Convert to Wiki and save
-            wiki_content = convert_markdown_to_wiki(blog_content)
-            with open(wiki_path, "w", encoding="utf-8") as f:
-                f.write(wiki_content)
-            
-            logging.info(f"Converted {os.path.basename(blog_file)} to HTML and Wiki formats")
-            converted_count += 1
-            
-        except Exception as e:
-            logging.error(f"Error converting {blog_file}: {str(e)}")
-    
-    logging.info(f"Successfully converted {converted_count} out of {len(blog_files)} blog files")
-
-# ==================== TRANSCRIPTION FUNCTIONS ====================
-def is_cuda_available() -> bool:
-    """
-    Check if CUDA is available for GPU acceleration.
-    
-    Returns:
-        True if CUDA is available, False otherwise
-    """
-    try:
-        import torch
-        cuda_available = torch.cuda.is_available()
-        if cuda_available:
-            # Log CUDA device information for better diagnostics
-            device_count = torch.cuda.device_count()
-            device_name = torch.cuda.get_device_name(0) if device_count > 0 else "unknown"
-            logging.info(f"CUDA is available: {device_count} device(s) - {device_name}")
-        return cuda_available
-    except ImportError:
-        return False
-
-def setup_model(model_size: str = MODEL_SIZE) -> WhisperModel:
-    """
-    Initialize and return the Whisper model.
-    Automatically uses CUDA if available with optimized settings.
-    
-    Args:
-        model_size: The model size to use
-    
-    Returns:
-        The initialized WhisperModel
-    """
-    try:
-        import torch
-        
-        # Log system information
-        logging.info("=== System Information ===")
-        logging.info(f"Python version: {sys.version}")
-        logging.info(f"PyTorch version: {torch.__version__}")
-        logging.info(f"CUDA available: {torch.cuda.is_available()}")
-        
-        if torch.cuda.is_available():
-            logging.info(f"CUDA version: {torch.version.cuda}")
-            logging.info(f"cuDNN version: {torch.backends.cudnn.version()}")
-            logging.info(f"GPU device count: {torch.cuda.device_count()}")
-            
-            for i in range(torch.cuda.device_count()):
-                props = torch.cuda.get_device_properties(i)
-                logging.info(f"GPU {i}: {props.name}")
-                logging.info(f"  Total memory: {props.total_memory / (1024**3):.2f} GB")
-                logging.info(f"  CUDA capability: {props.major}.{props.minor}")
-                logging.info(f"  Multi-processor count: {props.multi_processor_count}")
-            
-            # Optimize CUDA settings
-            torch.cuda.empty_cache()
-            torch.backends.cudnn.benchmark = True
-            torch.backends.cudnn.deterministic = False
-            
-            # Set number of workers based on GPU memory
-            gpu_mem = torch.cuda.get_device_properties(0).total_memory / (1024 ** 3)  # Convert to GB
-            if gpu_mem >= 16:  # High-end GPU
-                num_workers = 4
-            elif gpu_mem >= 8:  # Mid-range GPU
-                num_workers = 2
-            else:  # Lower-end GPU
-                num_workers = 1
-                
-            logging.info(f"Using {num_workers} workers for data loading")
-            device = "cuda"
-            compute_type = "float16"
-        else:
-            device = "cpu"
-            num_workers = 8  # More workers for CPU
-            compute_type = "int8"
-            logging.warning("CUDA is not available - using CPU which may be significantly slower")
-        
-        # Create model with optimized parameters
-        model = WhisperModel(
-            model_size, 
-            device=device, 
-            compute_type=compute_type,
-            cpu_threads=8 if device == "cpu" else 0,
-            num_workers=num_workers
-        )
-        
-        logging.info(f"Initialized {model_size} model on {device} with compute type {compute_type}")
-        return model
-        
-    except Exception as e:
-        logging.error(f"Error setting up model: {str(e)}")
-        # Fallback to CPU if CUDA setup fails
-        logging.warning("Falling back to CPU model")
-        return WhisperModel(
-            model_size,
-            device="cpu",
-            compute_type="int8",
-            cpu_threads=8,
-            num_workers=4
-        )
-
-def transcribe_audio(model: WhisperModel, audio_file: str) -> Tuple[List, object]:
-    """
-    Transcribe an audio file using the provided model with optimized settings.
-    
-    Args:
-        model: The WhisperModel to use
-        audio_file: Path to the audio file
-        
-    Returns:
-        Tuple of (segments, info)
-    """
-    logging.info(f"Transcribing {audio_file}...")
-    if USE_CUSTOM_VOCABULARY:
-        logging.info("Vocabulary corrections will be applied during transcription")
-    
-    # Monitor GPU memory before transcription if possible
-    try:
-        if model.device == "cuda":
-            import torch
-            before_mem = torch.cuda.memory_allocated() / (1024 ** 3)  # GB
-            logging.info(f"GPU memory in use before transcription: {before_mem:.2f} GB")
-    except Exception:
-        pass
-    
-    start_time = datetime.now()
-    
-    # Use optimized transcription parameters
-    result = model.transcribe(
-        audio_file,
-        beam_size=BEAM_SIZE,
-        best_of=5,         # Consider more candidates for better results
-        vad_filter=True,   # Voice activity detection to skip silence
-        vad_parameters={"min_silence_duration_ms": 500},  # Adjust silence detection
-        initial_prompt=None,  # Can set an initial prompt if needed for better context
-        condition_on_previous_text=True,  # Use previous text as context
-        temperature=[0.0, 0.2, 0.4, 0.6, 0.8, 1.0]  # Temperature fallback for difficult audio
-    )
-    
-    end_time = datetime.now()
-    duration = (end_time - start_time).total_seconds()
-    audio_duration = get_audio_duration(audio_file)
-    if audio_duration > 0:
-        speed_factor = audio_duration / duration
-        logging.info(f"Transcription completed in {duration:.2f} seconds (audio length: {audio_duration:.2f}s, {speed_factor:.2f}x real-time speed)")
-    else:
-        logging.info(f"Transcription completed in {duration:.2f} seconds")
-    
-    # Monitor GPU memory after transcription
-    try:
-        if model.device == "cuda":
-            import torch
-            after_mem = torch.cuda.memory_allocated() / (1024 ** 3)  # GB
-            logging.info(f"GPU memory in use after transcription: {after_mem:.2f} GB")
-            # Clear cache immediately after transcription to free memory
-            torch.cuda.empty_cache()
-    except Exception:
-        pass
-    
-    return result
-
-# New function to get audio duration for performance metrics
-def get_audio_duration(audio_file: str) -> float:
-    """
-    Get the duration of an audio file in seconds.
-    
-    Args:
-        audio_file: Path to the audio file
-        
-    Returns:
-        Duration in seconds or 0 if cannot be determined
-    """
-    try:
-        import librosa
-        duration = librosa.get_duration(path=audio_file)
-        return duration
-    except Exception:
-        # Try with pydub if librosa fails
-        try:
-            from pydub import AudioSegment
-            audio = AudioSegment.from_file(audio_file)
-            return len(audio) / 1000.0  # Convert ms to seconds
-        except Exception:
-            return 0  # Return 0 if duration cannot be determined
-
-def cleanup_resources(model=None):
-    """
-    Clean up resources after processing.
-    More aggressive memory cleanup to prevent memory leaks.
-    
-    Args:
-        model: The WhisperModel instance to clean up (if provided)
-    """
-    try:
-        # Clear CUDA cache if available
-        import torch
-        if torch.cuda.is_available():
-            # More aggressive memory cleanup
-            torch.cuda.empty_cache()
-            torch.cuda.synchronize()  # Make sure all CUDA operations are complete
-            logging.info("CUDA cache cleared")
-            
-            # Log memory stats
-            allocated = torch.cuda.memory_allocated() / (1024 ** 3)  # GB
-            reserved = torch.cuda.memory_reserved() / (1024 ** 3)    # GB
-            logging.info(f"GPU memory: allocated={allocated:.2f}GB, reserved={reserved:.2f}GB")
-        
-        # Delete model to free up memory
-        if model is not None:
-            del model
-            logging.info("Model resources released")
-        
-        # Force garbage collection
-        import gc
-        gc.collect()
-    except Exception as e:
-        logging.warning(f"Error during resource cleanup: {str(e)}")
-
-def create_output_paths(input_file: str) -> Tuple[str, str, str]:
-    """
-    Create output file paths based on the input filename.
-    
-    Args:
-        input_file: Path to the input audio file
-        
-    Returns:
-        Tuple of (plain_text_path, timestamped_path, summary_path)   
-    """
-    base = os.path.splitext(input_file)[0]
-    return (
-        f"{base}.txt",             # Without timestamps
-        f"{base}_ts.txt",          # With timestamps
-        f"{base}_summary.txt",     # For summary
-    )
-
-def write_transcript_files(segments, output_file: str, output_file_timestamped: str, speaker_segments: Optional[List[Dict]] = None) -> str:
-    """
-    Write transcript files and return the full transcript.
-    
-    Args:
-        segments: Transcript segments from WhisperModel
-        output_file: Path for plain text output
-        output_file_timestamped: Path for timestamped output
-        speaker_segments: Optional speaker diarization segments
-        
-    Returns:
-        The full transcript as a string
-    """
-    full_transcript = ""
-    
-    with open(output_file, "w", encoding="utf-8") as f_plain, open(output_file_timestamped, "w", encoding="utf-8") as f_timestamped:
-        
-        for segment in segments:
-            # Get the original segment text
-            segment_text = segment.text
-            
-            # Apply vocabulary corrections to segment text if enabled
-            if USE_CUSTOM_VOCABULARY:
-                segment_text = apply_vocabulary_corrections(segment_text, load_vocabulary_mappings(VOCABULARY_FILE))
-            
-            # Find matching speaker if available
-            speaker_label = ""
-            if speaker_segments:
-                for speaker_segment in speaker_segments:
-                    if (segment.start >= speaker_segment['start'] and 
-                        segment.end <= speaker_segment['end']):
-                        speaker_label = f"[{speaker_segment['speaker']}] "
-                        break
-            
-            # Store for OpenAI processing
-            full_transcript += speaker_label + segment_text + "\n"
-            
-            # Write to plain text file without timestamps
-            f_plain.write(speaker_label + segment_text + "\n")
-            
-            # Write to timestamped file with timestamps
-            f_timestamped.write("[%.2fs -> %.2fs] %s%s\n" % (segment.start, segment.end, speaker_label, segment_text))
-            
-            # Print to console with timestamps - handle potential encoding errors
-            try:
-                logging.info("[%.2fs -> %.2fs] %s%s", segment.start, segment.end, speaker_label, segment_text)
-            except UnicodeEncodeError:
-                # Fall back to ASCII if Unicode fails
-                safe_text = segment_text.encode('ascii', 'replace').decode('ascii')
-                logging.info("[%.2fs -> %.2fs] %s%s", segment.start, segment.end, speaker_label, safe_text)
-    
-    logging.info(f"Transcription saved to: {output_file}")
-    logging.info(f"Timestamped transcription saved to: {output_file_timestamped}")
-    
-    # Apply a final pass of vocabulary corrections to the full transcript if enabled
-    # This catches any patterns that might span across segments
-    if USE_CUSTOM_VOCABULARY:
-        original_transcript = full_transcript
-        full_transcript = apply_vocabulary_corrections(full_transcript, load_vocabulary_mappings(VOCABULARY_FILE))
-        
-        # If the final pass made additional corrections, update the saved files
-        if full_transcript != original_transcript:
-            logging.info("Applying final vocabulary correction pass to catch cross-segment patterns")
-            with open(output_file, "w", encoding="utf-8") as f_plain:
-                f_plain.write(full_transcript)
-            
-            # Simplification: regenerate timestamped file from full transcript
-            # This is imperfect since timestamps might not perfectly align with corrected text
-            lines = full_transcript.split('\n')
-            timestamped_lines = []
-            with open(output_file_timestamped, "r", encoding="utf-8") as f_original:
-                original_timestamped = f_original.readlines()
-                
-            # Try to maintain timestamp information while updating text
-            for i, line in enumerate(lines):
-                if i < len(original_timestamped):
-                    ts_line = original_timestamped[i]
-                    ts_match = re.match(r'^\[\s*(\d+\.\d+)s\s*->\s*(\d+\.\d+)s\s*\]', ts_line)
-                    if ts_match and line.strip():
-                        start, end = ts_match.groups()
-                        timestamped_lines.append(f"[{start}s -> {end}s] {line}")
-                    elif line.strip():
-                        timestamped_lines.append(line)
-            
-            with open(output_file_timestamped, "w", encoding="utf-8") as f_updated:
-                f_updated.write('\n'.join(timestamped_lines))
-    
-    return full_transcript
-
-def process_summary(full_transcript: str, output_summary_file: str, output_blog_file: Optional[str] = None) -> bool:
+def process_transcript_workflow(transcript: str, output_summary_file: str, output_blog_file: Optional[str] = None) -> bool:
     """
     Process the transcript to generate and save summary and blog.
     
     Args:
-        full_transcript: The complete transcript text
+        transcript: The complete transcript text
         output_summary_file: Path to save the summary
         output_blog_file: Path to save the blog
         
@@ -1287,7 +555,7 @@ def process_summary(full_transcript: str, output_summary_file: str, output_blog_
         Success status (True/False)
     """
     # Use the multi-step workflow
-    results = process_transcript_workflow(full_transcript)
+    results = process_transcript_workflow(transcript)
     
     if not results:
         logging.error("Failed to process transcript")
@@ -2172,12 +1440,15 @@ def process_all_episodes(feed_url: str, download_dir: str, **kwargs) -> None:
     cleanup_resources(model)
     logging.info("Completed processing all episodes")
 
-def perform_speaker_diarization(audio_file: str) -> Optional[List[Dict]]:
+def perform_speaker_diarization(audio_file: str, min_speakers: int = DIARIZATION_MIN_SPEAKERS, 
+                              max_speakers: int = DIARIZATION_MAX_SPEAKERS) -> Optional[List[Dict]]:
     """
     Perform speaker diarization on an audio file using pyannote.audio.
     
     Args:
         audio_file: Path to the audio file
+        min_speakers: Minimum number of speakers to identify
+        max_speakers: Maximum number of speakers to identify
         
     Returns:
         List of dictionaries containing speaker segments or None if failed
@@ -2185,48 +1456,188 @@ def perform_speaker_diarization(audio_file: str) -> Optional[List[Dict]]:
     try:
         from pyannote.audio import Pipeline
         
-        # Check if speaker diarization is enabled
-        if not USE_SPEAKER_DIARIZATION:
-            logging.info("Speaker diarization is disabled")
+        # Define cache directory for local models
+        cache_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models", "diarization")
+        os.makedirs(cache_dir, exist_ok=True)
+        
+        # Get HuggingFace token from .env - don't ask if not found since we first want to check .env
+        huggingface_token = os.environ.get('HUGGINGFACE_TOKEN')
+        
+        if not huggingface_token:
+            logging.warning("HuggingFace token niet gevonden in .env bestand.")
+            # Nu pas vragen om token als deze niet in .env staat
+            huggingface_token = get_huggingface_token(ask_if_missing=True)
+            
+        if not huggingface_token:
+            logging.warning("Geen HuggingFace token beschikbaar. Speaker diarization heeft een token nodig.")
+            logging.warning("Je kunt deze later instellen via de HUGGINGFACE_TOKEN environment variabele of in het .env bestand")
+            return None
+        
+        # First try to use a local cached model if available
+        pipeline = None
+        model_to_use = DIARIZATION_MODEL
+        local_model_path = os.path.join(cache_dir, model_to_use.replace("/", "_"))
+        
+        # Try loading from local cache first
+        if os.path.exists(local_model_path):
+            try:
+                logging.info(f"Proberen om diarization model te laden van lokale cache: {local_model_path}")
+                pipeline = Pipeline.from_pretrained(
+                    local_model_path,
+                    use_auth_token=huggingface_token
+                )
+                logging.info(f"Diarization model succesvol geladen van lokale cache")
+            except Exception as e:
+                logging.warning(f"Kon model niet laden van lokale cache: {str(e)}")
+                pipeline = None
+        
+        # If local loading failed, try downloading the model and save it
+        if pipeline is None:
+            try:
+                logging.info(f"Diarization model downloaden: {DIARIZATION_MODEL}")
+                # Probeer beide parameter namen voor token authenticatie
+                try:
+                    pipeline = Pipeline.from_pretrained(
+                        DIARIZATION_MODEL,
+                        use_auth_token=huggingface_token,
+                        cache_dir=cache_dir
+                    )
+                except TypeError:
+                    # Probeer met 'token' parameter als 'use_auth_token' niet werkt (nieuwere versies)
+                    logging.info("Proberen met 'token' parameter in plaats van 'use_auth_token'")
+                    pipeline = Pipeline.from_pretrained(
+                        DIARIZATION_MODEL,
+                        token=huggingface_token,
+                        cache_dir=cache_dir
+                    )
+                
+                # Save the model locally for future use
+                try:
+                    logging.info(f"Model opslaan in lokale cache: {local_model_path}")
+                    pipeline.to_disk(local_model_path)
+                    logging.info(f"Model succesvol opgeslagen in: {local_model_path}")
+                except Exception as save_error:
+                    logging.warning(f"Kon model niet opslaan naar schijf: {str(save_error)}")
+                    
+            except Exception as primary_error:
+                error_message = str(primary_error)
+                logging.warning(f"Kon primaire diarization model niet laden: {error_message}")
+                
+                # If primary model fails, try the alternative model
+                alternative_model_path = os.path.join(cache_dir, DIARIZATION_ALTERNATIVE_MODEL.replace("/", "_"))
+                
+                # Try loading alternative from local cache first
+                if os.path.exists(alternative_model_path):
+                    try:
+                        logging.info(f"Proberen om alternatief model te laden van lokale cache: {alternative_model_path}")
+                        pipeline = Pipeline.from_pretrained(
+                            alternative_model_path,
+                            use_auth_token=huggingface_token
+                        )
+                        model_to_use = DIARIZATION_ALTERNATIVE_MODEL
+                        logging.info(f"Alternatief model succesvol geladen van cache.")
+                    except Exception as e:
+                        logging.warning(f"Kon alternatief model niet laden van cache: {str(e)}")
+                        pipeline = None
+                
+                # If local loading failed, try downloading the alternative model
+                if pipeline is None:
+                    try:
+                        logging.info(f"Alternatief diarization model downloaden: {DIARIZATION_ALTERNATIVE_MODEL}")
+                        # Probeer beide parameter namen voor token authenticatie
+                        try:
+                            pipeline = Pipeline.from_pretrained(
+                                DIARIZATION_ALTERNATIVE_MODEL,
+                                use_auth_token=huggingface_token,
+                                cache_dir=cache_dir
+                            )
+                        except TypeError:
+                            # Probeer met 'token' parameter als 'use_auth_token' niet werkt
+                            pipeline = Pipeline.from_pretrained(
+                                DIARIZATION_ALTERNATIVE_MODEL,
+                                token=huggingface_token,
+                                cache_dir=cache_dir
+                            )
+                            
+                        model_to_use = DIARIZATION_ALTERNATIVE_MODEL
+                        logging.info(f"Alternatief model succesvol geladen.")
+                        
+                        # Save the alternative model locally
+                        try:
+                            logging.info(f"Alternatief model opslaan in lokale cache: {alternative_model_path}")
+                            pipeline.to_disk(alternative_model_path)
+                            logging.info(f"Alternatief model succesvol opgeslagen")
+                        except Exception as save_error:
+                            logging.warning(f"Kon alternatief model niet opslaan naar schijf: {str(save_error)}")
+                            
+                    except Exception as alt_error:
+                        alt_error_message = str(alt_error)
+                        logging.error(f"Kon alternatief model niet laden: {alt_error_message}")
+                        
+                        if "unauthorized" in error_message.lower() or "access token" in error_message.lower() or "gated" in error_message.lower():
+                            logging.error(f"Toegangsfout voor diarization modellen. Controleer:")
+                            logging.error(f"1. Of je HUGGINGFACE_TOKEN geldig is")
+                            logging.error(f"2. Bezoek https://hf.co/{DIARIZATION_MODEL} en accepteer de gebruiksvoorwaarden")
+                            logging.error(f"3. Bezoek ook https://hf.co/{DIARIZATION_ALTERNATIVE_MODEL} en accepteer die voorwaarden")
+                            logging.error(f"4. Zorg dat je account toegang heeft tot deze modellen")
+                        else:
+                            logging.error(f"Fout bij laden van diarization modellen. Primaire fout: {error_message}")
+                            logging.error(f"Alternatieve fout: {alt_error_message}")
+                        return None
+        
+        if not pipeline:
+            logging.error("Kon geen diarization pipeline initialiseren.")
             return None
             
-        # Check for HuggingFace token
-        if not os.environ.get("HUGGINGFACE_TOKEN"):
-            logging.warning("HUGGINGFACE_TOKEN not found. Speaker diarization requires a HuggingFace token.")
-            return None
-        
-        # Initialize the pipeline
-        pipeline = Pipeline.from_pretrained(
-            DIARIZATION_MODEL,
-            use_auth_token=os.environ.get("HUGGINGFACE_TOKEN")
-        )
-        
         # Run diarization with configured parameters
+        logging.info(f"Diarization uitvoeren met model {model_to_use}, min_speakers={min_speakers}, max_speakers={max_speakers}")
+        
+        # Voeg extra logging toe voor beter voortgangsinzicht
+        start_time = time.time()
+        print(f"\nStart speaker diarization op {os.path.basename(audio_file)}...")
+        print(f"Dit kan enkele minuten duren afhankelijk van de lengte van het audiobestand.\n")
+        
+        # Voer diarisatie uit
         diarization = pipeline(
             audio_file,
-            min_speakers=DIARIZATION_MIN_SPEAKERS,
-            max_speakers=DIARIZATION_MAX_SPEAKERS
+            min_speakers=min_speakers,
+            max_speakers=max_speakers
         )
         
+        # Bereken en toon verwerkingstijd
+        elapsed_time = time.time() - start_time
+        print(f"\nDiarisatie voltooid in {elapsed_time:.1f} seconden.")
+        
         # Convert to list of segments
+        print("Verwerken van diarisatie resultaten...")
         segments = []
-        for turn, _, speaker in diarization.itertracks(yield_label=True):
+        
+        # Maak een lijst van alle tracks en toon voortgang met tqdm
+        all_tracks = list(diarization.itertracks(yield_label=True))
+        unique_speakers = set()
+        
+        for turn, _, speaker in tqdm(all_tracks, desc="Segmenten verwerken", unit="segment"):
             segments.append({
                 'start': turn.start,
                 'end': turn.end,
                 'speaker': speaker
             })
-            
+            unique_speakers.add(speaker)
+        
+        logging.info(f"Diarization voltooid met {len(segments)} segmenten en {len(unique_speakers)} sprekers")
+        print(f"Diarisatie geïdentificeerd: {len(unique_speakers)} unieke sprekers in {len(segments)} segmenten")
         return segments
         
     except Exception as e:
-        logging.error(f"Error performing speaker diarization: {str(e)}")
+        logging.error(f"Fout bij uitvoeren speaker diarization: {str(e)}")
         return None
 
 def main(input_file: str, model_size: Optional[str] = None, output_dir: Optional[str] = None, 
          skip_summary: bool = False, force: bool = False, is_batch_mode: bool = False,
          regenerate_summary_only: bool = False, skip_vocabulary: bool = False,
-         model: Optional[WhisperModel] = None) -> None:
+         model: Optional[WhisperModel] = None, use_diarization: Optional[bool] = None,
+         min_speakers: Optional[int] = None, max_speakers: Optional[int] = None,
+         diarization_model: Optional[str] = None) -> None:
     """
     Main function to process an audio file.
     
@@ -2240,6 +1651,10 @@ def main(input_file: str, model_size: Optional[str] = None, output_dir: Optional
         regenerate_summary_only: Flag to only regenerate summary from existing transcript file
         skip_vocabulary: Flag to skip vocabulary corrections
         model: Optional pre-initialized WhisperModel to use (to avoid reloading)
+        use_diarization: Override config setting for speaker diarization
+        min_speakers: Minimum number of speakers for diarization
+        max_speakers: Maximum number of speakers for diarization
+        diarization_model: Specific diarization model to use
     """
     try:
         # Process for summary regeneration
@@ -2298,9 +1713,31 @@ def main(input_file: str, model_size: Optional[str] = None, output_dir: Optional
         
         # Perform speaker diarization if enabled
         speaker_segments = None
-        if USE_SPEAKER_DIARIZATION:
+        # Determine if diarization should be used (CLI argument overrides config)
+        should_use_diarization = use_diarization if use_diarization is not None else USE_SPEAKER_DIARIZATION
+        
+        if should_use_diarization:
             logging.info("Performing speaker diarization...")
-            speaker_segments = perform_speaker_diarization(input_file)
+            
+            # Temporarily override the global DIARIZATION_MODEL if specified
+            original_model = None
+            if diarization_model:
+                global DIARIZATION_MODEL  # Declare global before using it
+                original_model = DIARIZATION_MODEL
+                DIARIZATION_MODEL = diarization_model
+                logging.info(f"Using custom diarization model: {DIARIZATION_MODEL}")
+            
+            # Perform diarization
+            speaker_segments = perform_speaker_diarization(
+                input_file, 
+                min_speakers=min_speakers or DIARIZATION_MIN_SPEAKERS,
+                max_speakers=max_speakers or DIARIZATION_MAX_SPEAKERS
+            )
+            
+            # Restore original model name if it was changed
+            if original_model:
+                DIARIZATION_MODEL = original_model
+            
             if speaker_segments:
                 logging.info(f"Identified {len(set(s['speaker'] for s in speaker_segments))} unique speakers")
             else:
@@ -2333,27 +1770,23 @@ def main(input_file: str, model_size: Optional[str] = None, output_dir: Optional
 
 def process_batch(input_pattern: str, **kwargs) -> None:
     """
-    Process multiple files matching the given pattern.
+    Process multiple files matching a glob pattern.
     
     Args:
-        input_pattern: Glob pattern for input files
+        input_pattern: Glob pattern to match files
         **kwargs: Additional arguments to pass to main()
     """
     files = glob.glob(input_pattern)
-    if not files:
-        logging.warning(f"No files found matching pattern: {input_pattern}")
-        return
+    logging.info(f"Found {len(files)} files matching pattern: {input_pattern}")
     
-    logging.info(f"Found {len(files)} files to process")
-    model = setup_model(kwargs.get('model_size') or MODEL_SIZE)
-    for file in tqdm(files, desc="Processing files"):
-        logging.info(f"Processing file: {file}")
-        # Pass the model instance to avoid reloading for each file
-        kwargs_with_model = dict(kwargs)
-        kwargs_with_model['model'] = model
-        main(file, is_batch_mode=True, **kwargs_with_model)
-        
-    # Clean up after processing all files
+    model = setup_model(kwargs.get('model_size', MODEL_SIZE))
+    
+    for file in files:
+        try:
+            main(file, model=model, is_batch_mode=True, **kwargs)
+        except Exception as e:
+            logging.error(f"Error processing {file}: {str(e)}")
+            
     cleanup_resources(model)
 
 def cleanup_resources(model=None):
@@ -2384,25 +1817,262 @@ def cleanup_resources(model=None):
 
 def process_all_mp3s(directory: str, **kwargs) -> None:
     """
-    Process all MP3 files in the given directory.
+    Process all MP3 files in a directory.
     
     Args:
-        directory: Directory containing MP3 files
+        directory: Directory to search for MP3 files
         **kwargs: Additional arguments to pass to main()
     """
     if not os.path.isdir(directory):
-        directory = os.path.dirname(directory) or '.'
-    mp3_pattern = os.path.join(directory, "*.mp3")
-    files = glob.glob(mp3_pattern)
-    
-    if not files:
-        logging.warning(f"No MP3 files found in directory: {directory}")
+        logging.error(f"Directory does not exist: {directory}")
         return
     
-    logging.info(f"Found {len(files)} MP3 files to process")
-    for file in tqdm(files, desc="Processing MP3 files"):
-        logging.info(f"Processing file: {file}")
-        main(file, is_batch_mode=True, **kwargs)
+    pattern = os.path.join(directory, "**", "*.mp3")
+    files = glob.glob(pattern, recursive=True)
+    logging.info(f"Found {len(files)} MP3 files in directory: {directory}")
+    
+    model = setup_model(kwargs.get('model_size', MODEL_SIZE))
+    
+    for file in files:
+        try:
+            main(file, model=model, is_batch_mode=True, **kwargs)
+        except Exception as e:
+            logging.error(f"Error processing {file}: {str(e)}")
+            
+    cleanup_resources(model)
+
+# ==================== TRANSCRIPTION FUNCTIONS ====================
+def setup_model(model_size: str) -> WhisperModel:
+    """
+    Set up the Whisper model with the specified size.
+    
+    Args:
+        model_size: Size of the model to use ('tiny', 'base', 'small', 'medium', 'large', 'large-v2', 'large-v3')
+        
+    Returns:
+        Initialized WhisperModel
+    """
+    logging.info(f"Loading Whisper model: {model_size}")
+    try:
+        # Check if CUDA is available
+        cuda_available = torch.cuda.is_available()
+        if cuda_available:
+            logging.info(f"CUDA is available, using device: {DEVICE}")
+            logging.info(f"GPU: {torch.cuda.get_device_name(0)}")
+        else:
+            logging.info("CUDA is not available, using CPU")
+        
+        # Initialize the model with the specified parameters
+        model = WhisperModel(
+            model_size, 
+            device=DEVICE, 
+            compute_type=COMPUTE_TYPE,
+            download_root=os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
+        )
+        logging.info(f"Successfully loaded {model_size} model")
+        return model
+    except Exception as e:
+        logging.error(f"Error loading Whisper model: {str(e)}")
+        if "CUDA" in str(e) or "GPU" in str(e) or "NVIDIA" in str(e):
+            logging.error("GPU error detected. Try setting WHISPER_DEVICE=cpu in .env file")
+        raise
+
+def get_speaker_for_segment(timestamp: float, speaker_segments: List[Dict]) -> Optional[str]:
+    """
+    Find the speaker for a given timestamp from diarization results.
+    
+    Args:
+        timestamp: The timestamp to find the speaker for
+        speaker_segments: List of speaker segments from diarization
+        
+    Returns:
+        Speaker label or None if no match found
+    """
+    if not speaker_segments:
+        return None
+        
+    for segment in speaker_segments:
+        if segment['start'] <= timestamp <= segment['end']:
+            return segment['speaker']
+    
+    return None
+
+def transcribe_audio(model: WhisperModel, audio_file: str) -> Tuple[List, object]:
+    """
+    Transcribe audio file using the Whisper model.
+    
+    Args:
+        model: Initialized WhisperModel instance
+        audio_file: Path to the audio file to transcribe
+        
+    Returns:
+        Tuple of (segments, info)
+    """
+    logging.info(f"Transcribing audio file: {audio_file}")
+    print(f"\nStart transcriptie van {os.path.basename(audio_file)}...")
+    start_time = time.time()
+    
+    # Load custom vocabulary if enabled
+    word_list = None
+    if USE_CUSTOM_VOCABULARY and os.path.exists(VOCABULARY_FILE):
+        try:
+            with open(VOCABULARY_FILE, 'r', encoding='utf-8') as f:
+                vocabulary = json.load(f)
+            word_list = vocabulary.get('words', [])
+            if word_list:
+                logging.info(f"Loaded {len(word_list)} custom vocabulary words")
+                print(f"Aangepaste woordenlijst geladen met {len(word_list)} woorden")
+        except Exception as e:
+            logging.error(f"Error loading vocabulary: {str(e)}")
+    
+    # Maak basic transcriptie parameters
+    transcription_params = {
+        'beam_size': BEAM_SIZE,
+        'word_timestamps': True,  # Enable word timestamps for better alignment with diarization
+        'vad_filter': True,       # Filter out non-speech parts
+        'vad_parameters': dict(min_silence_duration_ms=500),  # Configure VAD for better accuracy
+        'initial_prompt': "This is a podcast transcription.",
+        'condition_on_previous_text': True,
+    }
+    
+    # Voeg word_list alleen toe als deze is gedefinieerd en niet leeg is
+    if word_list:
+        try:
+            # Probeer met word_list
+            print("Transcriptie uitvoeren met aangepaste woordenlijst...")
+            segments, info = model.transcribe(
+                audio_file,
+                **transcription_params,
+                word_list=word_list
+            )
+        except TypeError as e:
+            # Als word_list niet wordt ondersteund, probeer zonder
+            logging.warning(f"word_list parameter niet ondersteund in deze versie van faster_whisper: {e}")
+            logging.info("Transcriptie uitvoeren zonder aangepaste woordenlijst")
+            print("word_list niet ondersteund, transcriptie uitvoeren zonder aangepaste woordenlijst...")
+            segments, info = model.transcribe(
+                audio_file, 
+                **transcription_params
+            )
+    else:
+        # Als er geen word_list is, gebruik de standaard parameters
+        print("Transcriptie uitvoeren...")
+        segments, info = model.transcribe(
+            audio_file,
+            **transcription_params
+        )
+    
+    # Convert generator to list for multiple iterations
+    print("Transcriptie resultaten verwerken...")
+    segments_list = list(segments)
+    
+    # Bereken en toon verwerkingstijd
+    elapsed_time = time.time() - start_time
+    print(f"\nTranscriptie voltooid in {elapsed_time:.1f} seconden.")
+    print(f"Taal gedetecteerd: {info.language} (waarschijnlijkheid: {info.language_probability:.2f})")
+    print(f"Aantal segmenten: {len(segments_list)}")
+    
+    logging.info(f"Transcription complete: {len(segments_list)} segments")
+    return segments_list, info
+
+def write_transcript_files(segments: List, output_file: str, output_file_timestamped: str, 
+                          speaker_segments: Optional[List[Dict]] = None) -> str:
+    """
+    Write transcript files with and without timestamps, integrating speaker info.
+    
+    Args:
+        segments: List of transcription segments from Whisper
+        output_file: Path to save the clean transcript
+        output_file_timestamped: Path to save the timestamped transcript
+        speaker_segments: Optional list of speaker segments from diarization
+        
+    Returns:
+        Full transcript text
+    """
+    try:
+        # Prepare for writing the transcripts
+        full_transcript = []
+        timestamped_transcript = []
+        
+        # Track current speaker to avoid repeating speaker tags
+        current_speaker = None
+        
+        print(f"\nTranscriptie bestanden aanmaken...")
+        print(f"- Schoon transcript: {os.path.basename(output_file)}")
+        print(f"- Tijdgemarkeerd transcript: {os.path.basename(output_file_timestamped)}")
+        
+        # Process each segment from Whisper
+        for i, segment in enumerate(tqdm(segments, desc="Transcriptie verwerken", unit="segment")):
+            start = segment.start
+            end = segment.end
+            text = segment.text.strip()
+            
+            if not text:  # Skip empty segments
+                continue
+            
+            # Format timestamp for the timestamped version
+            timestamp = format_timestamp(start, end)
+            
+            # Get speaker info if available
+            speaker_info = ""
+            speaker_prefix = ""
+            if speaker_segments:
+                middle_time = (start + end) / 2  # Use middle of segment to determine speaker
+                speaker = get_speaker_for_segment(middle_time, speaker_segments)
+                
+                if speaker and speaker != current_speaker:
+                    speaker_info = f"[{speaker}] "
+                    speaker_prefix = f"[{speaker}] "
+                    current_speaker = speaker
+            
+            # Add to transcript collections
+            clean_line = f"{speaker_prefix}{text}"
+            timestamped_line = f"{timestamp} {speaker_info}{text}"
+            
+            full_transcript.append(clean_line)
+            timestamped_transcript.append(timestamped_line)
+        
+        # Join all lines
+        full_text = "\n".join(full_transcript)
+        timestamped_text = "\n".join(timestamped_transcript)
+        
+        # Write to files
+        with open(output_file, 'w', encoding='utf-8') as f:
+            f.write(full_text)
+        
+        with open(output_file_timestamped, 'w', encoding='utf-8') as f:
+            f.write(timestamped_text)
+            
+        print(f"Transcriptie bestanden succesvol aangemaakt:")
+        print(f"- {output_file}")
+        print(f"- {output_file_timestamped}")
+        
+        return full_text
+    except Exception as e:
+        logging.error(f"Error writing transcript files: {str(e)}")
+        return ""
+
+def format_timestamp(start: float, end: Optional[float] = None) -> str:
+    """
+    Format a timestamp in seconds to HH:MM:SS format.
+    
+    Args:
+        start: Start timestamp in seconds
+        end: Optional end timestamp in seconds
+        
+    Returns:
+        Formatted timestamp string
+    """
+    def _format_single(seconds):
+        hours = int(seconds // 3600)
+        minutes = int((seconds % 3600) // 60)
+        seconds = seconds % 60
+        return f"{hours:02d}:{minutes:02d}:{seconds:05.2f}"
+    
+    if end is None:
+        return _format_single(start)
+    else:
+        return f"[{_format_single(start)} --> {_format_single(end)}]"
 
 # ==================== ENTRY POINT ====================
 if __name__ == "__main__":
@@ -2447,6 +2117,20 @@ if __name__ == "__main__":
     parser.add_argument('--convert-blogs', '-C', action='store_true',
                        help='Convert existing blog text files to HTML and Wiki formats')
     
+    # Add speaker diarization arguments
+    parser.add_argument('--diarize', action='store_true',
+                       help='Enable speaker diarization (override config setting)')
+    parser.add_argument('--no-diarize', action='store_true',
+                       help='Disable speaker diarization (override config setting)')
+    parser.add_argument('--min-speakers', type=int,
+                       help=f'Minimum number of speakers for diarization (default: {DIARIZATION_MIN_SPEAKERS})')
+    parser.add_argument('--max-speakers', type=int,
+                       help=f'Maximum number of speakers for diarization (default: {DIARIZATION_MAX_SPEAKERS})')
+    parser.add_argument('--diarization-model', 
+                       help=f'Diarization model to use (default: {DIARIZATION_MODEL}, alt: {DIARIZATION_ALTERNATIVE_MODEL})')
+    parser.add_argument('--huggingface-token', type=str,
+                       help='Set HuggingFace API token for speaker diarization')
+    
     args = parser.parse_args()
     
     logging.info(f"WHYcast Transcribe {VERSION} starting up")
@@ -2454,6 +2138,11 @@ if __name__ == "__main__":
     # Set logging level based on verbosity
     if args.verbose:
         logging.getLogger().setLevel(logging.DEBUG)
+    
+    # Set HuggingFace token if provided
+    if args.huggingface_token:
+        set_huggingface_token(args.huggingface_token)
+        logging.info("HuggingFace token set from command line argument")
     
     # Check if we should convert blogs
     if args.convert_blogs:
@@ -2478,7 +2167,9 @@ if __name__ == "__main__":
         logging.info(f"Processing all episodes from {feed_url}")
         process_all_episodes(feed_url, download_dir, model_size=args.model, 
                            output_dir=args.output_dir, skip_summary=args.skip_summary, 
-                           force=args.force)
+                           force=args.force, use_diarization=args.diarize if args.diarize else None if not args.no_diarize else False,
+                           min_speakers=args.min_speakers, max_speakers=args.max_speakers,
+                           diarization_model=args.diarization_model)
         sys.exit(0)
     
     # Determine if we should check the podcast feed for latest episode (original behavior)
@@ -2500,7 +2191,10 @@ if __name__ == "__main__":
         if episode_file:
             logging.info(f"Processing newly downloaded episode: {episode_file}")
             main(episode_file, model_size=args.model, output_dir=args.output_dir, 
-                 skip_summary=args.skip_summary, force=args.force)
+                 skip_summary=args.skip_summary, force=args.force,
+                 use_diarization=args.diarize if args.diarize else None if not args.no_diarize else False,
+                 min_speakers=args.min_speakers, max_speakers=args.max_speakers,
+                 diarization_model=args.diarization_model)
             sys.exit(0)
         else:
             logging.info("No new episode to download or process")
@@ -2547,7 +2241,10 @@ if __name__ == "__main__":
             logging.error(f"Input file does not exist: {args.input}")
             sys.exit(1)
         else:
-            main(args.input, regenerate_summary_only=True, skip_vocabulary=args.skip_vocabulary)
+            main(args.input, regenerate_summary_only=True, skip_vocabulary=args.skip_vocabulary,
+                use_diarization=args.diarize if args.diarize else None if not args.no_diarize else False,
+                min_speakers=args.min_speakers, max_speakers=args.max_speakers,
+                diarization_model=args.diarization_model)
     elif args.regenerate_full_workflow:
         if not args.input:
             logging.error("You must specify an input file or directory with --regenerate-full-workflow.")
@@ -2563,14 +2260,22 @@ if __name__ == "__main__":
         sys.exit(0)
     elif args.all_mp3s:
         process_all_mp3s(args.input, model_size=args.model, output_dir=args.output_dir, skip_summary=args.skip_summary,
-                         force=args.force, skip_vocabulary=args.skip_vocabulary)
+                         force=args.force, skip_vocabulary=args.skip_vocabulary,
+                         use_diarization=args.diarize if args.diarize else None if not args.no_diarize else False,
+                         min_speakers=args.min_speakers, max_speakers=args.max_speakers,
+                         diarization_model=args.diarization_model)
     elif args.batch:
         process_batch(args.input, model_size=args.model, output_dir=args.output_dir, skip_summary=args.skip_summary,
-                      force=args.force, skip_vocabulary=args.skip_vocabulary)
+                      force=args.force, skip_vocabulary=args.skip_vocabulary,
+                      use_diarization=args.diarize if args.diarize else None if not args.no_diarize else False,
+                      min_speakers=args.min_speakers, max_speakers=args.max_speakers,
+                      diarization_model=args.diarization_model)
     else:
         main(args.input, model_size=args.model, output_dir=args.output_dir, skip_summary=args.skip_summary,
-             force=args.force, regenerate_summary_only=args.regenerate_summary,
-             skip_vocabulary=args.skip_vocabulary)
+             force=args.force, skip_vocabulary=args.skip_vocabulary,
+             use_diarization=args.diarize if args.diarize else None if not args.no_diarize else False,
+             min_speakers=args.min_speakers, max_speakers=args.max_speakers,
+             diarization_model=args.diarization_model)
 
 print("=== CUDA Diagnostics ===")
 print(f"PyTorch version: {torch.__version__}")

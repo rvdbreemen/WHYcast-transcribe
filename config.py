@@ -2,6 +2,7 @@
 Configuration settings for the transcription system.
 """
 import os
+import logging
 
 # Version information
 VERSION = "0.0.9"
@@ -31,7 +32,9 @@ CHUNK_OVERLAP = int(os.environ.get("CHUNK_OVERLAP", "1000"))  # Overlap between 
 
 # Speaker diarization settings
 USE_SPEAKER_DIARIZATION = os.environ.get("USE_SPEAKER_DIARIZATION", "True").lower() in ("true", "1", "yes")
-DIARIZATION_MODEL = os.environ.get("DIARIZATION_MODEL", "pyannote/speaker-verification")
+DIARIZATION_MODEL = os.environ.get("DIARIZATION_MODEL", "pyannote/speaker-diarization-3.1")
+# Alternative model if the primary one is not available or fails
+DIARIZATION_ALTERNATIVE_MODEL = os.environ.get("DIARIZATION_ALTERNATIVE_MODEL", "pyannote/segmentation-3.0")
 DIARIZATION_MIN_SPEAKERS = int(os.environ.get("DIARIZATION_MIN_SPEAKERS", "1"))
 DIARIZATION_MAX_SPEAKERS = int(os.environ.get("DIARIZATION_MAX_SPEAKERS", "10"))
 
