@@ -25,13 +25,16 @@ Go beyond summarizing—pull out the contradictions, passions, and thought-provo
 **4. Highlight powerful quotes**  
 Select sharp, provocative lines from the speakers. Let the weight of key statements stand on their own.
 
-**5. Conclude with resonance**  
+**5. When mentioned, always add volunteer vacancy**  
+In each episode there is talk of volunteer vacancies. If it is mention, then make sure to write about this, with the "volunteer of the week" header. Do not double it.
+
+**6. Conclude with resonance**  
 Wrap with key takeaways and implications for hackers, digital activists, and the broader tech underground. End with a punch, a question, or a call to action.
 
-**6. Use the right tone**  
+**7. Use the right tone**  
 Smart, informal, and hacker-friendly. Avoid corporate tone. Use clear writing, dry humor, and subtle rebellion.
 
-**7. Add this media plug at the end**
+**8. Add this media plug at the end**
 
 ![Episode Cover](<insert episode image URL here>)
 

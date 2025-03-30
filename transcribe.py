@@ -1,35 +1,100 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+
 """
-WHYcast Transcribe - v0.0.6
+WHYcast Transcribe Tool
 
-A tool for transcribing audio files and generating summaries using OpenAI GPT models.
-Supports downloading the latest episode from podcast feeds.
-
-Copyright (c) 2025 Robert van den Breemen
-License: MIT (see LICENSE file for details)
+A tool for transcribing podcast episodes with optional speaker diarization,
+summarization, and blog post generation.
 """
 
 import os
 import sys
-import logging
-from typing import Tuple, List, Optional, Dict
-from dotenv import load_dotenv
-from tqdm import tqdm
-import glob
-import argparse
-import json
 import re
-from openai import OpenAI, BadRequestError
-from faster_whisper import WhisperModel
-import feedparser
-import requests
-import hashlib
-from urllib.parse import urlparse
+import glob
+import json
+import logging
+import argparse
+import time
 from datetime import datetime
+from typing import List, Dict, Tuple, Optional, Union, Any, Callable
+import warnings
+import requests
+import urllib.parse
 import markdown  # New import for markdown to HTML conversion
 import torch
+import torchaudio
 import time
+
+# Onderdruk specifieke waarschuwingen
+warnings.filterwarnings("ignore", message="The MPEG_LAYER_III subtype is unknown to TorchAudio")
+warnings.filterwarnings("ignore", message="The bits_per_sample of .mp3 is set to 0 by default")
+warnings.filterwarnings("ignore", message="PySoundFile failed")
+
+# Schakel TensorFloat-32 in voor betere prestaties op NVIDIA Ampere GPU's
+if torch.cuda.is_available():
+    # Controleer of we een Ampere of nieuwere GPU hebben
+    compute_capability = torch.cuda.get_device_capability(0)
+    if compute_capability[0] >= 8:  # Ampere heeft compute capability 8.0+
+        logging.info("TensorFloat-32 inschakelen voor betere prestaties op Ampere GPU")
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+
+# Load environment variables from .env file
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    logging.warning("python-dotenv not installed, environment variables must be set manually")
+
+# Import required optional modules
+try:
+    from faster_whisper import WhisperModel
+except ImportError:
+    logging.error("faster-whisper not installed. Use pip install faster-whisper")
+    sys.exit(1)
+
+try:
+    from openai import OpenAI
+    OPENAI_AVAILABLE = True
+except ImportError:
+    logging.warning("openai not installed. Summarization and blog generation will not be available.")
+    OPENAI_AVAILABLE = False
+
+try:
+    import feedparser
+    FEEDPARSER_AVAILABLE = True
+except ImportError:
+    logging.warning("feedparser not installed. RSS feed parsing will not be available.")
+    FEEDPARSER_AVAILABLE = False
+
+try:
+    from tqdm import tqdm
+    TQDM_AVAILABLE = True
+except ImportError:
+    logging.warning("tqdm not installed. Progress bars will not be available.")
+    TQDM_AVAILABLE = False
+    
+    # Simple fallback for tqdm if not available
+    class tqdm:
+        def __init__(self, iterable=None, **kwargs):
+            self.iterable = iterable
+            self.total = len(iterable) if iterable is not None else 0
+            self.n = 0
+            self.desc = kwargs.get('desc', '')
+            
+        def __iter__(self):
+            for obj in self.iterable:
+                yield obj
+                self.n += 1
+                if self.n % 10 == 0:
+                    print(f"{self.desc}: {self.n}/{self.total}")
+                    
+        def update(self, n=1):
+            self.n += n
+            
+        def close(self):
+            pass
 
 # Try to import configuration
 try:
@@ -51,14 +116,11 @@ except Exception as e:
     sys.stderr.write(f"Error in configuration: {str(e)}\n")
     sys.exit(1)
 
-# Load environment variables from .env file
-load_dotenv()
-
 # Set up logging to both console and file
 def setup_logging():
     log_format = '%(asctime)s - %(levelname)s - %(message)s'
     logger = logging.getLogger()
-    logger.setLevel(logging.INFO)
+    logger.setLevel(logging.INFO)  # Standaard niveau op INFO
     
     # Remove any existing handlers
     for handler in logger.handlers[:]:
@@ -68,6 +130,7 @@ def setup_logging():
     log_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'transcribe.log')
     file_handler = logging.FileHandler(log_file, encoding='utf-8')
     file_handler.setFormatter(logging.Formatter(log_format))
+    file_handler.setLevel(logging.INFO)  # Zet file handler op INFO niveau
     logger.addHandler(file_handler)
     
     # Console handler with proper Unicode handling
@@ -78,6 +141,7 @@ def setup_logging():
             # Use error handler that replaces problematic characters
             console_handler = logging.StreamHandler()
             console_handler.setFormatter(logging.Formatter(log_format))
+            console_handler.setLevel(logging.INFO)  # Zet console handler op INFO niveau
             console_handler.setStream(open(os.devnull, 'w', encoding='utf-8'))  # Dummy stream for initial setup
             
             # Custom StreamHandler that handles encoding errors
@@ -99,18 +163,28 @@ def setup_logging():
             # Use our custom handler
             console_handler = EncodingSafeStreamHandler(sys.stdout)
             console_handler.setFormatter(logging.Formatter(log_format))
+            console_handler.setLevel(logging.INFO)  # Zet custom handler op INFO niveau
         else:
             # On non-Windows platforms, standard handler usually works fine
             console_handler = logging.StreamHandler(sys.stdout)
             console_handler.setFormatter(logging.Formatter(log_format))
+            console_handler.setLevel(logging.INFO)  # Zet console handler op INFO niveau
             
         logger.addHandler(console_handler)
     except Exception as e:
         # Fallback to basic handler
         console_handler = logging.StreamHandler()
         console_handler.setFormatter(logging.Formatter(log_format))
+        console_handler.setLevel(logging.INFO)  # Zet fallback handler op INFO niveau
         logger.addHandler(console_handler)
         logger.warning(f"Could not set up optimal console logging: {e}")
+    
+    # Zet specifieke loggers die verbose kunnen zijn op WARNING niveau
+    logging.getLogger("urllib3").setLevel(logging.WARNING)
+    logging.getLogger("matplotlib").setLevel(logging.WARNING)
+    logging.getLogger("PIL").setLevel(logging.WARNING)
+    logging.getLogger("huggingface_hub").setLevel(logging.WARNING)
+    logging.getLogger("httpx").setLevel(logging.WARNING)
     
     return logger
 
@@ -1482,10 +1556,24 @@ def perform_speaker_diarization(audio_file: str, min_speakers: int = DIARIZATION
         if os.path.exists(local_model_path):
             try:
                 logging.info(f"Proberen om diarization model te laden van lokale cache: {local_model_path}")
-                pipeline = Pipeline.from_pretrained(
-                    local_model_path,
-                    use_auth_token=huggingface_token
-                )
+                # Probeer te laden met verschillende API-versies
+                try:
+                    # Nieuwste versie met token parameter
+                    pipeline = Pipeline.from_pretrained(
+                        local_model_path,
+                        token=huggingface_token
+                    )
+                except (TypeError, ValueError):
+                    try:
+                        # Oudere versie met use_auth_token parameter
+                        pipeline = Pipeline.from_pretrained(
+                            local_model_path,
+                            use_auth_token=huggingface_token
+                        )
+                    except (TypeError, ValueError):
+                        # Probeer zonder token (indien model lokaal al volledig beschikbaar is)
+                        pipeline = Pipeline.from_pretrained(local_model_path)
+                        
                 logging.info(f"Diarization model succesvol geladen van lokale cache")
             except Exception as e:
                 logging.warning(f"Kon model niet laden van lokale cache: {str(e)}")
@@ -1514,11 +1602,18 @@ def perform_speaker_diarization(audio_file: str, min_speakers: int = DIARIZATION
                 # Save the model locally for future use
                 try:
                     logging.info(f"Model opslaan in lokale cache: {local_model_path}")
-                    pipeline.to_disk(local_model_path)
+                    # Nieuwere versies gebruiken save_pretrained in plaats van to_disk
+                    if hasattr(pipeline, 'to_disk'):
+                        pipeline.to_disk(local_model_path)
+                    elif hasattr(pipeline, 'save_pretrained'):
+                        pipeline.save_pretrained(local_model_path)
+                    else:
+                        logging.warning("Kon model niet opslaan: geen geschikte opslagmethode gevonden")
+                        # Sla het model niet op, maar ga verder met verwerking
                     logging.info(f"Model succesvol opgeslagen in: {local_model_path}")
                 except Exception as save_error:
                     logging.warning(f"Kon model niet opslaan naar schijf: {str(save_error)}")
-                    
+                    # Dit is niet kritiek, ga verder met verwerking
             except Exception as primary_error:
                 error_message = str(primary_error)
                 logging.warning(f"Kon primaire diarization model niet laden: {error_message}")
@@ -1565,11 +1660,18 @@ def perform_speaker_diarization(audio_file: str, min_speakers: int = DIARIZATION
                         # Save the alternative model locally
                         try:
                             logging.info(f"Alternatief model opslaan in lokale cache: {alternative_model_path}")
-                            pipeline.to_disk(alternative_model_path)
+                            # Nieuwere versies gebruiken save_pretrained in plaats van to_disk
+                            if hasattr(pipeline, 'to_disk'):
+                                pipeline.to_disk(alternative_model_path)
+                            elif hasattr(pipeline, 'save_pretrained'):
+                                pipeline.save_pretrained(alternative_model_path)
+                            else:
+                                logging.warning("Kon alternatief model niet opslaan: geen geschikte opslagmethode gevonden")
+                                # Sla het model niet op, maar ga verder met verwerking
                             logging.info(f"Alternatief model succesvol opgeslagen")
                         except Exception as save_error:
                             logging.warning(f"Kon alternatief model niet opslaan naar schijf: {str(save_error)}")
-                            
+                            # Dit is niet kritiek, ga verder met verwerking
                     except Exception as alt_error:
                         alt_error_message = str(alt_error)
                         logging.error(f"Kon alternatief model niet laden: {alt_error_message}")
@@ -1589,6 +1691,21 @@ def perform_speaker_diarization(audio_file: str, min_speakers: int = DIARIZATION
             logging.error("Kon geen diarization pipeline initialiseren.")
             return None
             
+        # Verplaats pipeline naar CUDA als beschikbaar
+        try:
+            import torch
+            if torch.cuda.is_available():
+                logging.info("CUDA beschikbaar, verplaatsen van diarization pipeline naar GPU")
+                print("GPU versnelling inschakelen voor diarization...")
+                pipeline.to(torch.device("cuda"))
+                print(f"Diarization pipeline verplaatst naar: {torch.cuda.get_device_name(0)}")
+            else:
+                logging.info("CUDA niet beschikbaar, diarization wordt op CPU uitgevoerd")
+                print("GPU niet beschikbaar, diarization wordt op CPU uitgevoerd")
+        except Exception as e:
+            logging.warning(f"Kon pipeline niet naar GPU verplaatsen: {str(e)}. Gebruik CPU.")
+            print("Kon GPU versnelling niet inschakelen, diarization wordt op CPU uitgevoerd")
+            
         # Run diarization with configured parameters
         logging.info(f"Diarization uitvoeren met model {model_to_use}, min_speakers={min_speakers}, max_speakers={max_speakers}")
         
@@ -1597,12 +1714,70 @@ def perform_speaker_diarization(audio_file: str, min_speakers: int = DIARIZATION
         print(f"\nStart speaker diarization op {os.path.basename(audio_file)}...")
         print(f"Dit kan enkele minuten duren afhankelijk van de lengte van het audiobestand.\n")
         
+        # Voorbereiden van audio om problemen met ongelijke tensorsegmenten te voorkomen
+        try:
+            print("Audio voorbereiden voor diarization...")
+            waveform, sample_rate = torchaudio.load(audio_file)
+            
+            # Zorg dat we stereo naar mono converteren indien nodig
+            if waveform.size(0) > 1:
+                waveform = torch.mean(waveform, dim=0, keepdim=True)
+                
+            # Bereken totale lengte en zorg dat deze deelbaar is door 16000 (10ms window)
+            # om ongelijke tensor-maten te voorkomen
+            length = waveform.size(1)
+            target_length = ((length // 16000) + 1) * 16000
+            
+            # Padding toevoegen als de lengte niet deelbaar is door 16000
+            if length < target_length:
+                padding = torch.zeros((1, target_length - length))
+                waveform = torch.cat([waveform, padding], dim=1)
+                
+            # Sla tijdelijk op als wav voor betere compatibiliteit
+            temp_audio_file = audio_file + ".temp.wav"
+            torchaudio.save(temp_audio_file, waveform, sample_rate)
+            
+            # Gebruik het bewerkte audio bestand
+            diarization_audio_file = temp_audio_file
+            print(f"Audio voorbereid: originele lengte={length}, nieuwe lengte={waveform.size(1)}")
+        except Exception as prep_error:
+            logging.warning(f"Kon audio niet voorbereiden: {str(prep_error)}, gebruiken origineel bestand")
+            diarization_audio_file = audio_file
+            
         # Voer diarisatie uit
-        diarization = pipeline(
-            audio_file,
-            min_speakers=min_speakers,
-            max_speakers=max_speakers
-        )
+        try:
+            diarization = pipeline(
+                diarization_audio_file,
+                min_speakers=min_speakers,
+                max_speakers=max_speakers
+            )
+            
+            # Verwijder tijdelijk bestand indien aangemaakt
+            if diarization_audio_file != audio_file and os.path.exists(diarization_audio_file):
+                try:
+                    os.remove(diarization_audio_file)
+                except:
+                    pass
+                    
+        except Exception as diar_error:
+            # Als er nog steeds een fout is, probeer fallback methode
+            logging.warning(f"Diarization fout: {str(diar_error)}, probeer fallback methode")
+            print("Eerste poging mislukt, probeer alternatieve methode...")
+            
+            # Als tijdelijk bestand bestaat, verwijder het
+            if diarization_audio_file != audio_file and os.path.exists(diarization_audio_file):
+                try:
+                    os.remove(diarization_audio_file)
+                except:
+                    pass
+                    
+            # Probeer met een eenvoudigere configuratie
+            diarization = pipeline(
+                audio_file,
+                min_speakers=min_speakers,
+                max_speakers=max_speakers,
+                segmentation_batch_size=1  # Kleinere batch size
+            )
         
         # Bereken en toon verwerkingstijd
         elapsed_time = time.time() - start_time
@@ -1740,11 +1915,13 @@ def main(input_file: str, model_size: Optional[str] = None, output_dir: Optional
             
             if speaker_segments:
                 logging.info(f"Identified {len(set(s['speaker'] for s in speaker_segments))} unique speakers")
+                print(f"Geïdentificeerd: {len(set(s['speaker'] for s in speaker_segments))} unieke sprekers")
             else:
                 logging.warning("Speaker diarization failed or was skipped")
+                print("Sprekerherkenning mislukt of overgeslagen")
         
-        # Transcribe
-        segments, info = transcribe_audio(model, input_file)
+        # Transcribe with speaker information if available
+        segments, info = transcribe_audio(model, input_file, speaker_segments)
         logging.info(f"Detected language '{info.language}' with probability {info.language_probability}")
         
         # Write transcript files with speaker information
@@ -1842,40 +2019,62 @@ def process_all_mp3s(directory: str, **kwargs) -> None:
     cleanup_resources(model)
 
 # ==================== TRANSCRIPTION FUNCTIONS ====================
+def show_cuda_diagnostics():
+    """Toon diagnostische informatie over CUDA en GPU configuratie"""
+    print("\n=== CUDA Diagnostics ===")
+    print(f"PyTorch version: {torch.__version__}")
+    print(f"CUDA available: {torch.cuda.is_available()}")
+    if torch.cuda.is_available():
+        print(f"CUDA version: {torch.version.cuda}")
+        print(f"GPU: {torch.cuda.get_device_name(0)}")
+        print(f"GPU Memory: {torch.cuda.get_device_properties(0).total_memory / (1024**3):.2f} GB")
+        
+        # Test CUDA met een eenvoudige operatie
+        x = torch.rand(5, 3)
+        print("Test CUDA operatie: ", end="")
+        try:
+            x = x.cuda()
+            print("Succesvol")
+        except Exception as e:
+            print(f"Fout: {e}")
+    print("=======================\n")
+
 def setup_model(model_size: str) -> WhisperModel:
     """
-    Set up the Whisper model with the specified size.
+    Set up the Whisper model.
     
     Args:
-        model_size: Size of the model to use ('tiny', 'base', 'small', 'medium', 'large', 'large-v2', 'large-v3')
+        model_size: Size of the model to use
         
     Returns:
         Initialized WhisperModel
     """
     logging.info(f"Loading Whisper model: {model_size}")
-    try:
-        # Check if CUDA is available
-        cuda_available = torch.cuda.is_available()
-        if cuda_available:
-            logging.info(f"CUDA is available, using device: {DEVICE}")
-            logging.info(f"GPU: {torch.cuda.get_device_name(0)}")
-        else:
-            logging.info("CUDA is not available, using CPU")
+    
+    # Toon CUDA diagnostiek
+    show_cuda_diagnostics()
+    
+    # Determine device based on available hardware
+    device = DEVICE
+    if device.lower() == "cuda" and not torch.cuda.is_available():
+        logging.warning("CUDA requested but not available, falling back to CPU")
+        device = "cpu"
+    
+    if device.lower() != "cpu":
+        logging.info(f"CUDA is available, using device: {device}")
+        logging.info(f"GPU: {torch.cuda.get_device_name(0)}")
+    else:
+        logging.info("Using CPU for transcription (slower)")
         
-        # Initialize the model with the specified parameters
-        model = WhisperModel(
-            model_size, 
-            device=DEVICE, 
-            compute_type=COMPUTE_TYPE,
-            download_root=os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
-        )
-        logging.info(f"Successfully loaded {model_size} model")
-        return model
-    except Exception as e:
-        logging.error(f"Error loading Whisper model: {str(e)}")
-        if "CUDA" in str(e) or "GPU" in str(e) or "NVIDIA" in str(e):
-            logging.error("GPU error detected. Try setting WHISPER_DEVICE=cpu in .env file")
-        raise
+    # Initialize model
+    model = WhisperModel(
+        model_size,
+        device=device,
+        compute_type=COMPUTE_TYPE,
+        download_root=os.path.join(os.path.dirname(os.path.abspath(__file__)), "models", "whisper"),
+    )
+    logging.info(f"Successfully loaded {model_size} model")
+    return model
 
 def get_speaker_for_segment(timestamp: float, speaker_segments: List[Dict]) -> Optional[str]:
     """
@@ -1897,13 +2096,14 @@ def get_speaker_for_segment(timestamp: float, speaker_segments: List[Dict]) -> O
     
     return None
 
-def transcribe_audio(model: WhisperModel, audio_file: str) -> Tuple[List, object]:
+def transcribe_audio(model: WhisperModel, audio_file: str, speaker_segments: Optional[List[Dict]] = None) -> Tuple[List, object]:
     """
     Transcribe audio file using the Whisper model.
     
     Args:
         model: Initialized WhisperModel instance
         audio_file: Path to the audio file to transcribe
+        speaker_segments: Optional list of speaker segments from diarization
         
     Returns:
         Tuple of (segments, info)
@@ -1914,11 +2114,21 @@ def transcribe_audio(model: WhisperModel, audio_file: str) -> Tuple[List, object
     
     # Load custom vocabulary if enabled
     word_list = None
+    word_replacements = {}
     if USE_CUSTOM_VOCABULARY and os.path.exists(VOCABULARY_FILE):
         try:
             with open(VOCABULARY_FILE, 'r', encoding='utf-8') as f:
                 vocabulary = json.load(f)
-            word_list = vocabulary.get('words', [])
+            
+            # Maak een lijst van woorden voor word_list parameter
+            word_list = []
+            
+            # Lees vervangingen voor post-processing
+            for original, replacement in vocabulary.items():
+                word_replacements[original.lower()] = replacement
+                # Voeg ook de vervanging toe aan de word_list
+                word_list.append(replacement)
+            
             if word_list:
                 logging.info(f"Loaded {len(word_list)} custom vocabulary words")
                 print(f"Aangepaste woordenlijst geladen met {len(word_list)} woorden")
@@ -1935,36 +2145,89 @@ def transcribe_audio(model: WhisperModel, audio_file: str) -> Tuple[List, object
         'condition_on_previous_text': True,
     }
     
-    # Voeg word_list alleen toe als deze is gedefinieerd en niet leeg is
-    if word_list:
-        try:
-            # Probeer met word_list
-            print("Transcriptie uitvoeren met aangepaste woordenlijst...")
-            segments, info = model.transcribe(
+    # Bijhouden van huidige spreker om herhalingen te vermijden
+    current_speaker = None
+    
+    # Definieer functie voor live output
+    def process_segment(segment):
+        text = segment.text
+        
+        # Pas woordenboek toe op elke segment
+        if word_replacements:
+            for original, replacement in word_replacements.items():
+                # Vervang hele woorden met case-insensitive match
+                pattern = r'\b' + re.escape(original) + r'\b'
+                text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
+        
+        # Voeg sprekerinfo toe als beschikbaar
+        speaker_info = ""
+        nonlocal current_speaker
+        
+        if speaker_segments:
+            # Gebruik middelpunt van het segment om spreker te bepalen
+            segment_middle = (segment.start + segment.end) / 2
+            speaker = get_speaker_for_segment(segment_middle, speaker_segments)
+            
+            # Altijd speaker tonen, niet alleen bij wisseling
+            if speaker:
+                speaker_info = f"[{speaker}] "
+                current_speaker = speaker
+            else:
+                speaker_info = "[SPEAKER_UNKNOWN] "
+        
+        # Toon de tekst direct in de console
+        print(f"{format_timestamp(segment.start, segment.end)} {speaker_info}{text}")
+        
+        # Pas de tekst toe in het segment
+        segment.text = text
+        return segment
+    
+    # Function to collect segments with real-time processing
+    def collect_with_live_output(segments_generator):
+        print("\n--- Live Transcriptie Output ---")
+        result = []
+        for segment in segments_generator:
+            # Process each segment for replacements and logging
+            segment = process_segment(segment)
+            result.append(segment)
+        print("--- Einde Live Transcriptie ---\n")
+        return result
+    
+    # Execute transcription with appropriate parameters
+    try:
+        # Voeg word_list alleen toe als deze is gedefinieerd en niet leeg is
+        if word_list:
+            try:
+                # Probeer met word_list
+                print("Transcriptie uitvoeren met aangepaste woordenlijst...")
+                segments_generator, info = model.transcribe(
+                    audio_file,
+                    **transcription_params,
+                    word_list=word_list
+                )
+                segments_list = collect_with_live_output(segments_generator)
+            except TypeError as e:
+                # Als word_list niet wordt ondersteund, probeer zonder
+                logging.warning(f"word_list parameter niet ondersteund in deze versie van faster_whisper: {e}")
+                logging.info("Transcriptie uitvoeren zonder aangepaste woordenlijst")
+                print("word_list niet ondersteund, transcriptie uitvoeren zonder aangepaste woordenlijst...")
+                segments_generator, info = model.transcribe(
+                    audio_file, 
+                    **transcription_params
+                )
+                segments_list = collect_with_live_output(segments_generator)
+        else:
+            # Als er geen word_list is, gebruik de standaard parameters
+            print("Transcriptie uitvoeren...")
+            segments_generator, info = model.transcribe(
                 audio_file,
-                **transcription_params,
-                word_list=word_list
-            )
-        except TypeError as e:
-            # Als word_list niet wordt ondersteund, probeer zonder
-            logging.warning(f"word_list parameter niet ondersteund in deze versie van faster_whisper: {e}")
-            logging.info("Transcriptie uitvoeren zonder aangepaste woordenlijst")
-            print("word_list niet ondersteund, transcriptie uitvoeren zonder aangepaste woordenlijst...")
-            segments, info = model.transcribe(
-                audio_file, 
                 **transcription_params
             )
-    else:
-        # Als er geen word_list is, gebruik de standaard parameters
-        print("Transcriptie uitvoeren...")
-        segments, info = model.transcribe(
-            audio_file,
-            **transcription_params
-        )
-    
-    # Convert generator to list for multiple iterations
-    print("Transcriptie resultaten verwerken...")
-    segments_list = list(segments)
+            segments_list = collect_with_live_output(segments_generator)
+            
+    except Exception as e:
+        logging.error(f"Error tijdens transcriptie: {str(e)}")
+        raise
     
     # Bereken en toon verwerkingstijd
     elapsed_time = time.time() - start_time
@@ -2020,10 +2283,14 @@ def write_transcript_files(segments: List, output_file: str, output_file_timesta
                 middle_time = (start + end) / 2  # Use middle of segment to determine speaker
                 speaker = get_speaker_for_segment(middle_time, speaker_segments)
                 
-                if speaker and speaker != current_speaker:
+                # Altijd speaker tonen, niet alleen bij wisselingen
+                if speaker:
                     speaker_info = f"[{speaker}] "
                     speaker_prefix = f"[{speaker}] "
                     current_speaker = speaker
+                else:
+                    speaker_info = "[SPEAKER_UNKNOWN] "
+                    speaker_prefix = "[SPEAKER_UNKNOWN] "
             
             # Add to transcript collections
             clean_line = f"{speaker_prefix}{text}"
@@ -2073,6 +2340,183 @@ def format_timestamp(start: float, end: Optional[float] = None) -> str:
         return _format_single(start)
     else:
         return f"[{_format_single(start)} --> {_format_single(end)}]"
+
+def process_summary(transcript: str, output_summary_file: str, output_blog_file: str) -> bool:
+    """
+    Process the transcript to generate and save summary and blog.
+    
+    Args:
+        transcript: The complete transcript text
+        output_summary_file: Path to save the summary
+        output_blog_file: Path to save the blog
+        
+    Returns:
+        Success status (True/False)
+    """
+    try:
+        logging.info("Genereren van samenvatting...")
+        print(f"\nGenereren van samenvatting van de transcriptie...")
+        
+        # Read the summary prompt
+        summary_prompt = read_prompt_file(PROMPT_SUMMARY_FILE)
+        if not summary_prompt:
+            logging.error("Samenvatting prompt bestand niet gevonden of leeg")
+            return False
+        
+        # Choose model based on transcript length
+        model_to_use = choose_appropriate_model(transcript)
+        logging.info(f"Gekozen model voor samenvatting: {model_to_use}")
+        
+        # Generate summary using OpenAI
+        if USE_RECURSIVE_SUMMARIZATION and estimate_token_count(transcript) > MAX_INPUT_TOKENS:
+            logging.info("Gebruiken van recursieve samenvatting vanwege lengte van transcript")
+            print("Transcript is lang, recursieve samenvatting wordt gebruikt...")
+            summary = summarize_large_transcript(transcript, summary_prompt)
+        else:
+            print("Samenvatting genereren...")
+            summary = process_with_openai(transcript, summary_prompt, model_to_use)
+        
+        if not summary:
+            logging.error("Kon geen samenvatting genereren")
+            return False
+        
+        # Save summary
+        with open(output_summary_file, 'w', encoding='utf-8') as f:
+            f.write(summary)
+        logging.info(f"Samenvatting opgeslagen in: {output_summary_file}")
+        print(f"Samenvatting opgeslagen in: {os.path.basename(output_summary_file)}")
+        
+        # Generate blog post
+        logging.info("Genereren van blog post...")
+        print(f"Genereren van blog post...")
+        
+        # Read the blog prompt
+        blog_prompt = read_prompt_file(PROMPT_BLOG_FILE)
+        if not blog_prompt:
+            logging.warning("Blog prompt bestand niet gevonden of leeg, sla blog generatie over")
+            return True  # We still succeeded with the summary
+        
+        # Combine transcript and summary for better blog generation
+        input_text = f"TRANSCRIPT:\n{transcript}\n\nSUMMARY:\n{summary}"
+        
+        # Generate blog using OpenAI
+        blog = process_with_openai(input_text, blog_prompt, model_to_use)
+        
+        if not blog:
+            logging.error("Kon geen blog post genereren")
+            # We still return True since the summary was successful
+            return True
+        
+        # Save blog
+        with open(output_blog_file, 'w', encoding='utf-8') as f:
+            f.write(blog)
+        logging.info(f"Blog post opgeslagen in: {output_blog_file}")
+        print(f"Blog post opgeslagen in: {os.path.basename(output_blog_file)}")
+        
+        # Generate HTML and Wiki versions of the blog
+        try:
+            # HTML version
+            output_blog_html = output_blog_file.replace('.txt', '.html')
+            html_content = convert_markdown_to_html(blog)
+            with open(output_blog_html, 'w', encoding='utf-8') as f:
+                f.write(html_content)
+            logging.info(f"HTML blog opgeslagen in: {output_blog_html}")
+            
+            # Wiki version
+            output_blog_wiki = output_blog_file.replace('.txt', '.wiki')
+            wiki_content = convert_markdown_to_wiki(blog)
+            with open(output_blog_wiki, 'w', encoding='utf-8') as f:
+                f.write(wiki_content)
+            logging.info(f"Wiki blog opgeslagen in: {output_blog_wiki}")
+        except Exception as e:
+            logging.warning(f"Kon geen HTML/Wiki versies genereren: {str(e)}")
+        
+        return True
+        
+    except Exception as e:
+        logging.error(f"Fout bij genereren van samenvatting/blog: {str(e)}")
+        return False
+
+def convert_markdown_to_html(markdown_text: str) -> str:
+    """
+    Convert Markdown text to HTML.
+    
+    Args:
+        markdown_text: The Markdown text to convert
+        
+    Returns:
+        HTML formatted text
+    """
+    try:
+        html = markdown.markdown(
+            markdown_text,
+            extensions=['extra', 'codehilite', 'tables']
+        )
+        
+        # Voeg een eenvoudig HTML-sjabloon toe
+        html_template = f"""<!DOCTYPE html>
+<html lang="nl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WHYcast Blog Post</title>
+    <style>
+        body {{ font-family: Arial, sans-serif; line-height: 1.6; max-width: 800px; margin: 0 auto; padding: 20px; }}
+        h1, h2, h3 {{ color: #2c3e50; }}
+        a {{ color: #3498db; text-decoration: none; }}
+        a:hover {{ text-decoration: underline; }}
+        blockquote {{ border-left: 4px solid #ccc; padding-left: 15px; margin-left: 0; color: #555; }}
+        code {{ background-color: #f0f0f0; padding: 2px 4px; border-radius: 3px; font-family: monospace; }}
+        pre {{ background-color: #f0f0f0; padding: 10px; border-radius: 3px; overflow-x: auto; }}
+        img {{ max-width: 100%; height: auto; }}
+    </style>
+</head>
+<body>
+    {html}
+</body>
+</html>
+"""
+        return html_template
+    except Exception as e:
+        logging.error(f"Fout bij conversie naar HTML: {str(e)}")
+        return markdown_text  # Als fallback, geef de oorspronkelijke markdown terug
+
+def convert_markdown_to_wiki(markdown_text: str) -> str:
+    """
+    Convert Markdown text to MediaWiki markup format.
+    This is a simple conversion that handles common elements.
+    
+    Args:
+        markdown_text: The Markdown text to convert
+        
+    Returns:
+        MediaWiki formatted text
+    """
+    try:
+        wiki_text = markdown_text
+        
+        # Headers (Markdown: # Header, MediaWiki: == Header ==)
+        wiki_text = re.sub(r'^# (.*?)$', r'= \1 =', wiki_text, flags=re.MULTILINE)
+        wiki_text = re.sub(r'^## (.*?)$', r'== \1 ==', wiki_text, flags=re.MULTILINE)
+        wiki_text = re.sub(r'^### (.*?)$', r'=== \1 ===', wiki_text, flags=re.MULTILINE)
+        wiki_text = re.sub(r'^#### (.*?)$', r'==== \1 ====', wiki_text, flags=re.MULTILINE)
+        
+        # Bold (Markdown: **text**, MediaWiki: '''text''')
+        wiki_text = re.sub(r'\*\*(.*?)\*\*', r"'''\1'''", wiki_text)
+        
+        # Italic (Markdown: *text*, MediaWiki: ''text'')
+        wiki_text = re.sub(r'\*(.*?)\*', r"''\1''", wiki_text)
+        
+        # Lists (Markdown: - item, MediaWiki: * item)
+        wiki_text = re.sub(r'^- (.*?)$', r'* \1', wiki_text, flags=re.MULTILINE)
+        
+        # Links (Markdown: [text](url), MediaWiki: [url text])
+        wiki_text = re.sub(r'\[(.*?)\]\((.*?)\)', r'[\2 \1]', wiki_text)
+        
+        return wiki_text
+    except Exception as e:
+        logging.error(f"Fout bij conversie naar Wiki: {str(e)}")
+        return markdown_text  # Als fallback, geef de oorspronkelijke markdown terug
 
 # ==================== ENTRY POINT ====================
 if __name__ == "__main__":
@@ -2137,7 +2581,19 @@ if __name__ == "__main__":
     
     # Set logging level based on verbosity
     if args.verbose:
-        logging.getLogger().setLevel(logging.DEBUG)
+        # Alleen het hoofdprogramma logger op debug level zetten,
+        # niet alle externe modules
+        logging.getLogger('__main__').setLevel(logging.DEBUG)
+        logging.info("Verbose modus ingeschakeld: Extra logging voor hoofdprogramma")
+    else:
+        # Zorg dat alle loggers op INFO of hoger staan
+        for name in logging.root.manager.loggerDict:
+            if name.startswith('matplotlib') or name.startswith('PIL') or \
+               name.startswith('urllib3') or name.startswith('httpx') or \
+               name.startswith('huggingface_hub'):
+                logging.getLogger(name).setLevel(logging.WARNING)
+            else:
+                logging.getLogger(name).setLevel(logging.INFO)
     
     # Set HuggingFace token if provided
     if args.huggingface_token:
@@ -2276,18 +2732,3 @@ if __name__ == "__main__":
              use_diarization=args.diarize if args.diarize else None if not args.no_diarize else False,
              min_speakers=args.min_speakers, max_speakers=args.max_speakers,
              diarization_model=args.diarization_model)
-
-print("=== CUDA Diagnostics ===")
-print(f"PyTorch version: {torch.__version__}")
-print(f"CUDA available: {torch.cuda.is_available()}")
-if torch.cuda.is_available():
-    print(f"CUDA version: {torch.version.cuda}")
-    print(f"GPU: {torch.cuda.get_device_name(0)}")
-    print(f"GPU Memory: {torch.cuda.get_device_properties(0).total_memory / (1024**3):.2f} GB")
-    
-    # Test CUDA met een eenvoudige operatie
-    x = torch.rand(5, 3)
-    print("\nTest CUDA operatie:")
-    print(f"Tensor op CPU: {x}")
-    x = x.cuda()
-    print(f"Tensor op GPU: {x}")
