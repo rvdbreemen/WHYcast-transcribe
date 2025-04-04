@@ -1,43 +1,41 @@
 """
-Configuration settings for the transcription system.
+Configuration settings for the WHYcast Transcribe application.
 """
+
 import os
 
 # Version information
-VERSION = "0.0.9"
+VERSION = "0.1.0"
 
-# Model configuration
-MODEL_SIZE = os.environ.get("WHISPER_MODEL_SIZE", "large-v3")
-DEVICE = os.environ.get("WHISPER_DEVICE", "cuda")
-COMPUTE_TYPE = os.environ.get("WHISPER_COMPUTE_TYPE", "float16")
-BEAM_SIZE = int(os.environ.get("WHISPER_BEAM_SIZE", "5"))
+# Model settings
+MODEL_SIZE = "large-v3"  # Options: tiny, base, small, medium, large-v1, large-v2, large-v3
+MODEL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'models', 'models--Systran--faster-whisper-large-v3')
+DEVICE = "cuda"          # Options: cpu, cuda
+COMPUTE_TYPE = "float16" # Options: float16, int8
+BEAM_SIZE = 5            # Number of beams for beam search
 
-# OpenAI configuration
-OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o")  # Updated to current model name
-OPENAI_LARGE_CONTEXT_MODEL = os.environ.get("OPENAI_LARGE_CONTEXT_MODEL", "gpt-4o-2024-05-13")  # Updated to latest version with 128K context
-TEMPERATURE = float(os.environ.get("OPENAI_TEMPERATURE", "0.7"))
-MAX_TOKENS = int(os.environ.get("OPENAI_MAX_TOKENS", "4000"))  # Increased for longer summaries
-# Max tokens to send to OpenAI (considering model's max context - completion tokens)
-MAX_INPUT_TOKENS = int(os.environ.get("OPENAI_MAX_INPUT_TOKENS", "50000"))  # Increased to handle 200kB
-# Number of tokens to use for estimating text length (OpenAI uses ~4 chars per token on average)
-CHARS_PER_TOKEN = int(os.environ.get("OPENAI_CHARS_PER_TOKEN", "4"))
-# Maximum file size to process without warning (in KB)
-MAX_FILE_SIZE_KB = int(os.environ.get("MAX_FILE_SIZE_KB", "250"))  # Increased to handle 200kB+ files
+# OpenAI API settings
+OPENAI_MODEL = "gpt-4o"
+OPENAI_LARGE_CONTEXT_MODEL = "gpt-4-turbo"
+TEMPERATURE = 0.2
+MAX_TOKENS = 4000
+MAX_INPUT_TOKENS = 16000  # Maximum tokens for input to OpenAI
+CHARS_PER_TOKEN = 4       # Rough estimate for token counting
 
-# Advanced summarization settings
-USE_RECURSIVE_SUMMARIZATION = os.environ.get("USE_RECURSIVE_SUMMARIZATION", "True").lower() in ("true", "1", "yes")
-MAX_CHUNK_SIZE = int(os.environ.get("MAX_CHUNK_SIZE", "40000"))  # Maximum size of each chunk for recursive summarization
-CHUNK_OVERLAP = int(os.environ.get("CHUNK_OVERLAP", "1000"))  # Overlap between chunks to maintain context
+# Text chunking settings
+MAX_CHUNK_SIZE = 20000    # Characters per chunk for large text processing
+CHUNK_OVERLAP = 1000      # Character overlap between chunks
 
-# Prompt file paths - using absolute paths to ensure they're found regardless of working directory
-base_dir = os.path.dirname(os.path.abspath(__file__))
+# File settings
+MAX_FILE_SIZE_KB = 500000  # Maximum recommended file size in KB
 
-# Update paths to point to the prompts subdirectory with correct filenames
-PROMPT_CLEANUP_FILE = os.path.join(base_dir, "prompts", "cleanup_prompt.txt")
-PROMPT_SUMMARY_FILE = os.path.join(base_dir, "prompts", "summary_prompt.txt")
-PROMPT_BLOG_FILE = os.path.join(base_dir, "prompts", "blog_prompt.txt")
-PROMPT_BLOG_ALT1_FILE = os.path.join(base_dir, "prompts", "blog_alt1_prompt.txt")
+# Prompt file paths
+PROMPTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'prompts')
+PROMPT_CLEANUP_FILE = os.path.join(PROMPTS_DIR, 'cleanup_prompt.txt')
+PROMPT_SUMMARY_FILE = os.path.join(PROMPTS_DIR, 'summary_prompt.txt')
+PROMPT_BLOG_FILE = os.path.join(PROMPTS_DIR, 'blog_prompt.txt')
+PROMPT_BLOG_ALT1_FILE = os.path.join(PROMPTS_DIR, 'blog_prompt_alt1.txt')
 
-# Custom vocabulary settings
-USE_CUSTOM_VOCABULARY = True  # Set to False to disable
-VOCABULARY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "vocabulary.json")
+# Vocabulary settings
+VOCABULARY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'vocabulary.json')
+USE_CUSTOM_VOCABULARY = True
