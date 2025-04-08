@@ -15,6 +15,7 @@ BEAM_SIZE = int(os.environ.get("WHISPER_BEAM_SIZE", "5"))
 # OpenAI configuration
 OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o")  # Updated to current model name
 OPENAI_LARGE_CONTEXT_MODEL = os.environ.get("OPENAI_LARGE_CONTEXT_MODEL", "gpt-4o-2024-05-13")  # Updated to latest version with 128K context
+OPENAI_HISTORY_MODEL = os.environ.get("OPENAI_HISTORY_MODEL", "o3-mini")  # Model for history extractions with reasoning capabilities
 TEMPERATURE = float(os.environ.get("OPENAI_TEMPERATURE", "0.7"))
 MAX_TOKENS = int(os.environ.get("OPENAI_MAX_TOKENS", "4000"))  # Increased for longer summaries
 # Max tokens to send to OpenAI (considering model's max context - completion tokens)
@@ -37,6 +38,7 @@ PROMPT_CLEANUP_FILE = os.path.join(base_dir, "prompts", "cleanup_prompt.txt")
 PROMPT_SUMMARY_FILE = os.path.join(base_dir, "prompts", "summary_prompt.txt")
 PROMPT_BLOG_FILE = os.path.join(base_dir, "prompts", "blog_prompt.txt")
 PROMPT_BLOG_ALT1_FILE = os.path.join(base_dir, "prompts", "blog_alt1_prompt.txt")
+PROMPT_HISTORY_EXTRACT_FILE = os.path.join(base_dir, "prompts", "history_extract_prompt.txt")
 
 # Custom vocabulary settings
 USE_CUSTOM_VOCABULARY = True  # Set to False to disable
