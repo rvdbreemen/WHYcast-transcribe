@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-WHYcast Transcribe - v0.0.6
+WHYcast Transcribe - v0.1.0
 
 A tool for transcribing audio files and generating summaries using OpenAI GPT models.
 Supports downloading the latest episode from podcast feeds.
@@ -2659,7 +2659,7 @@ if __name__ == "__main__":
         logging.info(f"Checking for the latest episode from {feed_url}")
         episode_file = download_latest_episode(feed_url, download_dir)
         
-        if episode_file:
+        if (episode_file):
             logging.info(f"Processing newly downloaded episode: {episode_file}")
             main(episode_file, model_size=args.model, output_dir=args.output_dir, 
                  skip_summary=args.skip_summary, force=args.force)
