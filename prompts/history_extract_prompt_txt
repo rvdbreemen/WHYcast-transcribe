@@ -1,0 +1,51 @@
+The goal is to extract as much history lessons or stories from the podcasts.
+
+These are the full transcripts of the whycast podcast show. They talk about the hackercamp WHY2025, but in each episode there is a section on hacker history. Some stories about past events. Write a document based on these files with just these history lessons of previous camps. This the anecdotes of traditions, war stories, and personal recollections from the Dutch hacker camps’ past.
+
+So make sure to include all. Make sure to do it in full details as it was talked about in the episodes. Do not invent or make up anything that was not in the transcript.  
+
+Make sure to have a header stating in which episode it was talked about, when it was about. If it was a story about a historic camp, then mention that in the header as well. Do it in full detail, and keep it very strict to what was said in the episode.
+
+When outputting the segment of each episode, make sure it's readable. Forget about timestamps, just make a clean summary out of it, with full details. So be as verbose as you can based on the text in the transcript.
+
+Just to be clear, there is something of the past / history in each episode. Rarely there is not. 
+
+Output as the examples below that follow now:
+---
+
+## Episode 1 - Stone Age Computer at Hacking at the End of the Universe (1993)
+
+
+“Each episode, we’ll be diving into a piece of history, something special from the predecessors of WHY2025. That could be from the Galactic Hacker Party from 1989, Hackers at the End of the Universe from ’93, Hacking in Progress ’97, Hackers at Large 2001, What the Hack 2005, Hacking at Random 2009, Observe Hack Make 2013, Still Hacking Anyways 2017, May Contain Hackers from 2021—no, COVID happened, so that became May Contain Hackers 2022.
+
+This week, we’ll be taking a look at the Stone Age Computer that was on display at Hacking at the End of the Universe in 1993. It was an interactive art installation made by Mathilde Mube, also known as “microprocessor.” It was shown at several locations in 1993, always dressed differently, fitting the organic concept behind it. The Stone Age Computer was meant to pull people away from thick manuals and complicated tech, returning them to something more 'primitive.'
+
+It was arranged like a Japanese garden, with living plants, moss, and actual soil. The ‘keyboard’ was literally a set of rocks for keys, and if you wanted alt, shift, or control, you squeezed dangling water sacks. The official statement said, ‘Get into the primitive mode—hit the Stone Age keyboard where rocks represent the keys, squeeze the water sacks... get the feeling how you push your data through the computer.’
+
+According to the stories that surfaced, the piece actually got a phone line connected at some point, giving it a dial-up link to the outside world, in line with the 'do weird stuff with technology' style. That was the Stone Age Computer at Hacking at the End of the Universe in 1993.”
+
+---
+
+## Episode 2 - “PEG DHCP” at Hacking in Progress (1997)
+
+“Each episode, we’ll be diving into a piece of history, something special from the predecessors of WHY2025. This week, we’ll be talking about a method of assigning IP addresses known as PEG DHCP, used at Hacking in Progress (HIP) 1997.
+
+DHCP today is normal, but in 1997, a big official DHCP server for thousands of machines wasn’t trivial. The HIP organizers ended up using an approach with clothespins. You’d go to a tent in the middle of the field, pick up a clothespin (‘peg’) that had a unique IP address written on it, plus a small piece of paper for the default gateway and so forth. Then you clamped that clothespin onto your network cable and manually configured your computer. That was your IP.
+
+This was basically a do-it-yourself DHCP server, but using pegged addresses. If you needed an address, you literally grabbed a peg from a bucket. The entire concept was half a hackish solution, half a joke, but it worked. Everyone quickly recognized that the network was big for the time—1,600 computers, six megabit internet uplink. It wasn’t perfect, but the PEG DHCP was one of the solutions to at least avoid collisions on the local addresses.
+
+That’s how PEG DHCP at HIP 1997 came about.”
+
+---
+
+## Episode 3 - Walter’s story about Hackers at the End of the Universe (1993)
+
+“Walter joined us again as the '80s hacker who actually went to Heu in 1993. He said he missed the 1989 Galactic Hacker Party due to not having train fare. But in 1993, with Hackers at the End of the Universe, he attended.
+
+Heu was the first big open-air hacker camp in the Netherlands, organized by Hack-Tic. He says it was new territory for the organizers, so they learned as they went along. For instance, they insisted on giving everyone a photo ID badge. They had a webcam and a laser printer, which was novel in 1993, but it was slow. A queue formed because each attendee had to have their photo taken, wait for the system to print, then walk away with a personal name/photo badge.
+
+Another memory was the 'macrobiotic' or extremely healthy food. Walter found it unappetizing, so he hopped over to Almere to get a normal meal. He laughs that it looked so unappealing, yet was considered super healthy.
+
+The event also had a 'large' network by 1993 standards: thick coax cables for Ethernet, maybe a phone line or two for connecting out to the internet. If someone yanked or unplugged a section of coax, the entire chain of computers might go down. So connectivity was spotty. You might do some chat or something else. A phone booth had a line for calls, which got hacked quickly so that calls became free. The organizers had to adapt.
+
+Walter emphasizes that, for him, the best was meeting like-minded people. People from all over who had only known each other by name or from magazines or from calling BBSes. That was the big highlight. Even with partial connectivity or weird food, it was a success because of that social aspect.”

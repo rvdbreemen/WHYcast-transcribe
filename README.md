@@ -1,6 +1,6 @@
 # WHYcast Transcribe
 
-WHYcast Transcribe is a tool for transcribing audio files and generating summaries using OpenAI GPT models. It supports downloading the latest episode from podcast feeds and provides various options for processing audio files.
+WHYcast Transcribe is a tool for transcribing audio files and generating summaries, blogs, and history extractions from podcast episodes using OpenAI GPT models. It's designed specifically for the WHYcast podcast series focusing on hacker events, but can be used for any audio content.
 
 ## Features
 
@@ -19,16 +19,10 @@ WHYcast Transcribe is a tool for transcribing audio files and generating summari
 - Command-line interface with numerous options
 
 ## Requirements
-- CUDA enabled GPU (e.g. NVIDIA GeForce RTX 3060)
+- CUDA enabled GPU (e.g. NVIDIA GeForce RTX 3060) recommended for faster processing
 - Python 3.7+
 - Required Python packages (listed in `requirements.txt`)
-
-
-## NVIDIA CUDA Installation Guide
-
-A good guide to enable CUDA and cuDNN for TensorFlow on Windows 11: 
-https://medium.com/@gokulprasath100702/a-guide-to-enabling-cuda-and-cudnn-for-tensorflow-on-windows-11-a89ce11863f1
-
+- OpenAI API key
 
 ## Installation 
 
@@ -48,11 +42,13 @@ https://medium.com/@gokulprasath100702/a-guide-to-enabling-cuda-and-cudnn-for-te
     OPENAI_API_KEY=your_openai_api_key
     ```
 
+4. (Optional) For faster processing, follow the CUDA installation guide below.
+
 ## Usage
 
 ### Transcribe an Audio File
 
-To transcribe an audio file and generate a summary:
+To transcribe an audio file and generate all outputs (cleaned transcript, summary, blog, and history extraction):
 ```sh
 python transcribe.py path/to/audio/file.mp3
 ```
@@ -78,19 +74,84 @@ To process all MP3 files in a directory:
 python transcribe.py --all-mp3s path/to/directory
 ```
 
-### Regenerate Summary from Existing Transcript
+### Regenerate Specific Outputs
 
-To regenerate the summary and blog post from an existing transcript file:
+To regenerate specific outputs from existing transcripts:
+
 ```sh
+# Regenerate summary and blog from transcript
 python transcribe.py --regenerate-summary path/to/transcript.txt
+
+# Regenerate cleaned transcript
+python transcribe.py --regenerate-cleaned path/to/transcript.txt
+
+# Regenerate history extraction
+python transcribe.py --generate-history path/to/transcript.txt
+
+# Regenerate blog only
+python transcribe.py --regenerate-blog path/to/transcript.txt path/to/summary.txt
 ```
 
-### Regenerate Summaries for All Transcripts in a Directory
+### Batch Regeneration Options
 
-To regenerate summaries for all transcript files in a directory:
+To regenerate outputs for all transcripts in a directory:
+
 ```sh
+# Regenerate summaries for all transcripts
 python transcribe.py --regenerate-all-summaries path/to/directory
+
+# Regenerate all cleaned transcripts
+python transcribe.py --regenerate-all-cleaned path/to/directory
+
+# Regenerate all blogs
+python transcribe.py --regenerate-all-blogs path/to/directory
+
+# Regenerate all history extractions
+python transcribe.py --regenerate-all-history path/to/directory
+
+# Force regeneration of history extractions even if they exist
+python transcribe.py --regenerate-all-history --force path/to/directory
+
+# Run full workflow on all transcripts
+python transcribe.py --regenerate-full-workflow path/to/directory
 ```
+
+### Podcast Feed Options
+
+```sh
+# Download and process all episodes from feed
+python transcribe.py --all-episodes
+
+# Use specific RSS feed URL
+python transcribe.py --feed "https://your-podcast-feed.xml"
+
+# Download episodes to specific directory
+python transcribe.py --download-dir "path/to/save/episodes"
+
+# Skip automatic podcast download
+python transcribe.py --no-download
+```
+
+### Format Conversion
+
+```sh
+# Convert existing blog posts to HTML and Wiki formats
+python transcribe.py --convert-blogs path/to/directory
+```
+
+## Output Files
+
+For each processed audio file, the following outputs are generated:
+- `file.txt` - Raw transcript
+- `file_ts.txt` - Transcript with timestamps
+- `file_cleaned.txt` - Cleaned transcript
+- `file_summary.txt` - Summary
+- `file_blog.txt` - Blog post (text)
+- `file_blog.html` - Blog post (HTML)
+- `file_blog.wiki` - Blog post (Wiki markup)
+- `file_history.txt` - History extraction (text)
+- `file_history.html` - History extraction (HTML)
+- `file_history.wiki` - History extraction (Wiki markup)
 
 ## Command-Line Options
 
@@ -99,16 +160,24 @@ python transcribe.py --regenerate-all-summaries path/to/directory
 - `--model, -m`: Model size (e.g., "large-v3", "medium", "small")
 - `--output-dir, -o`: Directory to save output files
 - `--skip-summary, -s`: Skip summary generation
-- `--force, -f`: Force regeneration of transcriptions even if they exist
+- `--force, -f`: Force regeneration of outputs even if they exist
 - `--verbose, -v`: Enable verbose logging
 - `--version`: Show the version of WHYcast Transcribe
 - `--regenerate-summary, -r`: Regenerate summary and blog from existing transcript
+- `--regenerate-cleaned, -rc`: Regenerate cleaned transcript from existing transcript
+- `--generate-history, -H`: Generate history extraction from transcript
 - `--regenerate-all-summaries, -R`: Regenerate summaries for all transcripts in directory
+- `--regenerate-all-blogs, -B`: Regenerate blogs for all transcripts in directory
+- `--regenerate-all-cleaned`: Regenerate cleaned transcripts for all files in directory
+- `--regenerate-all-history`: Generate history extractions for all transcripts in directory
+- `--regenerate-full-workflow`: Run full workflow on existing transcript files
+- `--regenerate-blogs-from-cleaned`: Regenerate blog posts using cleaned transcripts
+- `--feed, -F`: RSS feed URL to download episodes from
+- `--download-dir, -D`: Directory to save downloaded episodes
+- `--no-download, -N`: Disable automatic podcast download
+- `--all-episodes, -A`: Process all episodes from the podcast feed
+- `--convert-blogs, -C`: Convert existing blog files to HTML and Wiki formats
 - `--skip-vocabulary`: Skip custom vocabulary corrections
-- `--rss-feed, -rss`: URL of the RSS feed to process
-- `--no-rss`: Skip checking the RSS feed
-- `--limit, -l`: Limit the number of podcasts to process from RSS feed (default: RSS_DEFAULT_LIMIT)
-- `--clear-cache`: Clear model and vocabulary cache before processing
 
 ## Speaker Diarization
 
@@ -170,7 +239,6 @@ python transcribe.py path/to/audio/file.mp3 --diarize --min-speakers 2 --max-spe
 ## License
 
 This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
-
 
 
 ## Support the Project ⭐
