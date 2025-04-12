@@ -186,6 +186,33 @@ def setup_logging():
     logging.getLogger("huggingface_hub").setLevel(logging.WARNING)
     logging.getLogger("httpx").setLevel(logging.WARNING)
     
+    # Suppress PyTorch Inductor messages
+    logging.getLogger("torch._inductor").setLevel(logging.CRITICAL)
+    logging.getLogger("torch._dynamo").setLevel(logging.CRITICAL)
+    logging.getLogger("torch._subclasses").setLevel(logging.CRITICAL)
+    
+    # Additional PyTorch logging suppressions
+    logging.getLogger("torch._inductor.remote_cache").setLevel(logging.CRITICAL)
+    logging.getLogger("torch._dynamo.eval_frame").setLevel(logging.CRITICAL)
+    logging.getLogger("torch._dynamo.utils").setLevel(logging.CRITICAL)
+    
+    # Suppress PyAnnote Audio warnings
+    logging.getLogger("pyannote").setLevel(logging.ERROR)
+    
+    # Filter specific warnings types
+    import warnings
+    warnings.filterwarnings("ignore", message="TensorFloat-32 .* has been disabled")
+    warnings.filterwarnings("ignore", message="std\\(\\): degrees of freedom")
+    warnings.filterwarnings("ignore", category=UserWarning, module="pyannote.audio")
+    warnings.filterwarnings("ignore", category=UserWarning, module="torch._dynamo")
+    warnings.filterwarnings("ignore", category=UserWarning, module="torch._inductor")
+    warnings.filterwarnings("ignore", message=".*Cache Metrics.*")
+    
+    # Disable torch inductor and dynamo INFO messages
+    import os
+    os.environ["TORCH_LOGS"] = "ERROR"
+    os.environ["TORCH_INDUCTOR_VERBOSE"] = "0"
+    
     return logger
 
 logger = setup_logging()
@@ -1807,6 +1834,50 @@ def perform_speaker_diarization(audio_file: str, min_speakers: int = DIARIZATION
         logging.error(f"Fout bij uitvoeren speaker diarization: {str(e)}")
         return None
 
+def get_speaker_for_segment(timestamp: float, speaker_segments: List[Dict]) -> Optional[str]:
+    """
+    Find the speaker for a given timestamp from diarization results.
+    
+    Args:
+        timestamp: The timestamp to find the speaker for
+        speaker_segments: List of speaker segments from diarization
+        
+    Returns:
+        Speaker label or None if no match found
+    """
+    if not speaker_segments:
+        return None
+        
+    # Create a window around the timestamp to find the most likely speaker
+    window_size = 0.5  # Look for speakers within 0.5 seconds of the timestamp
+    
+    # First, try exact match
+    for segment in speaker_segments:
+        if segment['start'] <= timestamp <= segment['end']:
+            return segment['speaker']
+    
+    # If no exact match, look for the closest segment within the window
+    closest_segment = None
+    min_distance = float('inf')
+    
+    for segment in speaker_segments:
+        # Check if timestamp is close to segment start or end
+        if abs(segment['start'] - timestamp) < window_size or abs(segment['end'] - timestamp) < window_size:
+            # Calculate distance to segment
+            if timestamp < segment['start']:
+                distance = segment['start'] - timestamp
+            elif timestamp > segment['end']:
+                distance = timestamp - segment['end']
+            else:
+                distance = 0  # Inside segment
+            
+            # Update if this is closer than previous best match
+            if distance < min_distance:
+                min_distance = distance
+                closest_segment = segment
+    
+    return closest_segment['speaker'] if closest_segment else None
+
 def main(input_file: str, model_size: Optional[str] = None, output_dir: Optional[str] = None, 
          skip_summary: bool = False, force: bool = False, is_batch_mode: bool = False,
          regenerate_summary_only: bool = False, skip_vocabulary: bool = False,
@@ -2075,26 +2146,6 @@ def setup_model(model_size: str) -> WhisperModel:
     )
     logging.info(f"Successfully loaded {model_size} model")
     return model
-
-def get_speaker_for_segment(timestamp: float, speaker_segments: List[Dict]) -> Optional[str]:
-    """
-    Find the speaker for a given timestamp from diarization results.
-    
-    Args:
-        timestamp: The timestamp to find the speaker for
-        speaker_segments: List of speaker segments from diarization
-        
-    Returns:
-        Speaker label or None if no match found
-    """
-    if not speaker_segments:
-        return None
-        
-    for segment in speaker_segments:
-        if segment['start'] <= timestamp <= segment['end']:
-            return segment['speaker']
-    
-    return None
 
 def transcribe_audio(model: WhisperModel, audio_file: str, speaker_segments: Optional[List[Dict]] = None) -> Tuple[List, object]:
     """
