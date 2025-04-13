@@ -209,9 +209,21 @@ def setup_logging():
     warnings.filterwarnings("ignore", message=".*Cache Metrics.*")
     
     # Disable torch inductor and dynamo INFO messages
-    import os
     os.environ["TORCH_LOGS"] = "ERROR"
     os.environ["TORCH_INDUCTOR_VERBOSE"] = "0"
+    
+    # Suppress PyTorch Inductor compile_threads warnings
+    import logging as py_logging
+    class PyTorchFilter(py_logging.Filter):
+        def filter(self, record):
+            # Filter out the compile_threads messages
+            return not (hasattr(record, 'msg') and 
+                       isinstance(record.msg, str) and 
+                       "compile_threads set to" in record.msg)
+                       
+    # Apply the filter to all loggers
+    root_logger = py_logging.getLogger()
+    root_logger.addFilter(PyTorchFilter())
     
     return logger
 
@@ -736,38 +748,53 @@ def process_transcript_workflow(transcript: str) -> Optional[Dict[str, str]]:
         results['blog'] = blog
         
     # Step 4: Generate alternative blog post
-    # Log the filename before reading
-    logging.info(f"Reading prompt file: {PROMPT_BLOG_ALT1_FILE}")
-    blog_alt1_prompt = read_prompt_file(PROMPT_BLOG_ALT1_FILE)
-    
-    # Log the content if it was read successfully
-    if blog_alt1_prompt:
-        logging.info(f"Prompt file content: {blog_alt1_prompt[:100]}..." if len(blog_alt1_prompt) > 100 else blog_alt1_prompt)
+    if os.path.isfile(PROMPT_BLOG_ALT1_FILE):
+        # Only log and attempt to read if the file exists
+        logging.debug(f"Alternative blog prompt file found: {PROMPT_BLOG_ALT1_FILE}")
+        blog_alt1_prompt = read_prompt_file(PROMPT_BLOG_ALT1_FILE)
+        
+        # Log the content if it was read successfully
+        if blog_alt1_prompt:
+            logging.info(f"Successfully read alternative blog prompt: {blog_alt1_prompt[:100]}..." if len(blog_alt1_prompt) > 100 else blog_alt1_prompt)
+            logging.info("Step 4: Generating blog alt1 post...")
+            # Use both the cleaned transcript and summary for blog generation
+            input_text = f"CLEANED TRANSCRIPT:\n{cleaned_transcript}\n\nSUMMARY:\n{results.get('summary', 'No summary available')}"
+            model_to_use = choose_appropriate_model(input_text)
+            # Use blog_alt1_prompt for the alternative blog
+            blog_alt1 = process_with_openai(input_text, blog_alt1_prompt, model_to_use, max_tokens=MAX_TOKENS * 2)
+            results['blog_alt1'] = blog_alt1
+        else:
+            logging.warning(f"Blog prompt alt1 file exists but couldn't be read or is empty: {PROMPT_BLOG_ALT1_FILE}")
+            results['blog_alt1'] = None
     else:
-        logging.warning(f"Failed to read prompt file: {PROMPT_BLOG_ALT1_FILE}")
-    if not blog_alt1_prompt:
-        logging.warning("Blog prompt alt1 file not found or empty, skipping blog generation")
+        # File doesn't exist, just log this at debug level and skip
+        logging.debug(f"Blog prompt alt1 file not found: {PROMPT_BLOG_ALT1_FILE}, skipping alt1 blog generation")
         results['blog_alt1'] = None
-    else:
-        logging.info("Step 4: Generating blog alt1 post...")
-        # Use both the cleaned transcript and summary for blog generation
-        input_text = f"CLEANED TRANSCRIPT:\n{cleaned_transcript}\n\nSUMMARY:\n{results.get('summary', 'No summary available')}"
-        model_to_use = choose_appropriate_model(input_text)
-        # Fix: blog_alt1 should use blog_alt1_prompt, not blog_prompt
-        blog_alt1 = process_with_openai(input_text, blog_alt1_prompt, model_to_use, max_tokens=MAX_TOKENS * 2)
-        results['blog_alt1'] = blog_alt1
     
     # Step 5: Generate history extraction
     history_extract_prompt = read_prompt_file(PROMPT_HISTORY_EXTRACT_FILE)
     if not history_extract_prompt:
         logging.warning("History extraction prompt file not found or empty, skipping history extraction")
+        logging.debug(f"Prompt file path that wasn't found: {PROMPT_HISTORY_EXTRACT_FILE}")
         results['history_extract'] = None
     else:
         logging.info("Step 5: Generating history lesson extraction...")
+        logging.debug(f"Found history extract prompt file: {PROMPT_HISTORY_EXTRACT_FILE}")
+        logging.debug(f"History model being used: {OPENAI_HISTORY_MODEL}")
+        
         # Use the cleaned transcript as input for history extraction
         model_to_use = OPENAI_HISTORY_MODEL  # Use the specified model for history extraction
-        history_extract = process_with_openai(cleaned_transcript, history_extract_prompt, model_to_use, max_tokens=MAX_TOKENS * 2)
-        results['history_extract'] = history_extract
+        try:
+            history_extract = process_with_openai(cleaned_transcript, history_extract_prompt, model_to_use, max_tokens=MAX_TOKENS * 2)
+            if history_extract:
+                logging.info(f"Successfully generated history extract ({len(history_extract)} chars)")
+                results['history_extract'] = history_extract
+            else:
+                logging.error("History extraction returned None - API call likely failed")
+                results['history_extract'] = None
+        except Exception as e:
+            logging.error(f"Exception during history extraction: {str(e)}")
+            results['history_extract'] = None
     
     return results
 
@@ -1427,125 +1454,129 @@ def create_output_paths(input_file: str) -> Tuple[str, str, str]:
         f"{base}_summary.txt",     # For summary
     )
 
-def write_transcript_files(segments, output_file: str, output_file_timestamped: str) -> str:
+def write_transcript_files(segments: List, output_file: str, output_file_timestamped: str, 
+                          speaker_segments: Optional[List[Dict]] = None) -> str:
     """
-    Write transcript files and return the full transcript.
+    Write transcript files with and without timestamps, integrating speaker info.
     
     Args:
-        segments: Transcript segments from WhisperModel
-        output_file: Path for plain text output
-        output_file_timestamped: Path for timestamped output
+        segments: List of transcription segments from Whisper
+        output_file: Path to save the clean transcript
+        output_file_timestamped: Path to save the timestamped transcript
+        speaker_segments: Optional list of speaker segments from diarization
         
     Returns:
-        The full transcript as a string
+        Full transcript text
     """
-    full_transcript = ""
-    
-    with open(output_file, "w", encoding="utf-8") as f_plain, open(output_file_timestamped, "w", encoding="utf-8") as f_timestamped:
+    try:
+        # Prepare for writing the transcripts
+        full_transcript = []
+        timestamped_transcript = []
         
-        for segment in segments:
-            # Get the original segment text
-            segment_text = segment.text
-            
-            # Apply vocabulary corrections to segment text if enabled
-            if USE_CUSTOM_VOCABULARY:
-                segment_text = apply_vocabulary_corrections(segment_text, load_vocabulary_mappings(VOCABULARY_FILE))
-            
-            # Store for OpenAI processing
-            full_transcript += segment_text + "\n"
-            
-            # Write to plain text file without timestamps
-            f_plain.write(segment_text + "\n")
-            
-            # Write to timestamped file with timestamps
-            f_timestamped.write("[%.2fs -> %.2fs] %s\n" % (segment.start, segment.end, segment_text))
-            
-            # Print to console with timestamps - handle potential encoding errors
-            try:
-                logging.info("[%.2fs -> %.2fs] %s", segment.start, segment.end, segment_text)
-            except UnicodeEncodeError:
-                # Fall back to ASCII if Unicode fails
-                safe_text = segment_text.encode('ascii', 'replace').decode('ascii')
-                logging.info("[%.2fs -> %.2fs] %s", segment.start, segment.end, safe_text)
-    
-    logging.info(f"Transcription saved to: {output_file}")
-    logging.info(f"Timestamped transcription saved to: {output_file_timestamped}")
-    
-    # Apply a final pass of vocabulary corrections to the full transcript if enabled
-    # This catches any patterns that might span across segments
-    if USE_CUSTOM_VOCABULARY:
-        original_transcript = full_transcript
-        full_transcript = apply_vocabulary_corrections(full_transcript, load_vocabulary_mappings(VOCABULARY_FILE))
+        # Track current speaker to avoid repeating speaker tags for consecutive segments
+        current_speaker = None
         
-        # If the final pass made additional corrections, update the saved files
-        if full_transcript != original_transcript:
-            logging.info("Applying final vocabulary correction pass to catch cross-segment patterns")
-            with open(output_file, "w", encoding="utf-8") as f_plain:
-                f_plain.write(full_transcript)
+        print(f"\nTranscriptie bestanden aanmaken...")
+        print(f"- Schoon transcript: {os.path.basename(output_file)}")
+        print(f"- Tijdgemarkeerd transcript: {os.path.basename(output_file_timestamped)}")
+        
+        # Process each segment from Whisper
+        for i, segment in enumerate(tqdm(segments, desc="Transcriptie verwerken", unit="segment")):
+            start = segment.start
+            end = segment.end
+            text = segment.text.strip()
             
-            # Simplification: regenerate timestamped file from full transcript
-            # This is imperfect since timestamps might not perfectly align with corrected text
-            lines = full_transcript.split('\n')
-            timestamped_lines = []
-            with open(output_file_timestamped, "r", encoding="utf-8") as f_original:
-                original_timestamped = f_original.readlines()
+            if not text:  # Skip empty segments
+                continue
+            
+            # Calculate segment duration for better speaker detection of short segments
+            segment_duration = end - start
+            
+            # Format timestamp for the timestamped version
+            timestamp = format_timestamp(start, end)
+            
+            # Get speaker info if available
+            speaker_info = ""
+            speaker_prefix = ""
+            if speaker_segments:
+                # Use middle of segment to determine speaker with improved context-awareness
+                middle_time = (start + end) / 2
+                # Pass segment duration to the improved function
+                speaker = get_speaker_for_segment(middle_time, speaker_segments, segment_duration=segment_duration)
                 
-            # Try to maintain timestamp information while updating text
-            for i, line in enumerate(lines):
-                if i < len(original_timestamped):
-                    ts_line = original_timestamped[i]
-                    ts_match = re.match(r'^\[\s*(\d+\.\d+)s\s*->\s*(\d+\.\d+)s\s*\]', ts_line)
-                    if ts_match and line.strip():
-                        start, end = ts_match.groups()
-                        timestamped_lines.append(f"[{start}s -> {end}s] {line}")
-                    elif line.strip():
-                        timestamped_lines.append(line)
+                if speaker:
+                    # Check if this is a short utterance that should inherit speaker from context
+                    is_short_utterance = segment_duration < 1.0 and len(text.split()) <= 5
+                    
+                    # For very short utterances with no clear speaker, try to maintain speaker continuity
+                    if is_short_utterance and not speaker and current_speaker:
+                        # Check if there's another segment right after this one
+                        if i < len(segments) - 1:
+                            next_segment = segments[i + 1]
+                            if next_segment.start - end < 1.0:  # If next segment starts within 1 second
+                                next_middle = (next_segment.start + next_segment.end) / 2
+                                next_speaker = get_speaker_for_segment(next_middle, speaker_segments)
+                                # If next segment has same speaker as current, keep it for continuity
+                                if next_speaker == current_speaker:
+                                    speaker = current_speaker
+                    
+                    if speaker:
+                        speaker_info = f"[{speaker}] "
+                        speaker_prefix = f"[{speaker}] "
+                        current_speaker = speaker
+                    else:
+                        # More aggressive search for a speaker with a wider context window
+                        speaker = get_speaker_for_segment(middle_time, speaker_segments, 
+                                                         segment_duration=segment_duration, 
+                                                         context_window=2.0)
+                        if speaker:
+                            speaker_info = f"[{speaker}] "
+                            speaker_prefix = f"[{speaker}] "
+                            current_speaker = speaker
+                        else:
+                            # Only mark as unknown if we are sure it's not part of previous speaker's utterance
+                            if current_speaker and segment_duration < 1.5 and start - prev_end < 1.0:
+                                # This is likely a continuation from previous speaker
+                                speaker_info = f"[{current_speaker}] "
+                                speaker_prefix = f"[{current_speaker}] "
+                            else:
+                                speaker_info = "[SPEAKER_UNKNOWN] "
+                                speaker_prefix = "[SPEAKER_UNKNOWN] "
+                                current_speaker = None
+                else:
+                    speaker_info = "[SPEAKER_UNKNOWN] "
+                    speaker_prefix = "[SPEAKER_UNKNOWN] "
+                    current_speaker = None
             
-            with open(output_file_timestamped, "w", encoding="utf-8") as f_updated:
-                f_updated.write('\n'.join(timestamped_lines))
-    
-    return full_transcript
-
-def process_summary(full_transcript: str, output_summary_file: str, output_blog_file: Optional[str] = None) -> bool:
-    """
-    Process the transcript to generate and save summary and blog.
-    
-    Args:
-        transcript: The complete transcript text
-        output_summary_file: Path to save the summary
-        output_blog_file: Path to save the blog
+            # Add to transcript collections
+            clean_line = f"{speaker_prefix}{text}"
+            timestamped_line = f"{timestamp} {speaker_info}{text}"
+            
+            full_transcript.append(clean_line)
+            timestamped_transcript.append(timestamped_line)
+            
+            # Store the end time for checking continuity in the next iteration
+            prev_end = end
         
-    Returns:
-        Success status (True/False)
-    """
-    # Use the multi-step workflow
-    results = process_transcript_workflow(transcript)
-    
-    if not results:
-        logging.error("Failed to process transcript")
-        return False
-    
-    # Get the base output path
-    output_base = os.path.splitext(output_summary_file)[0].replace('_summary', '')
-    
-    # Write outputs to files
-    write_workflow_outputs(results, output_base)
-    
-    return True
-
-def transcription_exists(input_file: str) -> bool:
-    """
-    Check if a transcription already exists for the given audio file.
-    
-    Args:
-        input_file: Path to the input audio file    
+        # Join all lines
+        full_text = "\n".join(full_transcript)
+        timestamped_text = "\n".join(timestamped_transcript)
         
-    Returns:
-        True if transcription exists, False otherwise
-    """
-    base = os.path.splitext(input_file)[0]
-    transcript_file = f"{base}.txt"
-    return os.path.exists(transcript_file)
+        # Write to files
+        with open(output_file, 'w', encoding='utf-8') as f:
+            f.write(full_text)
+        
+        with open(output_file_timestamped, 'w', encoding='utf-8') as f:
+            f.write(timestamped_text)
+            
+        print(f"Transcriptie bestanden succesvol aangemaakt:")
+        print(f"- {output_file}")
+        print(f"- {output_file_timestamped}")
+        
+        return full_text
+    except Exception as e:
+        logging.error(f"Error writing transcript files: {str(e)}")
+        return ""
 
 def regenerate_summary(transcript_file: str) -> bool:
     """
@@ -1566,13 +1597,19 @@ def regenerate_summary(transcript_file: str) -> bool:
         with open(transcript_file, 'r', encoding='utf-8') as f:
             transcript = f.read()
         
-        # Create paths for output files
+        # Create base path for output files (without any extension)
         base = os.path.splitext(transcript_file)[0]
-        summary_file = f"{base}_summary.txt"
-        blog_file = f"{base}_blog.txt"
         
-        # Generate and save summary and blog
-        return process_summary(transcript, summary_file, blog_file)    
+        # Run the complete workflow to generate all outputs
+        results = process_transcript_workflow(transcript)
+        if not results:
+            logging.error("Failed to process transcript workflow")
+            return False
+        
+        # Write all outputs to files
+        write_workflow_outputs(results, base)
+        
+        return True
     except Exception as e:
         logging.error(f"Error regenerating summary: {str(e)}")
         return False
@@ -1686,7 +1723,7 @@ def regenerate_blog_only(transcript_file: str, summary_file: str) -> bool:
             # Creating the alternative blogpost
             logging.info("Generating blog alt 1 post...")
             
-            # Read the blog prompt
+            # Read the blog prompt - only attempt to read if file exists
             blog_alt1_prompt = read_prompt_file(PROMPT_BLOG_ALT1_FILE)
             if blog_alt1_prompt:
                 # Use process_with_openai instead of direct API call
@@ -1702,11 +1739,26 @@ def regenerate_blog_only(transcript_file: str, summary_file: str) -> bool:
                     with open(blog_alt1_file, 'w', encoding='utf-8') as f:
                         f.write(blog_alt1)
                         logging.info(f"Blog alt1 post saved to: {blog_alt1_file}")
+                        
+                    # Generate and write HTML version
+                    html_content = convert_markdown_to_html(blog_alt1)
+                    html_path = os.path.join(output_dir, f"{base_filename}_blog_alt1.html")
+                    with open(html_path, "w", encoding="utf-8") as f:
+                        f.write(html_content)
+                    logging.info(f"HTML blog alt1 post saved to: {html_path}")
+                    
+                    # Generate and write Wiki version
+                    wiki_content = convert_markdown_to_wiki(blog_alt1)
+                    wiki_path = os.path.join(output_dir, f"{base_filename}_blog_alt1.wiki")
+                    with open(wiki_path, "w", encoding="utf-8") as f:
+                        f.write(wiki_content)
+                    logging.info(f"Wiki blog alt1 post saved to: {wiki_path}")
                 else:
                     logging.error("Failed to generate alternative blog post")
             else:
-                logging.warning("Blog prompt alt1 file exists but is empty, skipping blog alt1 generation")
+                logging.warning("Blog prompt alt1 file exists but is empty or couldn't be read, skipping blog alt1 generation")
         else:
+            # File doesn't exist, just log at INFO level and skip
             logging.info(f"Blog prompt alt1 file {PROMPT_BLOG_ALT1_FILE} not found, skipping alternative blog generation")
         
         # Generate and write HTML version
@@ -2776,7 +2828,7 @@ def perform_speaker_diarization(audio_file: str, min_speakers: int = DIARIZATION
             if waveform.size(0) > 1:
                 waveform = torch.mean(waveform, dim=0, keepdim=True)
                 
-            # Bereken totale lengte en zorg dat deze deelbaar is door 16000 (10ms window)
+            # Bereken totale lengte and zorg dat deze deelbaar is door 16000 (10ms window)
             # om ongelijke tensor-maten te voorkomen
             length = waveform.size(1)
             target_length = ((length // 16000) + 1) * 16000
@@ -2806,7 +2858,7 @@ def perform_speaker_diarization(audio_file: str, min_speakers: int = DIARIZATION
             )
             
             # Verwijder tijdelijk bestand indien aangemaakt
-            if diarization_audio_file != audio_file en os.path.exists(diarization_audio_file):
+            if diarization_audio_file != audio_file and os.path.exists(diarization_audio_file):
                 try:
                     os.remove(diarization_audio_file)
                 except:
@@ -2818,7 +2870,7 @@ def perform_speaker_diarization(audio_file: str, min_speakers: int = DIARIZATION
             print("Eerste poging mislukt, probeer alternatieve methode...")
             
             # Als tijdelijk bestand bestaat, verwijder het
-            if diarization_audio_file != audio_file en os.path.exists(diarization_audio_file):
+            if diarization_audio_file != audio_file and os.path.exists(diarization_audio_file):
                 try:
                     os.remove(diarization_audio_file)
                 except:
@@ -2860,35 +2912,97 @@ def perform_speaker_diarization(audio_file: str, min_speakers: int = DIARIZATION
         logging.error(f"Fout bij uitvoeren speaker diarization: {str(e)}")
         return None
 
-def get_speaker_for_segment(timestamp: float, speaker_segments: List[Dict]) -> Optional[str]:
+def get_speaker_for_segment(timestamp: float, speaker_segments: List[Dict], 
+                         segment_duration: float = 0.0, 
+                         context_window: float = 1.0) -> Optional[str]:
     """
-    Find the speaker for a given timestamp from diarization results.
+    Find the speaker for a given timestamp from diarization results using improved context-aware approach.
     
     Args:
         timestamp: The timestamp to find the speaker for
         speaker_segments: List of speaker segments from diarization
+        segment_duration: Duration of the segment being analyzed (for short segment handling)
+        context_window: Size of context window to consider around the timestamp in seconds
         
     Returns:
         Speaker label or None if no match found
     """
     if not speaker_segments:
         return None
+    
+    # Determine if this is a short segment (less than 1 second)
+    is_short_segment = segment_duration > 0 and segment_duration < 1.0
         
-    # Create a window around the timestamp to find the most likely speaker
-    window_size = 0.5  # Look for speakers within 0.5 seconds of the timestamp
+    # For short segments, use wider context window and more sophisticated matching
+    if is_short_segment:
+        # Use wider context window for short segments
+        context_window = max(1.5, segment_duration * 3)
+        
+        # Create a list of speakers in the vicinity with confidence scores
+        speaker_candidates = []
+        
+        # First phase: Find exact overlaps
+        for segment in speaker_segments:
+            # Check if timestamp falls within this segment
+            if segment['start'] <= timestamp <= segment['end']:
+                # Strong match - speaker directly overlaps with the timestamp
+                # Calculate how centered the timestamp is in the segment (0.0-1.0 score)
+                segment_length = segment['end'] - segment['start']
+                if segment_length > 0:
+                    position_ratio = 1.0 - 2.0 * abs((timestamp - segment['start']) / segment_length - 0.5)
+                    confidence = 0.8 + (position_ratio * 0.2)  # Score between 0.8-1.0
+                else:
+                    confidence = 0.8
+                
+                speaker_candidates.append({
+                    'speaker': segment['speaker'],
+                    'confidence': confidence,
+                    'distance': 0.0
+                })
+        
+        # If no direct match, find nearby speakers within context window
+        if not speaker_candidates:
+            for segment in speaker_segments:
+                # Calculate distance to this segment
+                if timestamp < segment['start']:
+                    distance = segment['start'] - timestamp
+                elif timestamp > segment['end']:
+                    distance = timestamp - segment['end']
+                else:
+                    distance = 0  # Inside the segment (shouldn't happen here)
+                
+                # Include if within context window
+                if distance <= context_window:
+                    # Calculate confidence based on distance - closer is better
+                    confidence = max(0.1, 1.0 - (distance / context_window))
+                    speaker_candidates.append({
+                        'speaker': segment['speaker'],
+                        'confidence': confidence,
+                        'distance': distance
+                    })
+        
+        # Second phase: If we have candidates, find most probable speaker
+        if speaker_candidates:
+            # Sort by confidence (highest first)
+            speaker_candidates.sort(key=lambda x: x['confidence'], reverse=True)
+            
+            # Return the most confident speaker
+            return speaker_candidates[0]['speaker']
+            
+        # If no candidates found, return None
+        return None
+    else:
+        # Standard approach for normal-length segments
+        # First, try exact match
+        for segment in speaker_segments:
+            if segment['start'] <= timestamp <= segment['end']:
+                return segment['speaker']
     
-    # First, try exact match
-    for segment in speaker_segments:
-        if segment['start'] <= timestamp <= segment['end']:
-            return segment['speaker']
-    
-    # If no exact match, look for the closest segment within the window
-    closest_segment = None
-    min_distance = float('inf')
-    
-    for segment in speaker_segments:
-        # Check if timestamp is close to segment start or end
-        if abs(segment['start'] - timestamp) < window_size or abs(segment['end'] - timestamp) < window_size:
+        # If no exact match, look for the closest segment within the window
+        closest_segment = None
+        min_distance = float('inf')
+        
+        for segment in speaker_segments:
             # Calculate distance to segment
             if timestamp < segment['start']:
                 distance = segment['start'] - timestamp
@@ -2897,12 +3011,12 @@ def get_speaker_for_segment(timestamp: float, speaker_segments: List[Dict]) -> O
             else:
                 distance = 0  # Inside segment
             
-            # Update if this is closer than previous best match
-            if distance < min_distance:
+            # Update if this is closer than previous best match and within context window
+            if distance < min_distance and distance <= context_window:
                 min_distance = distance
                 closest_segment = segment
-    
-    return closest_segment['speaker'] if closest_segment else None
+        
+        return closest_segment['speaker'] if closest_segment else None
 
 def main(input_file: str, model_size: Optional[str] = None, output_dir: Optional[str] = None, 
          skip_summary: bool = False, force: bool = False, is_batch_mode: bool = False,
@@ -3009,12 +3123,9 @@ def main(input_file: str, model_size: Optional[str] = None, output_dir: Optional
             # Restore original model name if it was changed
             if original_model:
                 DIARIZATION_MODEL = original_model
-            
-            if speaker_segments:
-                logging.info(f"Identified {len(set(s['speaker'] for s in speaker_segments))} unique speakers")
-                print(f"Geïdentificeerd: {len(set(s['speaker'] for s in speaker_segments))} unieke sprekers")
-            else:
-                logging.warning("Speaker diarization failed or was skipped")
+                
+            if not speaker_segments:
+                logging.warning("Speaker diarization failed or no speakers detected")
                 print("Sprekerherkenning mislukt of overgeslagen")
         
         # Transcribe with speaker information if available
@@ -3033,9 +3144,14 @@ def main(input_file: str, model_size: Optional[str] = None, output_dir: Optional
             if file_size_kb > MAX_FILE_SIZE_KB * 2:
                 logging.warning(f"File is extremely large ({file_size_kb:.1f} KB). Processing may take significant time.")
         
-        # Generate and save summary (if not skipped)
+        # Generate and save summary, blog, and history extraction (if not skipped)
         if not skip_summary:
-            process_summary(full_transcript, output_summary_file, output_blog_file)
+            # Use process_transcript_workflow to ensure history extraction is included
+            results = process_transcript_workflow(full_transcript)
+            if results:
+                write_workflow_outputs(results, output_base)
+            else:
+                logging.error("Failed to process transcript workflow")
     except Exception as e:
         logging.error(f"An error occurred processing {input_file}: {str(e)}")
         if not is_batch_mode:
@@ -3334,7 +3450,7 @@ def write_transcript_files(segments: List, output_file: str, output_file_timesta
         full_transcript = []
         timestamped_transcript = []
         
-        # Track current speaker to avoid repeating speaker tags
+        # Track current speaker to avoid repeating speaker tags for consecutive segments
         current_speaker = None
         
         print(f"\nTranscriptie bestanden aanmaken...")
@@ -3350,6 +3466,9 @@ def write_transcript_files(segments: List, output_file: str, output_file_timesta
             if not text:  # Skip empty segments
                 continue
             
+            # Calculate segment duration for better speaker detection of short segments
+            segment_duration = end - start
+            
             # Format timestamp for the timestamped version
             timestamp = format_timestamp(start, end)
             
@@ -3357,17 +3476,54 @@ def write_transcript_files(segments: List, output_file: str, output_file_timesta
             speaker_info = ""
             speaker_prefix = ""
             if speaker_segments:
-                middle_time = (start + end) / 2  # Use middle of segment to determine speaker
-                speaker = get_speaker_for_segment(middle_time, speaker_segments)
+                # Use middle of segment to determine speaker with improved context-awareness
+                middle_time = (start + end) / 2
+                # Pass segment duration to the improved function
+                speaker = get_speaker_for_segment(middle_time, speaker_segments, segment_duration=segment_duration)
                 
-                # Altijd speaker tonen, niet alleen bij wisselingen
                 if speaker:
-                    speaker_info = f"[{speaker}] "
-                    speaker_prefix = f"[{speaker}] "
-                    current_speaker = speaker
+                    # Check if this is a short utterance that should inherit speaker from context
+                    is_short_utterance = segment_duration < 1.0 and len(text.split()) <= 5
+                    
+                    # For very short utterances with no clear speaker, try to maintain speaker continuity
+                    if is_short_utterance and not speaker and current_speaker:
+                        # Check if there's another segment right after this one
+                        if i < len(segments) - 1:
+                            next_segment = segments[i + 1]
+                            if next_segment.start - end < 1.0:  # If next segment starts within 1 second
+                                next_middle = (next_segment.start + next_segment.end) / 2
+                                next_speaker = get_speaker_for_segment(next_middle, speaker_segments)
+                                # If next segment has same speaker as current, keep it for continuity
+                                if next_speaker == current_speaker:
+                                    speaker = current_speaker
+                    
+                    if speaker:
+                        speaker_info = f"[{speaker}] "
+                        speaker_prefix = f"[{speaker}] "
+                        current_speaker = speaker
+                    else:
+                        # More aggressive search for a speaker with a wider context window
+                        speaker = get_speaker_for_segment(middle_time, speaker_segments, 
+                                                         segment_duration=segment_duration, 
+                                                         context_window=2.0)
+                        if speaker:
+                            speaker_info = f"[{speaker}] "
+                            speaker_prefix = f"[{speaker}] "
+                            current_speaker = speaker
+                        else:
+                            # Only mark as unknown if we are sure it's not part of previous speaker's utterance
+                            if current_speaker and segment_duration < 1.5 and start - prev_end < 1.0:
+                                # This is likely a continuation from previous speaker
+                                speaker_info = f"[{current_speaker}] "
+                                speaker_prefix = f"[{current_speaker}] "
+                            else:
+                                speaker_info = "[SPEAKER_UNKNOWN] "
+                                speaker_prefix = "[SPEAKER_UNKNOWN] "
+                                current_speaker = None
                 else:
                     speaker_info = "[SPEAKER_UNKNOWN] "
                     speaker_prefix = "[SPEAKER_UNKNOWN] "
+                    current_speaker = None
             
             # Add to transcript collections
             clean_line = f"{speaker_prefix}{text}"
@@ -3375,6 +3531,9 @@ def write_transcript_files(segments: List, output_file: str, output_file_timesta
             
             full_transcript.append(clean_line)
             timestamped_transcript.append(timestamped_line)
+            
+            # Store the end time for checking continuity in the next iteration
+            prev_end = end
         
         # Join all lines
         full_text = "\n".join(full_transcript)
