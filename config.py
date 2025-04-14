@@ -14,13 +14,13 @@ COMPUTE_TYPE = os.environ.get("WHISPER_COMPUTE_TYPE", "float16")
 BEAM_SIZE = int(os.environ.get("WHISPER_BEAM_SIZE", "5"))
 
 # OpenAI configuration
-OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o")  # Updated to current model name
-OPENAI_LARGE_CONTEXT_MODEL = os.environ.get("OPENAI_LARGE_CONTEXT_MODEL", "gpt-4o-2024-05-13")  # Updated to latest version with 128K context
+OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4.1")  # Updated to current model name
+OPENAI_LARGE_CONTEXT_MODEL = os.environ.get("OPENAI_LARGE_CONTEXT_MODEL", "gpt-4.1")  # Updated to latest version with 128K context
 OPENAI_HISTORY_MODEL = os.environ.get("OPENAI_HISTORY_MODEL", "o3-mini")  # Model for history extractions with reasoning capabilities
 TEMPERATURE = float(os.environ.get("OPENAI_TEMPERATURE", "0.7"))
 MAX_TOKENS = int(os.environ.get("OPENAI_MAX_TOKENS", "4000"))  # Increased for longer summaries
 # Max tokens to send to OpenAI (considering model's max context - completion tokens)
-MAX_INPUT_TOKENS = int(os.environ.get("OPENAI_MAX_INPUT_TOKENS", "50000"))  # Increased to handle 200kB
+MAX_INPUT_TOKENS = int(os.environ.get("OPENAI_MAX_INPUT_TOKENS", "60000"))  # Increased to handle 200kB
 # Number of tokens to use for estimating text length (OpenAI uses ~4 chars per token on average)
 CHARS_PER_TOKEN = int(os.environ.get("OPENAI_CHARS_PER_TOKEN", "4"))
 # Maximum file size to process without warning (in KB)
