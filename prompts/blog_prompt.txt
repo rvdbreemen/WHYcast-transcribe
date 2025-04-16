@@ -8,6 +8,7 @@ Transform the cleaned podcast transcript into a **sharp, engaging, and web-optim
 - Hook readers fast  
 - Deliver substance with style  
 - Stay true to hacker culture  
+- Ensure each paragraph is substantial and informative, not just a single sentence, but still easy to read
 
 ---
 
@@ -45,7 +46,8 @@ or on your favorite podcast platform.
 ---
 
 ### Make It Web-Optimized:
-- Short paragraphs  
+- Use paragraphs that are substantial (3-6 sentences), not just single lines, to provide depth and context
+- Short paragraphs for readability, but avoid making them too brief
 - Bolded key phrases for readability  
 - Bullet points, hyperlinks, or code snippets where relevant  
 - Mobile-friendly and skimmable  

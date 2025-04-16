@@ -25,6 +25,7 @@ import markdown  # New import for markdown to HTML conversion
 import torch
 import torchaudio
 import time
+import hashlib
 
 # Onderdruk specifieke waarschuwingen
 warnings.filterwarnings("ignore", message="The MPEG_LAYER_III subtype is unknown to TorchAudio")
@@ -57,9 +58,12 @@ except ImportError:
 try:
     from openai import OpenAI
     OPENAI_AVAILABLE = True
+    from openai import BadRequestError
 except ImportError:
     logging.warning("openai not installed. Summarization and blog generation will not be available.")
     OPENAI_AVAILABLE = False
+    class BadRequestError(Exception):
+        pass
 
 try:
     import feedparser
@@ -118,7 +122,8 @@ except Exception as e:
 
 # Set up logging to both console and file
 def setup_logging():
-    log_format = '%(asctime)s - %(levelname)s - %(message)s'
+    # Enhanced log format with line numbers and function names
+    log_format = '%(asctime)s - %(levelname)s - [%(filename)s:%(lineno)d:%(funcName)s] - %(message)s'
     logger = logging.getLogger()
     logger.setLevel(logging.INFO)  # Standaard niveau op INFO
     
@@ -1320,139 +1325,149 @@ def setup_model(model_size: str = MODEL_SIZE) -> WhisperModel:
             num_workers=4
         )
 
-def transcribe_audio(model: WhisperModel, audio_file: str) -> Tuple[List, object]:
+def transcribe_audio(model: WhisperModel, audio_file: str, speaker_segments: Optional[List[Dict]] = None) -> Tuple[List, object]:
     """
-    Transcribe an audio file using the provided model with optimized settings.
+    Transcribe audio file using the Whisper model.
     
     Args:
-        model: The WhisperModel to use
-        audio_file: Path to the audio file
+        model: Initialized WhisperModel instance
+        audio_file: Path to the audio file to transcribe
+        speaker_segments: Optional list of speaker segments from diarization
         
     Returns:
         Tuple of (segments, info)
     """
-    logging.info(f"Transcribing {audio_file}...")
-    if USE_CUSTOM_VOCABULARY:
-        logging.info("Vocabulary corrections will be applied during transcription")
+    import os  # Actually importing the os module
     
-    # Monitor GPU memory before transcription if possible
-    try:
-        if model.device == "cuda":
-            import torch
-            before_mem = torch.cuda.memory_allocated() / (1024 ** 3)  # GB
-            logging.info(f"GPU memory in use before transcription: {before_mem:.2f} GB")
-    except Exception:
-        pass
+    logging.info(f"Transcribing audio file: {audio_file}")
+    print(f"\nStart transcriptie van {os.path.basename(audio_file)}...")
+    start_time = time.time()
     
-    start_time = datetime.now()
-    
-    # Use optimized transcription parameters
-    result = model.transcribe(
-        audio_file,
-        beam_size=BEAM_SIZE,
-        best_of=5,         # Consider more candidates for better results
-        vad_filter=True,   # Voice activity detection to skip silence
-        vad_parameters={"min_silence_duration_ms": 500},  # Adjust silence detection
-        initial_prompt=None,  # Can set an initial prompt if needed for better context
-        condition_on_previous_text=True,  # Use previous text as context
-        temperature=[0.0, 0.2, 0.4, 0.6, 0.8, 1.0]  # Temperature fallback for difficult audio
-    )
-    
-    end_time = datetime.now()
-    duration = (end_time - start_time).total_seconds()
-    audio_duration = get_audio_duration(audio_file)
-    if audio_duration > 0:
-        speed_factor = audio_duration / duration
-        logging.info(f"Transcription completed in {duration:.2f} seconds (audio length: {audio_duration:.2f}s, {speed_factor:.2f}x real-time speed)")
-    else:
-        logging.info(f"Transcription completed in {duration:.2f} seconds")
-    
-    # Monitor GPU memory after transcription
-    try:
-        if model.device == "cuda":
-            import torch
-            after_mem = torch.cuda.memory_allocated() / (1024 ** 3)  # GB
-            logging.info(f"GPU memory in use after transcription: {after_mem:.2f} GB")
-            # Clear cache immediately after transcription to free memory
-            torch.cuda.empty_cache()
-    except Exception:
-        pass
-    
-    return result
-
-# New function to get audio duration for performance metrics
-def get_audio_duration(audio_file: str) -> float:
-    """
-    Get the duration of an audio file in seconds.
-    
-    Args:
-        audio_file: Path to the audio file
-        
-    Returns:
-        Duration in seconds or 0 if cannot be determined
-    """
-    try:
-        import librosa
-        duration = librosa.get_duration(path=audio_file)
-        return duration
-    except Exception:
-        # Try with pydub if librosa fails
+    # Load custom vocabulary if enabled
+    word_list = None
+    word_replacements = {}
+    if USE_CUSTOM_VOCABULARY and os.path.exists(VOCABULARY_FILE):
         try:
-            from pydub import AudioSegment
-            audio = AudioSegment.from_file(audio_file)
-            return len(audio) / 1000.0  # Convert ms to seconds
-        except Exception:
-            return 0  # Return 0 if duration cannot be determined
-
-def cleanup_resources(model=None):
-    """
-    Clean up resources after processing.
-    More aggressive memory cleanup to prevent memory leaks.
-    
-    Args:
-        model: The WhisperModel instance to clean up (if provided)
-    """
-    try:
-        # Clear CUDA cache if available
-        import torch
-        if torch.cuda.is_available():
-            # More aggressive memory cleanup
-            torch.cuda.empty_cache()
-            torch.cuda.synchronize()  # Make sure all CUDA operations are complete
-            logging.info("CUDA cache cleared")
+            with open(VOCABULARY_FILE, 'r', encoding='utf-8') as f:
+                vocabulary = json.load(f)
             
-            # Log memory stats
-            allocated = torch.cuda.memory_allocated() / (1024 ** 3)  # GB
-            reserved = torch.cuda.memory_reserved() / (1024 ** 3)    # GB
-            logging.info(f"GPU memory: allocated={allocated:.2f}GB, reserved={reserved:.2f}GB")
-        
-        # Delete model to free up memory
-        if model is not None:
-            del model
-            logging.info("Model resources released")
-        
-        # Force garbage collection
-        import gc
-        gc.collect()
-    except Exception as e:
-        logging.warning(f"Error during resource cleanup: {str(e)}")
-
-def create_output_paths(input_file: str) -> Tuple[str, str, str]:
-    """
-    Create output file paths based on the input filename.
+            # Maak een lijst van woorden voor word_list parameter
+            word_list = []
+            
+            # Lees vervangingen voor post-processing
+            for original, replacement in vocabulary.items():
+                word_replacements[original.lower()] = replacement
+                # Voeg ook de vervanging toe aan de word_list
+                word_list.append(replacement)
+            
+            if word_list:
+                logging.info(f"Loaded {len(word_list)} custom vocabulary words")
+                print(f"Aangepaste woordenlijst geladen met {len(word_list)} woorden")
+        except Exception as e:
+            logging.error(f"Error loading vocabulary: {str(e)}")
     
-    Args:
-        input_file: Path to the input audio file
+    # Maak basic transcriptie parameters
+    transcription_params = {
+        'beam_size': BEAM_SIZE,
+        'word_timestamps': True,  # Enable word timestamps for better alignment with diarization
+        'vad_filter': True,       # Filter out non-speech parts
+        'vad_parameters': dict(min_silence_duration_ms=500),  # Configure VAD for better accuracy
+        'initial_prompt': "This is a podcast transcription.",
+        'condition_on_previous_text': True,
+    }
+    
+    # Bijhouden van huidige spreker om herhalingen te vermijden
+    current_speaker = None
+    
+    # Definieer functie voor live output
+    def process_segment(segment):
+        text = segment.text
         
-    Returns:
-        Tuple of (plain_text_path, timestamped_path, summary_path)   
-    """
-    base = os.path.splitext(input_file)[0]
-    return (
-        f"{base}.txt",             # Without timestamps
-        f"{base}_ts.txt",          # With timestamps
-        f"{base}_summary.txt",     # For summary
-    )
+        # Pas woordenboek toe op elke segment
+        if word_replacements:
+            for original, replacement in word_replacements.items():
+                # Vervang hele woorden met case-insensitive match
+                pattern = r'\b' + re.escape(original) + r'\b'
+                text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
+        
+        # Voeg sprekerinfo toe als beschikbaar
+        speaker_info = ""
+        nonlocal current_speaker
+        
+        if speaker_segments:
+            # Gebruik middelpunt van het segment om spreker te bepalen
+            segment_middle = (segment.start + segment.end) / 2
+            speaker = get_speaker_for_segment(segment_middle, speaker_segments)
+            
+            # Altijd speaker tonen, niet alleen bij wisseling
+            if speaker:
+                speaker_info = f"[{speaker}] "
+                current_speaker = speaker
+            else:
+                speaker_info = "[SPEAKER_UNKNOWN] "
+        
+        # Toon de tekst direct in de console
+        print(f"{format_timestamp(segment.start, segment.end)} {speaker_info}{text}")
+        
+        # Pas de tekst toe in het segment
+        segment.text = text
+        return segment
+    
+    # Function to collect segments with real-time processing
+    def collect_with_live_output(segments_generator):
+        print("\n--- Live Transcriptie Output ---")
+        result = []
+        for segment in segments_generator:
+            # Process each segment for replacements and logging
+            segment = process_segment(segment)
+            result.append(segment)
+        print("--- Einde Live Transcriptie ---\n")
+        return result
+    
+    # Execute transcription with appropriate parameters
+    try:
+        # Voeg word_list alleen toe als deze is gedefinieerd en niet leeg is
+        if word_list:
+            try:
+                # Probeer met word_list
+                print("Transcriptie uitvoeren met aangepaste woordenlijst...")
+                segments_generator, info = model.transcribe(
+                    audio_file,
+                    **transcription_params,
+                    word_list=word_list
+                )
+                segments_list = collect_with_live_output(segments_generator)
+            except TypeError as e:
+                # Als word_list niet wordt ondersteund, probeer zonder
+                logging.warning(f"word_list parameter niet ondersteund in deze versie van faster_whisper: {e}")
+                logging.info("Transcriptie uitvoeren zonder aangepaste woordenlijst")
+                print("word_list niet ondersteund, transcriptie uitvoeren zonder aangepaste woordenlijst...")
+                segments_generator, info = model.transcribe(
+                    audio_file, 
+                    **transcription_params
+                )
+                segments_list = collect_with_live_output(segments_generator)
+        else:
+            # Als er geen word_list is, gebruik de standaard parameters
+            print("Transcriptie uitvoeren...")
+            segments_generator, info = model.transcribe(
+                audio_file,
+                **transcription_params
+            )
+            segments_list = collect_with_live_output(segments_generator)
+            
+    except Exception as e:
+        logging.error(f"Error tijdens transcriptie: {str(e)}")
+        raise
+    
+    # Bereken en toon verwerkingstijd
+    elapsed_time = time.time() - start_time
+    print(f"\nTranscriptie voltooid in {elapsed_time:.1f} seconden.")
+    print(f"Taal gedetecteerd: {info.language} (waarschijnlijkheid: {info.language_probability:.2f})")
+    print(f"Aantal segmenten: {len(segments_list)}")
+    
+    logging.info(f"Transcription complete: {len(segments_list)} segments")
+    return segments_list, info
 
 def write_transcript_files(segments: List, output_file: str, output_file_timestamped: str, 
                           speaker_segments: Optional[List[Dict]] = None) -> str:
@@ -3018,6 +3033,15 @@ def get_speaker_for_segment(timestamp: float, speaker_segments: List[Dict],
         
         return closest_segment['speaker'] if closest_segment else None
 
+def transcription_exists(input_file: str) -> bool:
+    """
+    Check if the main transcript output file exists for the given input audio file.
+    """
+    import os  # Import os within the function scope
+    base = os.path.splitext(input_file)[0]
+    transcript_file = f"{base}.txt"
+    return os.path.exists(transcript_file)
+
 def main(input_file: str, model_size: Optional[str] = None, output_dir: Optional[str] = None, 
          skip_summary: bool = False, force: bool = False, is_batch_mode: bool = False,
          regenerate_summary_only: bool = False, skip_vocabulary: bool = False,
@@ -3146,10 +3170,17 @@ def main(input_file: str, model_size: Optional[str] = None, output_dir: Optional
         
         # Generate and save summary, blog, and history extraction (if not skipped)
         if not skip_summary:
-            # Use process_transcript_workflow to ensure history extraction is included
+            base_path, _ = os.path.splitext(input_file)
+            os.environ["WORKFLOW_OUTPUT_BASE"] = base_path
+            logging.info(f"Set WORKFLOW_OUTPUT_BASE to {base_path} for speaker assignment workflow.")
             results = process_transcript_workflow(full_transcript)
             if results:
-                write_workflow_outputs(results, output_base)
+                logging.info("Workflow results keys: %s", list(results.keys()))
+                write_workflow_outputs(results, base_path)
+                if results.get('speaker_assignment'):
+                    logging.info(f"Speaker assignment output successfully generated for {base_path}.")
+                else:
+                    logging.warning(f"Speaker assignment output was not generated for {base_path}.")
             else:
                 logging.error("Failed to process transcript workflow")
     except Exception as e:
@@ -3301,6 +3332,8 @@ def transcribe_audio(model: WhisperModel, audio_file: str, speaker_segments: Opt
     Returns:
         Tuple of (segments, info)
     """
+    import os  # Add the missing import here
+    
     logging.info(f"Transcribing audio file: {audio_file}")
     print(f"\nStart transcriptie van {os.path.basename(audio_file)}...")
     start_time = time.time()

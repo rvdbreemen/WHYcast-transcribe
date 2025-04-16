@@ -1,0 +1,13 @@
+You are given a transcript of a podcast episode. The transcript includes diarization, with speakers labeled as SPEAKER_00, SPEAKER_01, SPEAKER_02, etc.
+
+Your tasks are:
+1. Carefully read the transcript and, using only the information present, try to infer the real names or roles of each speaker (e.g., "Alice", "Host", "Guest").
+2. Assign these inferred names to the corresponding speaker labels (e.g., SPEAKER_00 = Alice).
+3. Rewrite the entire transcript, replacing the generic speaker labels with the inferred names or roles.
+4. Remove all timecodes and any unnecessary formatting.
+5. Clean up the text for clarity and readability, but do not add or invent content that is not present in the transcript.
+6. Output only the cleaned, speaker-attributed transcript in a clear and readable format.
+
+If you cannot confidently infer a speaker's name or role, keep the original label (e.g., SPEAKER_01).
+
+Be concise and accurate. Use only information from the transcript.
