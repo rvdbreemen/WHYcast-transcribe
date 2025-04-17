@@ -106,11 +106,12 @@ try:
         VERSION, MODEL_SIZE, DEVICE, COMPUTE_TYPE, BEAM_SIZE,
         OPENAI_MODEL, OPENAI_LARGE_CONTEXT_MODEL, OPENAI_HISTORY_MODEL,
         TEMPERATURE, MAX_TOKENS, MAX_INPUT_TOKENS, CHARS_PER_TOKEN,
-        PROMPT_CLEANUP_FILE, PROMPT_SUMMARY_FILE, PROMPT_BLOG_FILE, PROMPT_BLOG_ALT1_FILE, PROMPT_HISTORY_EXTRACT_FILE, MAX_FILE_SIZE_KB,
+        PROMPT_CLEANUP_FILE, PROMPT_SUMMARY_FILE, PROMPT_BLOG_FILE, PROMPT_BLOG_ALT1_FILE, PROMPT_HISTORY_EXTRACT_FILE, PROMPT_SPEAKER_ASSIGN_FILE, MAX_FILE_SIZE_KB,
         USE_RECURSIVE_SUMMARIZATION, MAX_CHUNK_SIZE, CHUNK_OVERLAP,
         VOCABULARY_FILE, USE_CUSTOM_VOCABULARY,
         USE_SPEAKER_DIARIZATION, DIARIZATION_MODEL, DIARIZATION_ALTERNATIVE_MODEL, 
-        DIARIZATION_MIN_SPEAKERS, DIARIZATION_MAX_SPEAKERS
+        DIARIZATION_MIN_SPEAKERS, DIARIZATION_MAX_SPEAKERS,
+        OPENAI_SPEAKER_MODEL
     )
 except ImportError as e:
     sys.stderr.write(f"Error: Could not import configuration - {str(e)}\n")
@@ -897,6 +898,42 @@ def write_workflow_outputs(results: Dict[str, str], output_base: str) -> None:
         with open(wiki_path, "w", encoding="utf-8") as f:
             f.write(wiki_content)
         logging.info(f"Wiki history extraction saved to: {wiki_path}")
+    
+    # Step 6: Speaker assignment
+    speaker_prompt = read_prompt_file(PROMPT_SPEAKER_ASSIGN_FILE)
+    if USE_SPEAKER_DIARIZATION and speaker_prompt:
+        logging.info("Step 6: Assigning speaker names...")
+        try:
+            ts_path = f"{output_base}_ts.txt"
+            with open(ts_path, 'r', encoding='utf-8') as f:
+                ts_text = f.read()
+            assignment = process_with_openai(ts_text, speaker_prompt, OPENAI_SPEAKER_MODEL)
+            if assignment:
+                assign_path = f"{output_base}_speaker_assignment.txt"
+                with open(assign_path, 'w', encoding='utf-8') as af:
+                    af.write(assignment)
+                logging.info(f"Speaker assignment saved to: {assign_path}")
+                results['speaker_assignment'] = assignment
+                # Generate HTML version of speaker assignment
+                html_content = convert_markdown_to_html(assignment)
+                html_path = f"{output_base}_speaker_assignment.html"
+                with open(html_path, "w", encoding="utf-8") as hf:
+                    hf.write(html_content)
+                logging.info(f"HTML speaker assignment saved to: {html_path}")
+                # Generate Wiki version of speaker assignment
+                wiki_content = convert_markdown_to_wiki(assignment)
+                wiki_path = f"{output_base}_speaker_assignment.wiki"
+                with open(wiki_path, "w", encoding="utf-8") as wf:
+                    wf.write(wiki_content)
+                logging.info(f"Wiki speaker assignment saved to: {wiki_path}")
+            else:
+                results['speaker_assignment'] = None
+                logging.warning("Speaker assignment returned no result.")
+        except Exception as e:
+            results['speaker_assignment'] = None
+            logging.error(f"Error during speaker assignment: {str(e)}")
+    else:
+        results['speaker_assignment'] = None
 
 def generate_summary_and_blog(transcript: str, prompt: str) -> Optional[str]:
     """

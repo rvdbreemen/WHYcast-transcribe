@@ -14,9 +14,10 @@ COMPUTE_TYPE = os.environ.get("WHISPER_COMPUTE_TYPE", "float16")
 BEAM_SIZE = int(os.environ.get("WHISPER_BEAM_SIZE", "5"))
 
 # OpenAI configuration
-OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4.1")  # Updated to current model name
-OPENAI_LARGE_CONTEXT_MODEL = os.environ.get("OPENAI_LARGE_CONTEXT_MODEL", "gpt-4.1")  # Updated to latest version with 128K context
-OPENAI_HISTORY_MODEL = os.environ.get("OPENAI_HISTORY_MODEL", "o4-mini")  # Model for history extractions with reasoning capabilities
+OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4.1")  # Default model for general tasks
+OPENAI_LARGE_CONTEXT_MODEL = os.environ.get("OPENAI_LARGE_CONTEXT_MODEL", "gpt-4.1")  # Model for potentially long inputs (summary, blog)
+OPENAI_HISTORY_MODEL = os.environ.get("OPENAI_HISTORY_MODEL", "o4-mini")  # Model specifically for history extraction
+OPENAI_SPEAKER_MODEL = os.environ.get("OPENAI_SPEAKER_MODEL", "o4-mini")  # Model for speaker assignment
 TEMPERATURE = float(os.environ.get("OPENAI_TEMPERATURE", "0.7"))
 MAX_TOKENS = int(os.environ.get("OPENAI_MAX_TOKENS", "4800"))  # Increased for longer summaries
 # Max tokens to send to OpenAI (considering model's max context - completion tokens)
@@ -24,7 +25,7 @@ MAX_INPUT_TOKENS = int(os.environ.get("OPENAI_MAX_INPUT_TOKENS", "60000"))  # In
 # Number of tokens to use for estimating text length (OpenAI uses ~4 chars per token on average)
 CHARS_PER_TOKEN = int(os.environ.get("OPENAI_CHARS_PER_TOKEN", "4"))
 # Maximum file size to process without warning (in KB)
-MAX_FILE_SIZE_KB = int(os.environ.get("MAX_FILE_SIZE_KB", "250"))  # Increased to handle 200kB+ files
+MAX_FILE_SIZE_KB = 500  # Maximum file size in KB to process without warning
 
 # Advanced summarization settings
 USE_RECURSIVE_SUMMARIZATION = os.environ.get("USE_RECURSIVE_SUMMARIZATION", "True").lower() in ("true", "1", "yes")
@@ -48,6 +49,7 @@ PROMPT_SUMMARY_FILE = os.path.join(base_dir, "prompts", "summary_prompt.txt")
 PROMPT_BLOG_FILE = os.path.join(base_dir, "prompts", "blog_prompt.txt")
 PROMPT_BLOG_ALT1_FILE = os.path.join(base_dir, "prompts", "blog_alt1_prompt.txt")
 PROMPT_HISTORY_EXTRACT_FILE = os.path.join(base_dir, "prompts", "history_extract_prompt.txt")
+PROMPT_SPEAKER_ASSIGN_FILE = os.path.join(base_dir, "prompts", "speaker_assignment_prompt.txt")  # Correct prompt filename
 
 # Custom vocabulary settings
 USE_CUSTOM_VOCABULARY = True  # Set to False to disable
