@@ -12,11 +12,7 @@ WHYcast Transcribe is a tool for transcribing audio files and generating summari
 - Regenerate summaries from existing transcripts
 - Speaker diarization to identify different speakers
 - Timestamped transcripts for easy reference
-- Post-processing with punctuation and formatting
-- Automatic summarization using OpenAI GPT models
-- Automatic transcription using Whisper (via faster-whisper)
-- Local model caching for faster repeated use
-- Command-line interface with numerous options
+- Generate speaker assignment files (text, HTML, and Wiki)
 
 ## Requirements
 - CUDA enabled GPU (e.g. NVIDIA GeForce RTX 3060) recommended for faster processing
