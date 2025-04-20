@@ -228,7 +228,7 @@ def format_timestamp(start: float, end: Optional[float] = None) -> str:
         Formatted timestamp string
     """
     # Import format_time from whisper_model to maintain consistency
-    from utils.whisper_model import format_time
+    from whycast_transcribe.whisper_model import format_time
     
     if end is None:
         return f"[{format_time(start)}]"

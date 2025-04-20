@@ -1,0 +1,92 @@
+# WHYcast Transcribe Modernization PRD
+
+## 1. Purpose
+Describe the goals and objectives for modularizing and modernizing the existing monolithic transcribe.py script.
+
+## 2. Background
+- Current codebase contains a single large script (`transcribe.py`) with multiple responsibilities: CLI parsing, model setup, audio transcription, speaker diarization, post-processing, and output generation.
+- This structure is hard to maintain, test, and extend.
+
+## 3. Objectives
+- Decompose functionality into independent, reusable Python modules.
+- Define clear interfaces between components.
+- Improve testability by isolating logic in small units.
+- Simplify CLI entry point to focus on orchestration.
+- Prepare for future enhancements (web API, GUI integration).
+
+## 4. Scope
+- Consolidate all application logic into the `src/whycast_transcribe` package:
+  - Migrate top‑level scripts (`transcribe.py`, `content_generator.py`, `diarize.py`) into appropriate modules.
+  - Move all utility code under `src/whycast_transcribe/utils`, removing top‑level `utils/` and duplicate helpers.
+- Refactor functionality without altering behavior or CLI interfaces.
+- **Maintain backward compatibility:** retain a root-level `transcribe.py` as a shim to invoke the new CLI entry point for legacy users.
+- Manually translate all Dutch comments and log messages to English as part of refactoring; no runtime or automated translation is required.
+- Remove deprecated or duplicate files and clean up project root.
+- Update documentation (README.md, PRDs, plan) to reflect refactored structure and English-first language policy.
+- Ensure complete unit and integration test coverage for all modules, including verification of translated comments and logs, with tests consolidated under `tests/`.
+
+## 5. Proposed Architecture
+# Package entry points
+src/whycast_transcribe/cli.py    # Primary CLI entry point (python -m whycast_transcribe.cli)
+transcribe.py                    # Legacy wrapper at project root, delegates to new CLI
+
+whycast_transcribe/         # Python package root
+  __init__.py
+  cli.py                   # Entry point and argument parsing, global logging setup
+  config.py                # Load and validate configuration
+  model_manager.py         # Setup and cache Whisper and diarization models
+  transcribe.py            # Core transcription functions
+  diarization.py           # Speaker diarization
+  postprocess/             # Subpackage for output transformations
+    cleanup.py
+    summarizer.py
+    blog_generator.py
+    history_generator.py
+    speaker_assigner.py
+    formatter.py
+  utils/                   # Shared utilities
+    formatters.py          # Markdown/HTML/Wiki helpers
+    vocabulary.py          # Custom vocabulary loader and applier
+    tokens.py              # Token counting and management
+
+# tools/ (optional scripts for one-off maintenance)
+#   translate_comments.py  # (remove after manual translation)
+
+## 6. Functional Modules and Responsibilities
+- config.py             : Read `.env`, prompt files, and define constants.
+- cli.py                : Parse arguments, orchestrate workflow, handle global logging setup.
+- model_manager.py      : Initialize and cache Whisper and diarization pipelines.
+- transcribe.py         : Core transcription logic producing raw and timestamped text.
+- diarization.py        : Wrap PyAnnote pipeline to return speaker segments.
+- postprocess/          : Subpackage for all output transformations:
+  - cleanup.py          : Clean and normalize transcripts.
+  - summarizer.py       : Generate episode summaries.
+  - blog_generator.py   : Create blog outputs (HTML, text, wiki).
+  - history_generator.py: Build history artifacts.
+  - speaker_assigner.py : Tag transcripts with speaker labels.
+  - formatter.py        : Finalize outputs into target formats.
+- utils/                : Shared utilities:
+  - formatters.py       : Common markdown/HTML/Wiki conversion helpers.
+  - vocabulary.py       : Load and apply custom vocabularies.
+  - tokens.py           : Count and manage token limits.
+
+## 7. Milestones and Deliverables
+| Phase | Deliverable                          | Notes                             |
+|-------|--------------------------------------|-----------------------------------|
+| 1     | Project skeleton and package layout  | Create directories, __init__.py   |
+| 2     | config.py and cli.py modules        | Move argument parsing & config    |
+| 3     | model_manager.py                    | Extract Whisper & diarization init|
+| 4     | transcribe.py logic                 | Isolate transcription             |
+| 5     | diarization.py                      | Extract diarization code          |
+| 6     | postprocess.py                      | Group all post-processing steps   |
+| 7     | utils/ subpackage                   | Create shared utilities           |
+| 8     | tests/                              | Add unit tests for each module    |
+| 9     | Integration and validation          | Ensure behavior matches original  |
+| 10    | Documentation update                | README.md, code comments, PRDs    |
+| 11    | Manual comments & logs translation   | Translate Dutch comments and logs to English in codebase |
+
+## 8. Success Criteria
+- All existing functionality passes without regressions.
+- Code coverage ≥ 80% for unit tests.
+- Reduced script length in `transcribe.py` (entry point) to < 200 LOC.
+- Clear module boundaries and import structure.

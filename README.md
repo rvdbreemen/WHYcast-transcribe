@@ -14,125 +14,183 @@ WHYcast Transcribe is a tool for transcribing audio files and generating summari
 - Timestamped transcripts for easy reference
 - Generate speaker assignment files (text, HTML, and Wiki)
 
+## Project Structure
+
+```
+WHYcast-transcribe/
+├── check_cuda.py              # Script to verify CUDA availability
+├── requirements.txt           # Python dependencies
+├── setup.py                   # Package installation configuration
+├── README.md                  # This documentation
+├── logs/                      # Log files directory
+├── models/                    # Downloaded model files
+│   ├── diarization/           # Speaker diarization models
+│   └── whisper/               # Whisper models
+├── podcasts/                  # Audio files and generated outputs
+├── prompts/                   # LLM prompt templates
+├── src/                       # Source code
+│   └── whycast_transcribe/    # Main package
+│       ├── __init__.py
+│       ├── audio.py           # Audio processing utilities
+│       ├── blog_generator.py  # Blog post generation
+│       ├── cleanup.py         # Transcript cleanup
+│       ├── cli.py             # Command line interface
+│       ├── config.py          # Configuration handling
+│       ├── content_generator.py  # Content generation utilities
+│       ├── diarize.py         # Speaker diarization
+│       ├── file.py            # File handling utilities
+│       ├── formatters.py      # Output formatters
+│       ├── history_generator.py  # History item extraction
+│       ├── llm.py             # LLM interaction
+│       ├── model_manager.py   # Model downloading and management
+│       ├── speaker_assigner.py  # Speaker assignment
+│       ├── summarizer.py      # Summary generation
+│       ├── tokens.py          # Token counting utilities
+│       ├── transcriber.py     # Audio transcription
+│       └── vocabulary.py      # Custom vocabulary handling
+└── tests/                     # Test suite
+    ├── test_blog_generator.py
+    ├── test_cleanup.py
+    ├── test_cli.py
+    ├── test_config.py
+    ├── test_formatters.py
+    ├── test_history_generator.py
+    ├── test_integration.py    # End-to-end integration tests
+    ├── test_model_manager.py
+    ├── test_speaker_assigner.py
+    ├── test_summarizer.py
+    ├── test_utils_tokens.py
+    └── test_vocabulary.py
+```
+
 ## Requirements
 - CUDA enabled GPU (e.g. NVIDIA GeForce RTX 3060) recommended for faster processing
 - Python 3.7+
 - Required Python packages (listed in `requirements.txt`)
 - OpenAI API key
 
-## Installation 
+## Installation
 
-1. Clone the repository:
-    ```sh
-    git clone https://github.com/yourusername/WHYcast-transcribe.git
-    cd WHYcast-transcribe
-    ```
+### Prerequisites
 
-2. Install the required packages:
-    ```sh
-    pip install -r requirements.txt
-    ```
+- Python 3.10 or later
+- FFmpeg (for audio processing)
+- CUDA-compatible GPU (optional, but recommended for faster processing)
 
-3. Create a `.env` file with your OpenAI API key:
-    ```env
-    OPENAI_API_KEY=your_openai_api_key
-    ```
+### Setup
 
-4. (Optional) For faster processing, follow the CUDA installation guide below.
+1. Clone this repository:
+   ```bash
+   git clone https://github.com/yourusername/WHYcast-transcribe.git
+   cd WHYcast-transcribe
+   ```
+
+2. Create and activate a virtual environment:
+   ```bash
+   python -m venv venv
+   # On Windows
+   venv\Scripts\activate
+   # On macOS/Linux
+   source venv/bin/activate
+   ```
+
+3. Install the package and dependencies:
+   ```bash
+   pip install -e .
+   ```
+
+4. Verify CUDA is available (optional):
+   ```bash
+   python check_cuda.py
+   ```
+
+5. On first run, the necessary models will be downloaded automatically. You can also pre-download them:
+   ```bash
+   python -m whycast_transcribe.cli --download-models
+   ```
 
 ## Usage
 
-### Transcribe an Audio File
+### Basic Transcription
 
-To transcribe an audio file and generate all outputs (cleaned transcript, summary, blog, and history extraction):
-```sh
-python transcribe.py path/to/audio/file.mp3
+```bash
+whycast-transcribe transcribe podcasts/example.mp3
 ```
 
-### Download and Transcribe the Latest Podcast Episode
+This will create a transcript file `podcasts/example.txt`.
 
-To download the latest episode from the default podcast feed and transcribe it:
-```sh
-python transcribe.py
+### Transcription with Speaker Diarization
+
+```bash
+whycast-transcribe transcribe podcasts/example.mp3 --diarize
 ```
+
+This will create a transcript with speaker labels.
+
+### Generate Summary
+
+```bash
+whycast-transcribe summarize podcasts/example.mp3
+```
+
+This will generate a summary from the transcript.
+
+### Generate Blog Post
+
+```bash
+whycast-transcribe blog podcasts/example.mp3
+```
+
+This creates HTML, text, and Wiki versions of a blog post.
+
+### Extract History Items
+
+```bash
+whycast-transcribe history podcasts/example.mp3
+```
+
+This extracts history items mentioned in the podcast.
 
 ### Batch Processing
 
-To process multiple files matching a pattern:
-```sh
-python transcribe.py --batch "path/to/files/*.mp3"
+```bash
+whycast-transcribe batch podcasts/ --type=mp3
 ```
 
-### Process All MP3 Files in a Directory
+Process all .mp3 files in the podcasts directory.
 
-To process all MP3 files in a directory:
-```sh
-python transcribe.py --all-mp3s path/to/directory
+### Regenerate Outputs from Existing Transcript
+
+```bash
+whycast-transcribe summary --from-transcript podcasts/example.txt
+whycast-transcribe blog --from-transcript podcasts/example.txt
 ```
 
-### Regenerate Specific Outputs
+### Full Processing Workflow
 
-To regenerate specific outputs from existing transcripts:
-
-```sh
-# Regenerate summary and blog from transcript
-python transcribe.py --regenerate-summary path/to/transcript.txt
-
-# Regenerate cleaned transcript
-python transcribe.py --regenerate-cleaned path/to/transcript.txt
-
-# Regenerate history extraction
-python transcribe.py --generate-history path/to/transcript.txt
-
-# Regenerate blog only
-python transcribe.py --regenerate-blog path/to/transcript.txt path/to/summary.txt
+```bash
+whycast-transcribe workflow podcasts/example.mp3
 ```
 
-### Batch Regeneration Options
+This will perform the complete workflow: transcription → cleaning → summary → blog → history.
 
-To regenerate outputs for all transcripts in a directory:
+## Command-Line Options
 
-```sh
-# Regenerate summaries for all transcripts
-python transcribe.py --regenerate-all-summaries path/to/directory
-
-# Regenerate all cleaned transcripts
-python transcribe.py --regenerate-all-cleaned path/to/directory
-
-# Regenerate all blogs
-python transcribe.py --regenerate-all-blogs path/to/directory
-
-# Regenerate all history extractions
-python transcribe.py --regenerate-all-history path/to/directory
-
-# Force regeneration of history extractions even if they exist
-python transcribe.py --regenerate-all-history --force path/to/directory
-
-# Run full workflow on all transcripts
-python transcribe.py --regenerate-full-workflow path/to/directory
 ```
+Usage: whycast-transcribe [OPTIONS] COMMAND [ARGS]...
 
-### Podcast Feed Options
+Options:
+  --debug / --no-debug  Enable debug mode with detailed logging
+  --help                Show this message and exit
 
-```sh
-# Download and process all episodes from feed
-python transcribe.py --all-episodes
-
-# Use specific RSS feed URL
-python transcribe.py --feed "https://your-podcast-feed.xml"
-
-# Download episodes to specific directory
-python transcribe.py --download-dir "path/to/save/episodes"
-
-# Skip automatic podcast download
-python transcribe.py --no-download
-```
-
-### Format Conversion
-
-```sh
-# Convert existing blog posts to HTML and Wiki formats
-python transcribe.py --convert-blogs path/to/directory
+Commands:
+  batch      Process multiple audio files in a directory
+  blog       Generate blog post from audio or transcript
+  clean      Clean a transcript
+  history    Extract history items from audio or transcript
+  summarize  Generate summary from audio or transcript
+  transcribe Transcribe audio file to text
+  workflow   Run the complete processing workflow
 ```
 
 ## Output Files
@@ -148,32 +206,9 @@ For each processed audio file, the following outputs are generated:
 - `file_history.txt` - History extraction (text)
 - `file_history.html` - History extraction (HTML)
 - `file_history.wiki` - History extraction (Wiki markup)
-
-## Command-Line Options
-
-- `--batch, -b`: Process multiple files matching pattern
-- `--all-mp3s, -a`: Process all MP3 files in directory
-- `--model, -m`: Model size (e.g., "large-v3", "medium", "small")
-- `--output-dir, -o`: Directory to save output files
-- `--skip-summary, -s`: Skip summary generation
-- `--force, -f`: Force regeneration of outputs even if they exist
-- `--verbose, -v`: Enable verbose logging
-- `--version`: Show the version of WHYcast Transcribe
-- `--regenerate-summary, -r`: Regenerate summary and blog from existing transcript
-- `--regenerate-cleaned, -rc`: Regenerate cleaned transcript from existing transcript
-- `--generate-history, -H`: Generate history extraction from transcript
-- `--regenerate-all-summaries, -R`: Regenerate summaries for all transcripts in directory
-- `--regenerate-all-blogs, -B`: Regenerate blogs for all transcripts in directory
-- `--regenerate-all-cleaned`: Regenerate cleaned transcripts for all files in directory
-- `--regenerate-all-history`: Generate history extractions for all transcripts in directory
-- `--regenerate-full-workflow`: Run full workflow on existing transcript files
-- `--regenerate-blogs-from-cleaned`: Regenerate blog posts using cleaned transcripts
-- `--feed, -F`: RSS feed URL to download episodes from
-- `--download-dir, -D`: Directory to save downloaded episodes
-- `--no-download, -N`: Disable automatic podcast download
-- `--all-episodes, -A`: Process all episodes from the podcast feed
-- `--convert-blogs, -C`: Convert existing blog files to HTML and Wiki formats
-- `--skip-vocabulary`: Skip custom vocabulary corrections
+- `file_speaker_assignment.txt` - Speaker assignment (text)
+- `file_speaker_assignment.html` - Speaker assignment (HTML)
+- `file_speaker_assignment.wiki` - Speaker assignment (Wiki markup)
 
 ## Speaker Diarization
 
@@ -383,7 +418,7 @@ run the `get_device.py` to see if you installed it correctly
 @echo off
 :: Batch script to install Python packages for CUDA 11.8 environment
 
-echo MAKE SURE TO HAVE THE WHL DOWNLOADED BEFORE YOU CONTINUE!!!
+echo MAKE SURE TO HAVE THE WHL DOWNLOADED BEFORE YOU CONTINUE!!! 
 pause
 echo Click the link to download the WHL: press ctrl then left click with mouse
 echo https://github.com/cupy/cupy/releases/download/v12.0.0b1/cupy_cuda11x-12.0.0b1-cp311-cp311-win_amd64.whl

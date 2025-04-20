@@ -1,0 +1,26 @@
+# WHYcast Transcribe Modernization Plan
+
+Track progress against the modernization milestones defined in `modernization.prd`.
+
+| Phase | Deliverable                          | Status      | Notes                                                                   |
+|-------|--------------------------------------|-------------|-------------------------------------------------------------------------|
+| 1     | Project skeleton and package layout  | Done        | Package scaffolded under `src/whycast_transcribe`                         |
+| 2     | config.py and cli.py modules        | Done        | Config loading and CLI orchestration implemented in respective modules    |
+| 3     | model_manager.py                    | Done        | Whisper and diarization model setup/loading logic extracted             |
+| 4     | transcribe.py logic                 | Done        | Core transcription logic isolated in `transcribe.py` module             |
+| 5     | diarization.py (Integrated)         | Done        | Diarization logic integrated into `model_manager` and `cli`             |
+| 6     | postprocess subpackage modules      | Done        | All post-processing steps modularized under `src/whycast_transcribe/postprocess` |
+| 7     | utils/ subpackage                   | Done        | Shared utilities consolidated under `src/whycast_transcribe/utils`        |
+| 8     | tests/                              | Done        | Unit tests added for `model_manager` and diarization logic              |
+| 9     | Integration and validation          | Done        | End-to-end tests implemented for core workflows                        |
+| 10    | Documentation update                | Done        | README.md and docs updated for new structure and usage                  |
+| 11    | Manual comments & logs translation  | Done        | All Dutch comments/logs translated to English or none found             |
+| 12    | Legacy CLI wrapper                  | Done        | Root `transcribe.py` delegates to `src/whycast_transcribe/cli.py`       |
+| 13    | Modern package configuration        | Done        | pyproject.toml created for modern Python packaging                      |
+
+## Next Steps
+- Consider adding GitHub Actions or other CI for automated testing and deployment
+- Expand documentation (e.g., Sphinx API docs)
+- Monitor and update dependencies for compatibility and performance
+- Continue to add integration tests as new features are developed
+- Review for further optimization opportunities

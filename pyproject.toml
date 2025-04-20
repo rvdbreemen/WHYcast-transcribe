@@ -1,0 +1,63 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "whycast-transcribe"
+version = "0.1.0"
+description = "Tool for transcribing audio files and generating summaries, blogs, and history extractions from podcast episodes"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {file = "LICENSE"}
+authors = [
+    {name = "Robert", email = "author@example.com"}  # Replace with your actual email
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "License :: OSI Approved :: MIT License",  # Adjust according to your actual license
+    "Operating System :: OS Independent",
+    "Topic :: Multimedia :: Sound/Audio :: Speech",
+    "Topic :: Text Processing",
+]
+dependencies = [
+    "python-dotenv>=0.19.0",
+    "tqdm>=4.62.0",
+    "openai>=1.0.0",
+    "faster-whisper>=0.9.0",
+    "python-dateutil",
+    "feedparser>=6.0.0",
+    "requests>=2.28.0",
+    "numpy>=1.24.0",
+    "pyannote.audio>=2.1.1",
+    "googletrans==4.0.0-rc1",
+]
+
+[project.urls]
+"Homepage" = "https://github.com/RvdB/WHYcast-transcribe"
+"Bug Tracker" = "https://github.com/RvdB/WHYcast-transcribe/issues"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.3",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.black]
+line-length = 88
+target-version = ["py310"]
+
+[tool.isort]
+profile = "black"
+line_length = 88
+
+[project.scripts]
+whycast-transcribe = "whycast_transcribe.cli:main"
