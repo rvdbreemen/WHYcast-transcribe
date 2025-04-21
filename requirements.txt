@@ -10,14 +10,11 @@ feedparser>=6.0.0
 requests>=2.28.0
 
 # Speaker diarization dependencies
---extra-index-url https://download.pytorch.org/whl/cu118
-torch==2.6.0+cu118
-torchaudio==2.6.0+cu118
 numpy>=1.24.0
 pyannote.audio>=2.1.1
 
 # Development dependencies
 pytest>=7.4.3
 
-# Translation library
-googletrans==4.0.0-rc1
+
+# NOTE: torch and torchaudio are installed by install.sh or install.bat for platform compatibility.

@@ -10,20 +10,27 @@ from whycast_transcribe.config import (
     DIARIZATION_ALTERNATIVE_MODEL, DIARIZATION_MIN_SPEAKERS,
     DIARIZATION_MAX_SPEAKERS
 )
+from whycast_transcribe.utils.device_utils import get_best_device
 
 
 def setup_whisper_model(model_size: str = None) -> WhisperModel:
     """
     Initialize and return a WhisperModel using faster-whisper.
     """
-    logging.info(f"Initializing Whisper model (size={model_size or MODEL_SIZE}) on device={DEVICE} with compute_type={COMPUTE_TYPE}")
     size = model_size or MODEL_SIZE
+    # Determine device
+    device = get_best_device()
+    # Optionally, adjust compute_type for device
+    compute_type = COMPUTE_TYPE
+    if device == "mps":
+        compute_type = "float16"  # Recommended for MPS
+    logging.info(f"Initializing Whisper model (size={size}) on device={device} with compute_type={compute_type}")
     model = WhisperModel(
         size,
-        device=DEVICE,
-        compute_type=COMPUTE_TYPE
+        device=device,
+        compute_type=compute_type
     )
-    logging.info("Whisper model initialized successfully")
+    logging.info(f"Whisper model initialized successfully on {device}")
     return model
 
 

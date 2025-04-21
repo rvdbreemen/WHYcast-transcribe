@@ -77,37 +77,42 @@ WHYcast-transcribe/
 - FFmpeg (for audio processing)
 - CUDA-compatible GPU (optional, but recommended for faster processing)
 
-### Setup
+## Installation (Platform-Specific)
 
-1. Clone this repository:
+### macOS/Linux
+1. Open a terminal in the project directory.
+2. Run:
    ```bash
-   git clone https://github.com/yourusername/WHYcast-transcribe.git
-   cd WHYcast-transcribe
+   bash install.sh
    ```
-
-2. Create and activate a virtual environment:
+   This will:
+   - Create a Python virtual environment
+   - Install all required dependencies from requirements.txt
+   - Install the correct version of torch/torchaudio for your platform (MPS/CPU for Mac, CPU for Linux)
+   - Check/install ffmpeg
+3. Activate your environment:
    ```bash
-   python -m venv venv
-   # On Windows
-   venv\Scripts\activate
-   # On macOS/Linux
    source venv/bin/activate
    ```
 
-3. Install the package and dependencies:
-   ```bash
-   pip install -e .
+### Windows
+1. Open Command Prompt in the project directory.
+2. Run:
+   ```bat
+   install.bat
+   ```
+   This will:
+   - Create a Python virtual environment
+   - Install all required dependencies from requirements.txt
+   - Install the correct version of torch/torchaudio for your platform (CUDA for Windows/NVIDIA)
+   - Check for ffmpeg
+3. Activate your environment:
+   ```bat
+   call venv\Scripts\activate
    ```
 
-4. Verify CUDA is available (optional):
-   ```bash
-   python check_cuda.py
-   ```
-
-5. On first run, the necessary models will be downloaded automatically. You can also pre-download them:
-   ```bash
-   python -m whycast_transcribe.cli --download-models
-   ```
+> **Note:**
+> PyTorch (torch, torchaudio) is installed by the install script for your platform. This ensures you get the best performance and compatibility. If you install manually, see https://pytorch.org/get-started/locally/ for the correct command for your system.
 
 ## Usage
 
@@ -266,6 +271,31 @@ To specify the expected number of speakers:
 ```sh
 python transcribe.py path/to/audio/file.mp3 --diarize --min-speakers 2 --max-speakers 4
 ```
+
+## Platform-specific ML acceleration (Windows, Mac, Linux)
+
+### Device selection
+This project now automatically detects and uses the best available device for machine learning acceleration:
+- **Windows/Linux**: Uses CUDA (NVIDIA GPU) if available, otherwise CPU.
+- **macOS (Apple Silicon)**: Uses MPS/Metal acceleration if available, otherwise CPU.
+- **CPU**: Used as fallback on all platforms.
+
+No manual configuration is needed. The device and compute type are selected at runtime for optimal performance.
+
+#### Apple Silicon (M1/M2/M3) Setup
+- Install PyTorch with MPS support:
+  ```bash
+  pip install torch torchvision torchaudio
+  ```
+- See: https://pytorch.org/get-started/locally/ for latest instructions.
+- The code will automatically use MPS if available.
+
+#### Logging
+The application logs which device is used for model inference.
+
+#### Troubleshooting
+- If you encounter errors on Mac, ensure you have the latest PyTorch and that your Python environment is ARM64 (not Intel/x86).
+- For best performance on Mac, use Python 3.9+ and the latest pip.
 
 ## License
 
