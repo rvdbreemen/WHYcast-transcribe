@@ -19,5 +19,5 @@ pyannote.audio>=2.1.1
 # Development dependencies
 pytest>=7.4.3
 
-# Translation library
-googletrans==4.0.0-rc1
+# Formatting
+markdown

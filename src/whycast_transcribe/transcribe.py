@@ -72,13 +72,23 @@ def transcribe_audio(
     diarization_pipeline: Optional[Any] = None,
     min_speakers: Optional[int] = None,
     max_speakers: Optional[int] = None,
-    skip_diarization: bool = False
+    skip_diarization: bool = False,
+    live_callback: Optional[callable] = None
 ) -> Tuple[List[Segment], object, Optional[List[Dict]]]:
     """
     Transcribe audio file, return segments and metadata.
     If diarization_pipeline is provided and not skipped, speaker labels are included.
     Prints live transcription output with speaker labels (if available) to the console.
     
+    Args:
+        model: Initialized WhisperModel
+        audio_file: Path to the audio file
+        diarization_pipeline: Optional diarization pipeline for speaker identification
+        min_speakers: Minimum number of speakers to identify
+        max_speakers: Maximum number of speakers to identify
+        skip_diarization: Skip diarization even if pipeline is provided
+        live_callback: Optional callback function to handle live transcription output
+        
     Returns:
         tuple: (segments, info, speaker_segments)
     """
@@ -104,6 +114,9 @@ def transcribe_audio(
 
     segments = []
     print("--- Live Transcription Output ---", file=sys.stdout)
+    if live_callback:
+        live_callback("--- Live Transcription Output ---")
+        
     for segment in segments_gen:
         # Determine speaker label for the segment's midpoint
         speaker_label = None
@@ -120,8 +133,16 @@ def transcribe_audio(
 
         # Print live output to console
         print(output_line, file=sys.stdout)
+        
+        # Call the callback if provided
+        if live_callback:
+            live_callback(output_line)
+            
         segments.append(segment)
+        
     print("--- End of Live Transcription ---", file=sys.stdout)
+    if live_callback:
+        live_callback("--- End of Live Transcription ---")
 
     elapsed = time.time() - start_time
     logging.info(f"Transcription ended; duration: {elapsed:.1f}s, {len(segments)} segments produced")
