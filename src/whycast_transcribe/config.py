@@ -6,7 +6,7 @@ env_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '
 load_dotenv(env_path)
 
 # Project settings
-VERSION = os.getenv('VERSION', '0.1.1')
+VERSION = os.getenv('VERSION', '0.2.0')
 MODEL_SIZE = os.getenv('WHISPER_MODEL_SIZE', 'large-v3')
 DEVICE = os.getenv('WHISPER_DEVICE', 'cuda')
 COMPUTE_TYPE = os.getenv('WHISPER_COMPUTE_TYPE', 'float16')

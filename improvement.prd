@@ -1,0 +1,29 @@
+# WHYcast Transcribe Improvement Plan
+
+This document outlines targeted improvements to enhance security, maintainability, performance, and contributor experience.
+
+| #  | Priority | Improvement Area                          | Status   | Notes                                                                                      |
+|----|----------|-------------------------------------------|----------|--------------------------------------------------------------------------------------------|
+| 1  | 1        | Continuous Integration & Deployment       | Planned  | Add GitHub Actions for testing, linting, packaging, and release automation                |
+| 2  | 2        | Static Analysis & Type Checking           | Planned  | Enforce mypy, flake8, black, isort in CI; add type hints across the codebase               |
+| 3  | 3        | Enhanced Testing & Coverage               | Planned  | Add smoke tests on sample audio, enforce coverage thresholds (>80%) in CI                  |
+| 4  | 4        | Dependency & Build Reproducibility        | Planned  | Add a lockfile (poetry.lock or requirements.txt pinning), pin patch versions, use pip-compile |
+| 5  | 5        | Security Scanning                         | Planned  | Integrate pip-audit, dependabot, or Safety for CVE detection                              |
+| 6  | 6        | Input Validation & Path Sanitization      | Planned  | Sanitize user-supplied paths, guard against directory traversal                            |
+| 7  | 7        | Prompt Injection Protection               | Planned  | Sanitize transcript inputs before passing to LLMs, validate prompt templates              |
+| 8  | 8        | Logging Improvements                      | Planned  | Implement structured (JSON) logging, avoid sensitive data leaks in logs                    |
+| 9  | 9        | Performance & Caching                     | Planned  | Implement model download caching and configurable cache directory                         |
+| 10 | 10       | GPU & Resource Management                 | Planned  | Add explicit `.cpu()` calls, limit parallel transcriptions to avoid OOM                   |
+| 11 | 11       | CLI Framework Enhancement                 | Planned  | Consider switching from argparse to Click or Typer for richer validation and UX            |
+| 12 | 12       | Documentation Expansion                   | Planned  | Create Sphinx or MkDocs docs in docs/, publish on ReadTheDocs                             |
+| 13 | 13       | Contributing Guidelines & Governance      | Planned  | Add CONTRIBUTING.md, CODE_OF_CONDUCT.md; define semantic versioning and release policy    |
+| 14 | 14       | Code of Conduct & Community Engagement    | Planned  | Document contribution workflow, issue triage, and maintainers contact info                 |
+
+## Next Steps
+1. Start with Priority 1 (Continuous Integration & Deployment) to automate enforcement of checks.
+2. Implement Priority 2 & 3: Static Analysis & Type Checking and Enhanced Testing & Coverage.
+3. Address foundational improvements: Dependency & Build Reproducibility (Priority 4) and Security Scanning (Priority 5).
+4. Tackle code-level hardening: Input Validation (6), Prompt Protection (7), Logging Improvements (8).
+5. Improve performance/resource use: Performance & Caching (9), GPU & Resource Management (10).
+6. Enhance UX and docs: CLI Framework (11), Documentation Expansion (12).
+7. Finalize community and governance: CONTRIBUTING & Governance (13) and Code of Conduct (14).
