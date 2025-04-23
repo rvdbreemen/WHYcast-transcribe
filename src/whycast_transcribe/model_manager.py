@@ -4,6 +4,8 @@ import logging
 import os
 from typing import Optional, Tuple, Any
 
+from pyannote.audio import Pipeline
+
 from whycast_transcribe.config import (
     MODEL_SIZE, DEVICE, COMPUTE_TYPE, BEAM_SIZE,
     USE_SPEAKER_DIARIZATION, DIARIZATION_MODEL,
@@ -34,34 +36,28 @@ def setup_diarization_pipeline():
     if not USE_SPEAKER_DIARIZATION:
         logging.info("Speaker diarization is disabled via configuration")
         return None
-    
-    # Check for Hugging Face token (try both common variable names)
+
+    # Restore original HF token logic
     hf_token = os.environ.get('HF_TOKEN') or os.environ.get('HUGGINGFACE_TOKEN')
-    if not hf_token:
-        logging.warning("Neither HF_TOKEN nor HUGGINGFACE_TOKEN environment variable is set. Speaker diarization requires authentication.")
-        logging.warning("Set either HF_TOKEN or HUGGINGFACE_TOKEN environment variable to your Hugging Face token.")
-        return None
-        
-    logging.info(f"Attempting to load diarization model: {DIARIZATION_MODEL}")
     try:
-        from pyannote.audio import Pipeline
-        # Attempt to load primary diarization model with explicit token
-        pipeline = Pipeline.from_pretrained(DIARIZATION_MODEL, use_auth_token=hf_token)
+        if hf_token:
+            pipeline = Pipeline.from_pretrained(DIARIZATION_MODEL, use_auth_token=hf_token)
+        else:
+            pipeline = Pipeline.from_pretrained(DIARIZATION_MODEL, use_auth_token=True)
         logging.info("Primary diarization model loaded successfully")
     except Exception as e:
-        logging.warning(f"Speaker diarization unavailable or failed: {e}")
+        logging.warning(f"Primary diarization model failed: {e}")
         try:
-            # Try alternative model if primary fails
-            if DIARIZATION_ALTERNATIVE_MODEL:
-                logging.info(f"Attempting to load alternative diarization model: {DIARIZATION_ALTERNATIVE_MODEL}")
+            if hf_token:
                 pipeline = Pipeline.from_pretrained(DIARIZATION_ALTERNATIVE_MODEL, use_auth_token=hf_token)
-                logging.info("Alternative diarization model loaded successfully")
-                return pipeline
+            else:
+                pipeline = Pipeline.from_pretrained(DIARIZATION_ALTERNATIVE_MODEL, use_auth_token=True)
+            logging.info("Alternative diarization model loaded successfully")
         except Exception as e2:
             logging.error(f"Alternative diarization model also failed: {e2}")
-        return None
+            return None
 
-    logging.info("Configuring diarization pipeline for CUDA if available")
+    # Always move to CUDA if available
     try:
         import torch
         if torch.cuda.is_available():
@@ -69,7 +65,7 @@ def setup_diarization_pipeline():
             logging.info("Diarization pipeline moved to CUDA")
     except Exception as e:
         logging.warning(f"Failed to move diarization to CUDA: {e}")
-    
+
     return pipeline
 
 

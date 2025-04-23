@@ -7,6 +7,7 @@ from typing import List, Dict, Optional, Tuple, Any, Union
 from faster_whisper import WhisperModel
 from faster_whisper.transcribe import Segment
 from whycast_transcribe.config import BEAM_SIZE, DIARIZATION_MIN_SPEAKERS, DIARIZATION_MAX_SPEAKERS, USE_SPEAKER_DIARIZATION
+from whycast_transcribe.utils.vocabulary import load_vocabulary, apply_vocabulary_corrections
 
 # Helper function to format timestamp
 def format_timestamp(seconds: float) -> str:
@@ -27,6 +28,19 @@ def _get_speaker_for_time(timestamp: float, speaker_segments: List[Dict]) -> Opt
         if segment['start'] <= timestamp <= segment['end']:
             return segment['speaker']
     return None
+
+def get_speaker_for_segment(segment_start, segment_end, speaker_segments):
+    """Find the speaker label with the maximum overlap for a given segment."""
+    if not speaker_segments:
+        return None
+    max_overlap = 0
+    best_speaker = None
+    for seg in speaker_segments:
+        overlap = min(segment_end, seg['end']) - max(segment_start, seg['start'])
+        if overlap > max_overlap and overlap > 0:
+            max_overlap = overlap
+            best_speaker = seg['speaker']
+    return best_speaker
 
 def get_speaker_segments(diarization_pipeline: Any, audio_path: str, min_speakers: int = None, max_speakers: int = None) -> Optional[List[Dict]]:
     """
@@ -61,6 +75,12 @@ def get_speaker_segments(diarization_pipeline: Any, audio_path: str, min_speaker
             })
         
         logging.info(f"Diarization complete: found {len(speaker_segments)} speaker segments")
+        # Debug: log all diarization segments
+        for seg in speaker_segments:
+            logging.info(f"Diarization segment: {seg['start']:.2f}-{seg['end']:.2f} {seg['speaker']}")
+        # Debug: log unique speakers
+        unique_speakers = set(seg['speaker'] for seg in speaker_segments)
+        logging.info(f"Unique speakers found: {unique_speakers}")
         return speaker_segments
     except Exception as e:
         logging.error(f"Speaker diarization failed: {e}")
@@ -117,19 +137,20 @@ def transcribe_audio(
     if live_callback:
         live_callback("--- Live Transcription Output ---")
         
+    vocab = load_vocabulary()
     for segment in segments_gen:
-        # Determine speaker label for the segment's midpoint
+        # Determine speaker label for the segment using maximum overlap
         speaker_label = None
         if speaker_segments:
-            segment_midpoint = (segment.start + segment.end) / 2
-            speaker_label = _get_speaker_for_time(segment_midpoint, speaker_segments)
+            speaker_label = get_speaker_for_segment(segment.start, segment.end, speaker_segments)
 
         # Format output string with speaker label if found
         speaker_prefix = f"[{speaker_label}] " if speaker_label else ""
         # Use the timestamp formatting function
         start_ts = format_timestamp(segment.start)
         end_ts = format_timestamp(segment.end)
-        output_line = f"[{start_ts} -> {end_ts}] {speaker_prefix}{segment.text}"
+        corrected_text = apply_vocabulary_corrections(segment.text, vocab)
+        output_line = f"[{start_ts} -> {end_ts}] {speaker_prefix}{corrected_text}"
 
         # Print live output to console
         print(output_line, file=sys.stdout)
@@ -138,6 +159,8 @@ def transcribe_audio(
         if live_callback:
             live_callback(output_line)
             
+        # Optionally, update the segment's text for downstream use
+        segment.text = corrected_text
         segments.append(segment)
         
     print("--- End of Live Transcription ---", file=sys.stdout)

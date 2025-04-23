@@ -14,12 +14,15 @@ import sys
 import logging
 import feedparser
 import tempfile
+import random
+import requests
+import traceback
 from datetime import datetime
 from typing import Optional, Tuple, List, Dict
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QTabWidget, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QTextEdit, QFileDialog, QLineEdit, QProgressBar,
-    QCheckBox, QSpinBox, QComboBox, QMessageBox, QSplitter
+    QCheckBox, QSpinBox, QComboBox, QMessageBox, QSplitter, QListWidget, QListWidgetItem
 )
 from PyQt5.QtCore import QThread, pyqtSignal, Qt
 from PyQt5.QtGui import QFont, QTextCursor
@@ -268,6 +271,8 @@ class WHYcastTranscribeGUI(QMainWindow):
         url_layout = QHBoxLayout()
         self.feed_url = QLineEdit()
         self.feed_url.setPlaceholderText("Voer RSS feed URL in...")
+        # Set default RSS feed URI for 'why'
+        self.feed_url.setText("https://whycast.podcast.audio/@whycast/feed.xml")
         url_layout.addWidget(self.feed_url)
         
         load_button = QPushButton("Laden")
@@ -277,8 +282,8 @@ class WHYcastTranscribeGUI(QMainWindow):
         
         # Episode selectie
         layout.addWidget(QLabel("<b>Selecteer aflevering:</b>"))
-        self.episodes_list = QTextEdit()
-        self.episodes_list.setReadOnly(True)
+        self.episodes_list = QListWidget()
+        self.episodes_list.setSelectionMode(QListWidget.SingleSelection)
         layout.addWidget(self.episodes_list)
         
         # Download knop
@@ -286,6 +291,9 @@ class WHYcastTranscribeGUI(QMainWindow):
         self.download_button.clicked.connect(self.download_and_transcribe)
         self.download_button.setEnabled(False)
         layout.addWidget(self.download_button)
+        
+        # Enable double-click to download and transcribe
+        self.episodes_list.doubleClicked.connect(lambda _: self.download_and_transcribe())
         
         # Progress bar
         self.rss_progress_bar = QProgressBar()
@@ -347,7 +355,7 @@ class WHYcastTranscribeGUI(QMainWindow):
         
         # UI updaten
         self.episodes_list.clear()
-        self.episodes_list.append("RSS feed wordt geladen...")
+        self.episodes_list.addItem("RSS feed wordt geladen...")
         self.rss_progress_bar.setValue(10)
         self.rss_progress_bar.setFormat("Laden...")
         
@@ -361,38 +369,87 @@ class WHYcastTranscribeGUI(QMainWindow):
     def display_episodes(self, episodes):
         self.episodes_list.clear()
         self.episodes = episodes
-        
         for i, episode in enumerate(episodes):
-            self.episodes_list.append(f"[{i+1}] {episode['title']} ({episode['published']})")
-            self.episodes_list.append(f"URL: {episode['url']}")
-            self.episodes_list.append(f"Beschrijving: {episode['description'][:100]}...")
-            self.episodes_list.append("----------------------------------------------------")
-        
+            item = QListWidgetItem(f"[{i+1}] {episode['title']} ({episode['published']})")
+            item.setData(Qt.UserRole, episode)
+            # Render tooltip as HTML
+            tooltip_html = f"""
+            <b>Titel:</b> {episode['title']}<br>
+            <b>Gepubliceerd:</b> {episode['published']}<br>
+            <b>URL:</b> <a href='{episode['url']}'>{episode['url']}</a><br>
+            <b>Beschrijving:</b> {episode['description']}
+            """
+            item.setToolTip(tooltip_html)
+            self.episodes_list.addItem(item)
         self.download_button.setEnabled(True)
         self.rss_progress_bar.setValue(100)
         self.rss_progress_bar.setFormat(f"{len(episodes)} afleveringen gevonden")
     
     def download_and_transcribe(self):
-        # Vooralsnog nemen we de eerste aflevering - in een volledige implementatie zou je een aflevering kunnen selecteren
-        if not hasattr(self, 'episodes') or not self.episodes:
-            return
-            
-        episode = self.episodes[0]
-        QMessageBox.information(self, "Download Starten", 
-                                f"De aflevering '{episode['title']}' wordt gedownload en getranscribeerd.\n\n"
-                                "Dit kan enige tijd duren afhankelijk van de grootte van het bestand.")
-        
-        # TODO: Implementeer daadwerkelijke download functies
-        self.statusBar().showMessage("Download & transcriptie functie nog niet volledig geïmplementeerd")
+        try:
+            # Selecteer aflevering of kies er willekeurig een
+            if not hasattr(self, 'episodes') or not self.episodes:
+                return
+            items = self.episodes_list.selectedItems()
+            if items:
+                episode = items[0].data(Qt.UserRole)
+            else:
+                episode = random.choice(self.episodes)
+            # Download
+            url = episode['url']
+            file_name = os.path.basename(url)
+            podcasts_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), '..', 'podcasts')
+            os.makedirs(podcasts_dir, exist_ok=True)
+            download_path = os.path.join(podcasts_dir, file_name)
+            response = requests.get(url, stream=True)
+            total_length = response.headers.get('content-length')
+            if total_length is not None:
+                total_length = int(total_length)
+            downloaded = 0
+            chunk_size = 8192
+            self.rss_progress_bar.setValue(0)
+            self.rss_progress_bar.setFormat("Downloaden...")
+            with open(download_path, 'wb') as f:
+                for chunk in response.iter_content(chunk_size=chunk_size):
+                    if chunk:
+                        f.write(chunk)
+                        if total_length:
+                            downloaded += len(chunk)
+                            percent = int(downloaded * 100 / total_length)
+                            self.rss_progress_bar.setValue(percent)
+                            self.statusBar().showMessage(f"Download voortgang: {percent}%")
+            self.statusBar().showMessage(f"Gedownload naar {download_path}")
+            self.rss_progress_bar.setValue(100)
+            self.rss_progress_bar.setFormat("Download voltooid")
+            # Start transcriptie met gedownload bestand
+            self.start_button.setEnabled(False)
+            self.progress_bar.setValue(10)
+            self.progress_bar.setFormat("Verwerking...")
+            self.output_text.clear()
+            self.worker = TranscribeWorker(
+                download_path,
+                self.model_combo.currentText(),
+                self.diarize_checkbox.isChecked(),
+                self.min_speakers_spin.value(),
+                self.max_speakers_spin.value()
+            )
+            self.worker.progress.connect(self.update_progress)
+            self.worker.finished_signal.connect(self.transcription_finished)
+            self.worker.error.connect(self.show_error)
+            self.worker.start()
+        except Exception as e:
+            tb_str = traceback.format_exc()
+            self.show_error(f"Fout tijdens downloaden of starten van transcriptie: {str(e)}\n\nTraceback:\n{tb_str}")
     
     def update_progress(self, message):
         self.output_text.append(message)
-        cursor = self.output_text.textCursor()
-        cursor.movePosition(QTextCursor.End)
-        self.output_text.setTextCursor(cursor)
+        # Avoid moving the QTextCursor, which causes the QObject::connect warning
+        # cursor = self.output_text.textCursor()
+        # cursor.movePosition(QTextCursor.End)
+        # self.output_text.setTextCursor(cursor)
     
     def update_rss_progress(self, message):
-        self.episodes_list.append(message)
+        self.statusBar().showMessage(message)
     
     def transcription_finished(self, results):
         segments, info, speaker_segments, transcript = results
@@ -413,11 +470,20 @@ class WHYcastTranscribeGUI(QMainWindow):
                                f"Aantal segmenten: {len(segments)}")
     
     def show_error(self, error_message):
+        # Log error to console and file
+        print(f"[ERROR] {error_message}", file=sys.stderr)
+        logging.error(error_message)
+        # Also log the full traceback if available
+        exc_type, exc_value, exc_tb = sys.exc_info()
+        if exc_type is not None:
+            tb_str = ''.join(traceback.format_exception(exc_type, exc_value, exc_tb))
+            print(tb_str, file=sys.stderr)
+            logging.error(tb_str)
+            error_message += f"\n\nTraceback:\n{tb_str}"
         QMessageBox.critical(self, "Fout", error_message)
         self.progress_bar.setValue(0)
         self.progress_bar.setFormat("Fout")
         self.start_button.setEnabled(True)
-
 
 def main():
     # PyQt applicatie starten
