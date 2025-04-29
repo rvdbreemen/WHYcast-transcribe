@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-
 """
 Audio processing utilities for WHYcast-transcribe.
 
-This module contains functions for handling audio files, including format detection
-and conversion of unsupported formats for compatibility with diarization and transcription.
+This module provides functions for:
+- Detecting audio file formats
+- Converting audio to supported formats for diarization and transcription
+- Checking for ffmpeg availability and handling temporary files
+
+Intended for use in all modules that require robust audio format handling and conversion for ML workflows.
 """
 
 import os
@@ -122,7 +125,7 @@ def prepare_audio_for_diarization(audio_file: str) -> Tuple[str, bool]:
     # Check if the format is already supported
     audio_format = detect_audio_format(audio_file)
     
-    if audio_format in SUPPORTED_DIARIZATION_FORMATS:
+    if (audio_format in SUPPORTED_DIARIZATION_FORMATS):
         logger.info(f"Audio format {audio_format} is already supported")
         return audio_file, False
     

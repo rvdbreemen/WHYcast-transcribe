@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-
 """
 Text processing utilities for WHYcast-transcribe.
 
-This module contains functions for text processing operations like
-estimating token counts, splitting text into chunks, and truncating text.
+This module provides functions for:
+- Estimating token counts for LLM input
+- Splitting and truncating transcripts for token limits
+- Model selection based on transcript length
+- Loading and applying custom vocabulary corrections
+
+Intended for use in all modules that require text chunking, token estimation, or vocabulary handling.
 """
 
 import os

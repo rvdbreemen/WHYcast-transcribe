@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+python .\transcribe.py --force podcasts/#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
 """

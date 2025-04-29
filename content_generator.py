@@ -50,7 +50,7 @@ from utils.format_converters import convert_markdown_to_html, convert_markdown_t
 
 def process_transcript_workflow(transcript: str) -> Optional[Dict[str, str]]:
     """
-    Process transcript through the multi-step workflow: cleanup -> summary -> blog -> history extraction -> speaker assignment
+    Process transcript through the multi-step workflow: speaker assignment -> cleanup -> summary -> blog -> history extraction
     
     Args:
         transcript: The raw transcript text
@@ -60,13 +60,29 @@ def process_transcript_workflow(transcript: str) -> Optional[Dict[str, str]]:
     """
     results = {}
     
-    # Step 1: Clean up the transcript
+    # Step 1: Speaker assignment (only if diarization is present)
+    try:
+        if any("SPEAKER_" in line for line in transcript.splitlines()):
+            from content_generator import process_speaker_assignment_workflow
+            import os
+            base_path = os.environ.get("WORKFLOW_OUTPUT_BASE", "output")
+            txt_path, html_path, md_path = process_speaker_assignment_workflow(transcript, base_path)
+            with open(txt_path, "r", encoding="utf-8") as f:
+                results['speaker_assignment'] = f.read()
+        else:
+            results['speaker_assignment'] = None
+    except Exception as e:
+        import logging
+        logging.error(f"Speaker assignment workflow failed: {str(e)}")
+        results['speaker_assignment'] = None
+    
+    # Step 2: Clean up the transcript
     cleanup_prompt = read_prompt_file(PROMPT_CLEANUP_FILE)
     if not cleanup_prompt:
         logging.warning("Cleanup prompt file not found or empty, skipping cleanup step")
         cleaned_transcript = transcript
     else:
-        logging.info("Step 1: Cleaning up transcript...")
+        logging.info("Step 2: Cleaning up transcript...")
         model_to_use = choose_appropriate_model(transcript)
         
         # For cleanup, explicitly use a higher token limit
@@ -87,31 +103,31 @@ def process_transcript_workflow(transcript: str) -> Optional[Dict[str, str]]:
     
     results['cleaned_transcript'] = cleaned_transcript
     
-    # Step 2: Generate summary
+    # Step 3: Generate summary
     summary_prompt = read_prompt_file(PROMPT_SUMMARY_FILE)
     if not summary_prompt:
         logging.warning("Summary prompt file not found or empty, skipping summary generation")
         results['summary'] = None
     else:
-        logging.info("Step 2: Generating summary...")
+        logging.info("Step 3: Generating summary...")
         summary = generate_summary(cleaned_transcript, summary_prompt)
         results['summary'] = summary
     
-    # Step 3: Generate blog post
+    # Step 4: Generate blog post
     if results.get('summary'):
         blog_prompt = read_prompt_file(PROMPT_BLOG_FILE)
         if not blog_prompt:
             logging.warning("Blog prompt file not found or empty, skipping blog generation")
             results['blog'] = None
         else:
-            logging.info("Step 3: Generating blog post...")
+            logging.info("Step 4: Generating blog post...")
             blog = generate_blog(cleaned_transcript, results['summary'], blog_prompt)
             results['blog'] = blog
     else:
         logging.warning("Skipping blog generation because summary generation failed")
         results['blog'] = None
     
-    # Step 4: Generate alternative blog post
+    # Step 5: Generate alternative blog post
     if results.get('summary') and os.path.isfile(PROMPT_BLOG_ALT1_FILE):
         # Only log and attempt to read if the file exists
         logging.debug(f"Alternative blog prompt file found: {PROMPT_BLOG_ALT1_FILE}")
@@ -119,7 +135,7 @@ def process_transcript_workflow(transcript: str) -> Optional[Dict[str, str]]:
         
         # Log the content if it was read successfully
         if blog_alt1_prompt:
-            logging.info("Step 4: Generating alternative blog post...")
+            logging.info("Step 5: Generating alternative blog post...")
             blog_alt1 = generate_blog(cleaned_transcript, results['summary'], blog_alt1_prompt)
             results['blog_alt1'] = blog_alt1
         else:
@@ -130,13 +146,13 @@ def process_transcript_workflow(transcript: str) -> Optional[Dict[str, str]]:
         logging.debug(f"Skipping alternative blog generation")
         results['blog_alt1'] = None
     
-    # Step 5: Generate history extraction
+    # Step 6: Generate history extraction
     history_extract_prompt = read_prompt_file(PROMPT_HISTORY_EXTRACT_FILE)
     if not history_extract_prompt:
         logging.warning("History extraction prompt file not found or empty, skipping history extraction")
         results['history_extract'] = None
     else:
-        logging.info("Step 5: Generating history lesson extraction...")
+        logging.info("Step 6: Generating history lesson extraction...")
         
         # Generate history extraction
         history_extract = process_with_openai(
@@ -152,22 +168,6 @@ def process_transcript_workflow(transcript: str) -> Optional[Dict[str, str]]:
         else:
             logging.error("History extraction failed")
             results['history_extract'] = None
-    
-    # Step 6: Speaker assignment (only if diarization is present)
-    try:
-        if any("SPEAKER_" in line for line in cleaned_transcript.splitlines()):
-            from content_generator import process_speaker_assignment_workflow
-            import os
-            base_path = os.environ.get("WORKFLOW_OUTPUT_BASE", "output")
-            txt_path, html_path, md_path = process_speaker_assignment_workflow(cleaned_transcript, base_path)
-            with open(txt_path, "r", encoding="utf-8") as f:
-                results['speaker_assignment'] = f.read()
-        else:
-            results['speaker_assignment'] = None
-    except Exception as e:
-        import logging
-        logging.error(f"Speaker assignment workflow failed: {str(e)}")
-        results['speaker_assignment'] = None
 
     return results
 

@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-
 """
 File operation utilities for WHYcast-transcribe.
 
-This module contains functions for file operations like checking file existence,
-creating output paths, managing file sizes, and writing transcript files.
+This module provides functions for:
+- File existence checks and output path management
+- File size validation and directory creation
+- Writing transcript files with speaker integration
+- Reading prompt files for LLM workflows
+
+Intended for use in all modules that need robust file and path handling for transcription workflows.
 """
 
 import os

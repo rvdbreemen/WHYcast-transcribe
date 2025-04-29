@@ -8,24 +8,38 @@ A tool for transcribing podcast episodes with optional speaker diarization,
 summarization, and blog post generation.
 """
 
+from datetime import datetime
+from typing import List, Dict, Tuple, Optional, Union, Any, Callable
 import os
 import sys
 import re
-import glob
+import time
 import json
+import glob
 import logging
+import logging as py_logging
 import argparse
-import time
-from datetime import datetime
-from typing import List, Dict, Tuple, Optional, Union, Any, Callable
 import warnings
-import requests
-import urllib.parse
-import markdown  # New import for markdown to HTML conversion
-import torch
-import torchaudio
-import time
 import hashlib
+import gc
+from tqdm import tqdm
+
+# Integrate content_generator for unified content processing
+try:
+    import content_generator
+    from content_generator import process_transcript_workflow, write_workflow_outputs, process_directory_workflow, process_speaker_assignment_workflow
+    CONTENT_GENERATOR_AVAILABLE = True
+except ImportError as e:
+    logging.warning(f"content_generator module not found or failed to import: {e}")
+    CONTENT_GENERATOR_AVAILABLE = False
+
+import torch
+import markdown
+import requests
+import feedparser
+
+# Import content generator module for content processing
+import content_generator
 
 # Onderdruk specifieke waarschuwingen
 warnings.filterwarnings("ignore", message="The MPEG_LAYER_III subtype is unknown to TorchAudio")
@@ -66,13 +80,6 @@ except ImportError:
         pass
 
 try:
-    import feedparser
-    FEEDPARSER_AVAILABLE = True
-except ImportError:
-    logging.warning("feedparser not installed. RSS feed parsing will not be available.")
-    FEEDPARSER_AVAILABLE = False
-
-try:
     from tqdm import tqdm
     TQDM_AVAILABLE = True
 except ImportError:
@@ -111,7 +118,7 @@ try:
         VOCABULARY_FILE, USE_CUSTOM_VOCABULARY,
         USE_SPEAKER_DIARIZATION, DIARIZATION_MODEL, DIARIZATION_ALTERNATIVE_MODEL, 
         DIARIZATION_MIN_SPEAKERS, DIARIZATION_MAX_SPEAKERS,
-        OPENAI_SPEAKER_MODEL
+        OPENAI_SPEAKER_ASSIGNMENT_MODEL
     )
 except ImportError as e:
     sys.stderr.write(f"Error: Could not import configuration - {str(e)}\n")
@@ -326,942 +333,14 @@ def ensure_api_key() -> str:
         raise ValueError("OPENAI_API_KEY environment variable is not set")
     return api_key
 
-def read_prompt_file(prompt_file: str) -> Optional[str]:
-    """
-    Read a prompt from file.
-    
-    Args:
-        prompt_file: Path to the prompt file
-        
-    Returns:
-        The prompt text or None if there was an error
-    """
-    try:
-        with open(prompt_file, 'r', encoding='utf-8') as file:
-            return file.read()
-    except Exception as e:
-        logging.error(f"Error reading prompt file {prompt_file}: {str(e)}")
-        return None
-
-def estimate_token_count(text: str) -> int:
-    """
-    Estimate the number of tokens in a text.
-    
-    Args:
-        text: The text to estimate
-        
-    Returns:
-        Estimated number of tokens
-    """
-    return len(text) // CHARS_PER_TOKEN
-
-def truncate_transcript(transcript: str, max_tokens: int) -> str:
-    """
-    Truncate a transcript to fit within token limits.
-    
-    Args:
-        transcript: The transcript text
-        max_tokens: Maximum token count allowed
-        
-    Returns:
-        Truncated transcript
-    """
-    estimated_tokens = estimate_token_count(transcript)
-    if estimated_tokens <= max_tokens:
-        return transcript
-        
-    # If transcript is too long, keep the first part and last part
-    chars_to_keep = max_tokens * CHARS_PER_TOKEN
-    first_part_size = chars_to_keep // 2
-    last_part_size = chars_to_keep - first_part_size - 100  # Leave room for ellipsis message
-    
-    first_part = transcript[:first_part_size]
-    last_part = transcript[-last_part_size:]
-    
-    return first_part + "\n\n[...transcript truncated due to length...]\n\n" + last_part
-
-def choose_appropriate_model(transcript: str) -> str:
-    """
-    Choose the appropriate model based on transcript length.
-    
-    Args:
-        transcript: The transcript text
-        
-    Returns:
-        Model name to use
-    """
-    estimated_tokens = estimate_token_count(transcript)
-    logging.info(f"Estimated transcript length: ~{estimated_tokens} tokens")
-    
-    # If transcript is long, use large context model
-    if estimated_tokens > MAX_INPUT_TOKENS and OPENAI_LARGE_CONTEXT_MODEL:
-        logging.info(f"Using large context model: {OPENAI_LARGE_CONTEXT_MODEL} due to transcript length")
-        return OPENAI_LARGE_CONTEXT_MODEL
-    
-    return OPENAI_MODEL
-
-def check_file_size(file_path: str) -> bool:
-    """
-    Check if the file size is within acceptable limits.
-    
-    Args:
-        file_path: Path to the file to check
-        
-    Returns:
-        True if file size is acceptable, False if it's too large
-    """
-    size_kb = os.path.getsize(file_path) / 1024
-    if size_kb > MAX_FILE_SIZE_KB:
-        logging.warning(f"File size ({size_kb:.1f} KB) exceeds recommended limit ({MAX_FILE_SIZE_KB} KB). " 
-                      f"Processing might be slow or fail.")
-        return False
-    return True
-
-def split_into_chunks(text: str, max_chunk_size: int = MAX_CHUNK_SIZE, overlap: int = CHUNK_OVERLAP) -> List[str]:
-    """
-    Split text into chunks of specified maximum size with overlap.
-    
-    Args:
-        text: The text to split
-        max_chunk_size: Maximum chunk size in characters
-        overlap: Overlap between chunks in characters
-        
-    Returns:
-        List of text chunks
-    """
-    if len(text) <= max_chunk_size:
-        return [text]
-        
-    chunks = []
-    start = 0
-    
-    while start < len(text):
-        # Find a good breaking point (end of sentence or paragraph)
-        end = min(start + max_chunk_size, len(text))
-        
-        # Try to find paragraph break
-        paragraph_break = text.rfind('\n\n', start, end)
-        if paragraph_break != -1 and paragraph_break > start + max_chunk_size // 2:
-            end = paragraph_break + 2
-        else:
-            # Try to find sentence break (period followed by space)
-            sentence_break = text.rfind('. ', start, end)
-            if sentence_break != -1 and sentence_break > start + max_chunk_size // 2:
-                end = sentence_break + 2
-        
-        chunks.append(text[start:end])
-        # Start the next chunk with some overlap for context
-        start = max(start + 1, end - overlap)
-        
-    return chunks
-
-def summarize_large_transcript(transcript: str, prompt: str) -> Optional[str]:
-    """
-    Handle very large transcripts by chunking and recursive summarization.
-    
-    Args:
-        transcript: The transcript text
-        prompt: The summarization prompt
-        
-    Returns:
-        Generated summary or None if failed
-    """
-    estimated_tokens = estimate_token_count(transcript)
-    logging.info(f"Starting recursive summarization for large transcript (~{estimated_tokens} tokens)")
-    
-    # Split into chunks
-    chunks = split_into_chunks(transcript)
-    logging.info(f"Split transcript into {len(chunks)} chunks")
-    
-    # Process each chunk using process_with_openai
-    intermediate_summaries = []
-    for i, chunk in enumerate(chunks):
-        logging.info(f"Processing chunk {i+1}/{len(chunks)}")
-        
-        try:
-            chunk_prompt = "This is part of a longer transcript. Please summarize just this section, focusing on key points."
-            summary = process_with_openai(chunk, chunk_prompt, OPENAI_MODEL, max_tokens=MAX_TOKENS // 2)
-            
-            if summary:
-                intermediate_summaries.append(summary)
-                logging.info(f"Completed summary for chunk {i+1}")
-            else:
-                logging.warning(f"Failed to summarize chunk {i+1}")
-        except Exception as e:
-            logging.error(f"Error summarizing chunk {i+1}: {str(e)}")
-            # Continue with partial results if available
-    
-    # If we have intermediate summaries, combine them
-    if not intermediate_summaries:
-        return None
-    
-    # Combine intermediate summaries into a final summary
-    combined_text = "\n\n".join(intermediate_summaries)
-    
-    # Use process_with_openai for final combination
-    final_prompt = f"{prompt}\n\nHere are summaries from different parts of the transcript. Please combine them into a cohesive summary and blog post:"
-    return process_with_openai(combined_text, final_prompt, OPENAI_LARGE_CONTEXT_MODEL, max_tokens=MAX_TOKENS)
-
-def process_with_openai(text: str, prompt: str, model_name: str, max_tokens: int = MAX_TOKENS) -> Optional[str]:
-    """
-    Process text with OpenAI model using the specified prompt.
-    
-    Args:
-        text: The text to process
-        prompt: Instructions for the AI
-        model_name: Name of the model to use
-        max_tokens: Maximum tokens for output
-        
-    Returns:
-        The generated text or None if there was an error
-    """
-    try:
-        api_key = ensure_api_key()
-        client = OpenAI(api_key=api_key)
-        
-        estimated_tokens = estimate_token_count(text)
-        logging.info(f"Processing text with OpenAI (~{estimated_tokens} tokens)")
-        
-        # If text is too long, truncate it
-        if estimated_tokens > MAX_INPUT_TOKENS:
-            logging.warning(f"Text too long (~{estimated_tokens} tokens > {MAX_INPUT_TOKENS} limit), truncating...")
-            text = truncate_transcript(text, MAX_INPUT_TOKENS)
-        
-        # Determine if we're using an o-series model (like o3-mini) that requires special parameter handling
-        # NOTE: GPT-4o is NOT considered an o-series model in this context - it uses standard parameters
-        is_o_series_model = model_name.startswith("o") and not model_name.startswith("gpt")
-        
-        # Set up parameters based on model type
-        token_param = "max_completion_tokens" if is_o_series_model else "max_tokens"
-        
-        # Create base parameters dict
-        params = {
-            "model": model_name,
-            "messages": [
-                {"role": "system", "content": "You are a helpful assistant that processes transcripts."},
-                {"role": "user", "content": f"{prompt}\n\nHere's the text to process:\n\n{text}"}
-            ]
-        }
-        
-        # Add temperature only for models that support it (non-"o" series)
-        if not is_o_series_model:
-            params["temperature"] = TEMPERATURE
-        
-        try:
-            # For transcript cleanup, we need to ensure we get complete output by using a higher max_tokens limit
-            if "clean" in prompt.lower() and "transcript" in prompt.lower():
-                # For cleanup, give more tokens for output - use at least text length or double MAX_TOKENS
-                cleanup_max_tokens = max(estimate_token_count(text), MAX_TOKENS * 2)
-                logging.info(f"Using expanded token limit for cleanup: {cleanup_max_tokens}")
-                
-                # Check if text needs to be processed in chunks due to size
-                if estimated_tokens > MAX_INPUT_TOKENS // 2:
-                    return process_large_text_in_chunks(text, prompt, model_name, client)
-                
-                # Add token parameter
-                params[token_param] = cleanup_max_tokens
-                
-                response = client.chat.completions.create(**params)
-            else:
-                # Regular processing for non-cleanup tasks
-                # Add token parameter
-                params[token_param] = max_tokens
-                
-                response = client.chat.completions.create(**params)
-                
-            result = response.choices[0].message.content
-            
-            # Check if result might be truncated (ends abruptly without proper punctuation)
-            if len(result) > 100 and not result.rstrip().endswith(('.', '!', '?', '"', ':', ';', ')', ']', '}')):
-                logging.warning("Generated text may be truncated (doesn't end with punctuation)")
-                
-            return result
-                
-        except BadRequestError as e:
-            if "maximum context length" in str(e).lower():
-                # Try with more aggressive truncation
-                logging.warning(f"Context length exceeded. Retrying with further truncation...")
-                text = truncate_transcript(text, MAX_INPUT_TOKENS // 2)
-                logging.info(f"Retrying with reduced text (~{estimate_token_count(text)} tokens)...")
-                
-                # Update the message content with truncated text
-                params["messages"][1]["content"] = f"{prompt}\n\nHere's the text to process:\n\n{text}"
-                
-                response = client.chat.completions.create(**params)
-                return response.choices[0].message.content
-            else:
-                raise
-    except Exception as e:
-        logging.error(f"Error processing with OpenAI: {str(e)}")
-        return None
-
-def process_large_text_in_chunks(text: str, prompt: str, model_name: str, client: OpenAI) -> str:
-    """
-    Process very large text by breaking it into chunks and reassembling the results.
-    
-    Args:
-        text: The text to process
-        prompt: The processing instructions
-        model_name: Model to use
-        client: OpenAI client
-        
-    Returns:
-        Combined processed text
-    """
-    logging.info("Text is very large, processing in chunks")
-    chunks = split_into_chunks(text, max_chunk_size=MAX_CHUNK_SIZE*2)
-    logging.info(f"Split text into {len(chunks)} chunks")
-    
-    # Determine if we're using an o-series model (like o3-mini) that requires special parameter handling
-    # NOTE: GPT-4o is NOT considered an o-series model in this context - it uses standard parameters
-    is_o_series_model = model_name.startswith("o") and not model_name.startswith("gpt")
-    
-    # Set up parameters based on model type
-    token_param = "max_completion_tokens" if is_o_series_model else "max_tokens"
-    token_limit = MAX_TOKENS * 2  # Use larger output limit for chunks
-    
-    modified_prompt = f"{prompt}\n\nThis is a chunk of a longer transcript. Process this chunk following the instructions."
-    processed_chunks = []
-    
-    # Add progress bar for chunk processing
-    for i, chunk in enumerate(tqdm(chunks, desc="Processing chunks")):
-        logging.info(f"Processing chunk {i+1}/{len(chunks)}")
-        try:
-            # Create parameters dictionary with proper token limit parameter
-            params = {
-                "model": model_name,
-                "messages": [
-                    {"role": "system", "content": "You are a helpful assistant that processes transcript chunks."},
-                    {"role": "user", "content": f"{modified_prompt}\n\nChunk {i+1}/{len(chunks)}:\n\n{chunk}"}
-                ]
-            }
-            
-            # Add temperature only for models that support it (non-"o" series)
-            if not is_o_series_model:
-                params["temperature"] = TEMPERATURE
-                
-            # Add token parameter
-            params[token_param] = token_limit
-            
-            response = client.chat.completions.create(**params)
-            processed_chunks.append(response.choices[0].message.content)
-            logging.info(f"Successfully processed chunk {i+1}")
-        except Exception as e:
-            logging.error(f"Error processing chunk {i+1}: {str(e)}")
-            # If processing fails, include original chunk to avoid data loss
-            processed_chunks.append(chunk)
-    
-    # Combine processed chunks
-    combined_text = "\n\n".join(processed_chunks)
-    
-    # Optionally, run a final pass to ensure consistency across chunk boundaries
-    if len(processed_chunks) > 1:
-        try:
-            logging.info("Running final pass to ensure consistency across chunk boundaries")
-            # Estimate token count of combined text
-            combined_tokens = estimate_token_count(combined_text)
-            
-            # If combined text is still too large, just return it as is
-            if combined_tokens > MAX_INPUT_TOKENS:
-                logging.warning(f"Combined text is too large for final pass (~{combined_tokens} tokens)")
-                return combined_text
-            
-            # Create parameters for the consistency pass
-            params = {
-                "model": model_name,
-                "messages": [
-                    {"role": "system", "content": "You are a helpful assistant that ensures transcript consistency."},
-                    {"role": "user", "content": f"This is a processed transcript that was handled in chunks. Please ensure consistency across chunk boundaries and fix any obvious issues.\n\n{combined_text}"}
-                ]
-            }
-            
-            # Add temperature only for models that support it (non-"o" series)
-            if not is_o_series_model:
-                params["temperature"] = TEMPERATURE
-                
-            # Add token parameter
-            params[token_param] = MAX_TOKENS
-            
-            response = client.chat.completions.create(**params)
-            return response.choices[0].message.content
-        except Exception as e:
-            logging.error(f"Error in final consistency pass: {str(e)}")
-            return combined_text
-    
-    return combined_text
-
-def process_transcript_workflow(transcript: str) -> Optional[Dict[str, str]]:
-    """
-    Process transcript through the multi-step workflow: cleanup -> summary -> blog -> history extraction
-    
-    Args:
-        transcript: The raw transcript text
-        
-    Returns:
-        Dictionary with cleaned_transcript, summary, blog, and history_extract or None if failed
-    """
-    results = {}
-    
-    # Step 1: Clean up the transcript
-    cleanup_prompt = read_prompt_file(PROMPT_CLEANUP_FILE)
-    if not cleanup_prompt:
-        logging.warning("Cleanup prompt file not found or empty, skipping cleanup step")
-        cleaned_transcript = transcript
-    else:
-        logging.info("Step 1: Cleaning up transcript...")
-        model_to_use = choose_appropriate_model(transcript)
-        
-        # For cleanup, explicitly use a higher token limit
-        estimated_tokens = estimate_token_count(transcript)
-        logging.info(f"Transcript size: ~{estimated_tokens} tokens")
-        
-        # Process with OpenAI, giving plenty of room for output
-        cleaned_transcript = process_with_openai(transcript, cleanup_prompt, model_to_use, max_tokens=MAX_TOKENS * 2)
-        
-        # Check if the cleaning was successful and not truncated
-        if not cleaned_transcript:
-            logging.warning("Transcript cleanup failed, using original transcript")
-            cleaned_transcript = transcript
-        elif len(cleaned_transcript) < len(transcript) * 0.5:
-            logging.warning(f"Cleaned transcript is suspiciously short ({len(cleaned_transcript)} chars vs original {len(transcript)} chars)")
-            logging.warning("This may indicate truncation. Using original transcript instead.")
-            cleaned_transcript = transcript
-    
-    results['cleaned_transcript'] = cleaned_transcript
-    
-    # Step 2: Generate summary
-    summary_prompt = read_prompt_file(PROMPT_SUMMARY_FILE)
-    if not summary_prompt:
-        logging.warning("Summary prompt file not found or empty, skipping summary generation")
-        results['summary'] = None
-    else:
-        logging.info("Step 2: Generating summary...")
-        model_to_use = choose_appropriate_model(cleaned_transcript)
-        summary = process_with_openai(cleaned_transcript, summary_prompt, model_to_use)
-        results['summary'] = summary
-    
-    # Step 3: Generate blog post
-    blog_prompt = read_prompt_file(PROMPT_BLOG_FILE)
-    if not blog_prompt:
-        logging.warning("Blog prompt file not found or empty, skipping blog generation")
-        results['blog'] = None
-    else:
-        logging.info("Step 3: Generating blog post...")
-        # Use both the cleaned transcript and summary for blog generation
-        input_text = f"CLEANED TRANSCRIPT:\n{cleaned_transcript}\n\nSUMMARY:\n{results.get('summary', 'No summary available')}"
-        model_to_use = choose_appropriate_model(input_text)
-        blog = process_with_openai(input_text, blog_prompt, model_to_use, max_tokens=MAX_TOKENS * 2)
-        results['blog'] = blog
-        
-    # Step 4: Generate alternative blog post
-    if os.path.isfile(PROMPT_BLOG_ALT1_FILE):
-        # Only log and attempt to read if the file exists
-        logging.debug(f"Alternative blog prompt file found: {PROMPT_BLOG_ALT1_FILE}")
-        blog_alt1_prompt = read_prompt_file(PROMPT_BLOG_ALT1_FILE)
-        
-        # Log the content if it was read successfully
-        if blog_alt1_prompt:
-            logging.info(f"Successfully read alternative blog prompt: {blog_alt1_prompt[:100]}..." if len(blog_alt1_prompt) > 100 else blog_alt1_prompt)
-            logging.info("Step 4: Generating blog alt1 post...")
-            # Use both the cleaned transcript and summary for blog generation
-            input_text = f"CLEANED TRANSCRIPT:\n{cleaned_transcript}\n\nSUMMARY:\n{results.get('summary', 'No summary available')}"
-            model_to_use = choose_appropriate_model(input_text)
-            # Use blog_alt1_prompt for the alternative blog
-            blog_alt1 = process_with_openai(input_text, blog_alt1_prompt, model_to_use, max_tokens=MAX_TOKENS * 2)
-            results['blog_alt1'] = blog_alt1
-        else:
-            logging.warning(f"Blog prompt alt1 file exists but couldn't be read or is empty: {PROMPT_BLOG_ALT1_FILE}")
-            results['blog_alt1'] = None
-    else:
-        # File doesn't exist, just log this at debug level and skip
-        logging.debug(f"Blog prompt alt1 file not found: {PROMPT_BLOG_ALT1_FILE}, skipping alt1 blog generation")
-        results['blog_alt1'] = None
-    
-    # Step 5: Generate history extraction
-    history_extract_prompt = read_prompt_file(PROMPT_HISTORY_EXTRACT_FILE)
-    if not history_extract_prompt:
-        logging.warning("History extraction prompt file not found or empty, skipping history extraction")
-        logging.debug(f"Prompt file path that wasn't found: {PROMPT_HISTORY_EXTRACT_FILE}")
-        results['history_extract'] = None
-    else:
-        logging.info("Step 5: Generating history lesson extraction...")
-        logging.debug(f"Found history extract prompt file: {PROMPT_HISTORY_EXTRACT_FILE}")
-        logging.debug(f"History model being used: {OPENAI_HISTORY_MODEL}")
-        
-        # Use the cleaned transcript as input for history extraction
-        model_to_use = OPENAI_HISTORY_MODEL  # Use the specified model for history extraction
-        try:
-            history_extract = process_with_openai(cleaned_transcript, history_extract_prompt, model_to_use, max_tokens=MAX_TOKENS * 2)
-            if history_extract:
-                logging.info(f"Successfully generated history extract ({len(history_extract)} chars)")
-                results['history_extract'] = history_extract
-            else:
-                logging.error("History extraction returned None - API call likely failed")
-                results['history_extract'] = None
-        except Exception as e:
-            logging.error(f"Exception during history extraction: {str(e)}")
-            results['history_extract'] = None
-    
-    return results
-
-def write_workflow_outputs(results: Dict[str, str], output_base: str) -> None:
-    """
-    Write the outputs from the workflow to files.
-    
-    Args:
-        results: Dictionary with cleaned_transcript, summary, blog, and history_extract
-        output_base: Base path for output files
-    """
-    # Write cleaned transcript
-    if 'cleaned_transcript' in results and results['cleaned_transcript']:
-        cleaned_path = f"{output_base}_cleaned.txt"
-        with open(cleaned_path, "w", encoding="utf-8") as f:
-            f.write(results['cleaned_transcript'])
-        logging.info(f"Cleaned transcript saved to: {cleaned_path}")
-    
-    # Write summary
-    if 'summary' in results and results['summary']:
-        summary_path = f"{output_base}_summary.txt"
-        with open(summary_path, "w", encoding="utf-8") as f:
-            f.write(results['summary'])
-        logging.info(f"Summary saved to: {summary_path}")
-    
-    # Write blog post
-    if 'blog' in results and results['blog']:
-        # Get base filename without any special suffixes
-        base_filename = os.path.basename(output_base)
-        output_dir = os.path.dirname(output_base)
-        blog_path = os.path.join(output_dir, f"{base_filename}_blog.txt")
-        
-        with open(blog_path, "w", encoding="utf-8") as f:
-            f.write(results['blog'])
-        logging.info(f"Blog post saved to: {blog_path}")
-        
-        # Generate and write HTML version
-        html_content = convert_markdown_to_html(results['blog'])
-        html_path = os.path.join(output_dir, f"{base_filename}_blog.html")
-        with open(html_path, "w", encoding="utf-8") as f:
-            f.write(html_content)
-        logging.info(f"HTML blog post saved to: {html_path}")
-        
-        # Generate and write Wiki version
-        wiki_content = convert_markdown_to_wiki(results['blog'])
-        wiki_path = os.path.join(output_dir, f"{base_filename}_blog.wiki")
-        with open(wiki_path, "w", encoding="utf-8") as f:
-            f.write(wiki_content)
-        logging.info(f"Wiki blog post saved to: {wiki_path}")
-        
-    # Write blog post
-    if 'blog_alt1' in results and results['blog_alt1']:
-        # Get base filename without any special suffixes
-        base_filename = os.path.basename(output_base)
-        output_dir = os.path.dirname(output_base)
-        blog_alt1_path = os.path.join(output_dir, f"{base_filename}_blog_alt1.txt")
-        
-        with open(blog_alt1_path, "w", encoding="utf-8") as f:
-            f.write(results['blog_alt1'])
-        logging.info(f"Blog alt1 post saved to: {blog_alt1_path}")
-        
-        # Generate and write HTML version
-        html_content = convert_markdown_to_html(results['blog_alt1'])
-        html_path = os.path.join(output_dir, f"{base_filename}_blog_alt1.html")
-        with open(html_path, "w", encoding="utf-8") as f:
-            f.write(html_content)
-        logging.info(f"HTML blog alt 1post saved to: {html_path}")
-        
-        # Generate and write Wiki version
-        wiki_content = convert_markdown_to_wiki(results['blog_alt1'])
-        wiki_path = os.path.join(output_dir, f"{base_filename}_blog_alt1.wiki")
-        with open(wiki_path, "w", encoding="utf-8") as f:
-            f.write(wiki_content)
-        logging.info(f"Wiki blog alt1 post saved to: {wiki_path}")
-    
-    # Write history extraction
-    if 'history_extract' in results and results['history_extract']:
-        base_filename = os.path.basename(output_base)
-        output_dir = os.path.dirname(output_base)
-        history_path = os.path.join(output_dir, f"{base_filename}_history.txt")
-        with open(history_path, "w", encoding="utf-8") as f:
-            f.write(results['history_extract'])
-        logging.info(f"History extraction saved to: {history_path}")
-        
-        # Generate and write HTML version
-        html_content = convert_markdown_to_html(results['history_extract'])
-        html_path = os.path.join(output_dir, f"{base_filename}_history.html")
-        with open(html_path, "w", encoding="utf-8") as f:
-            f.write(html_content)
-        logging.info(f"HTML history extraction saved to: {html_path}")
-        
-        # Generate and write Wiki version
-        wiki_content = convert_markdown_to_wiki(results['history_extract'])
-        wiki_path = os.path.join(output_dir, f"{base_filename}_history.wiki")
-        with open(wiki_path, "w", encoding="utf-8") as f:
-            f.write(wiki_content)
-        logging.info(f"Wiki history extraction saved to: {wiki_path}")
-    
-    # Step 6: Speaker assignment
-    speaker_prompt = read_prompt_file(PROMPT_SPEAKER_ASSIGN_FILE)
-    if USE_SPEAKER_DIARIZATION and speaker_prompt:
-        logging.info("Step 6: Assigning speaker names...")
-        try:
-            ts_path = f"{output_base}_ts.txt"
-            with open(ts_path, 'r', encoding='utf-8') as f:
-                ts_text = f.read()
-            assignment = process_with_openai(ts_text, speaker_prompt, OPENAI_SPEAKER_MODEL)
-            if assignment:
-                assign_path = f"{output_base}_speaker_assignment.txt"
-                with open(assign_path, 'w', encoding='utf-8') as af:
-                    af.write(assignment)
-                logging.info(f"Speaker assignment saved to: {assign_path}")
-                results['speaker_assignment'] = assignment
-                # Generate HTML version of speaker assignment
-                html_content = convert_markdown_to_html(assignment)
-                html_path = f"{output_base}_speaker_assignment.html"
-                with open(html_path, "w", encoding="utf-8") as hf:
-                    hf.write(html_content)
-                logging.info(f"HTML speaker assignment saved to: {html_path}")
-                # Generate Wiki version of speaker assignment
-                wiki_content = convert_markdown_to_wiki(assignment)
-                wiki_path = f"{output_base}_speaker_assignment.wiki"
-                with open(wiki_path, "w", encoding="utf-8") as wf:
-                    wf.write(wiki_content)
-                logging.info(f"Wiki speaker assignment saved to: {wiki_path}")
-            else:
-                results['speaker_assignment'] = None
-                logging.warning("Speaker assignment returned no result.")
-        except Exception as e:
-            results['speaker_assignment'] = None
-            logging.error(f"Error during speaker assignment: {str(e)}")
-    else:
-        results['speaker_assignment'] = None
-
-def generate_summary_and_blog(transcript: str, prompt: str) -> Optional[str]:
-    """
-    Generate summary and blog post using OpenAI API.
-    
-    Args:
-        transcript: The transcript text to summarize
-        prompt: Instructions for the AI
-        
-    Returns:
-        The generated summary and blog or None if there was an error
-    """
-    try:
-        estimated_tokens = estimate_token_count(transcript)
-        logging.info(f"Estimated transcript length: ~{estimated_tokens} tokens")
-        
-        # For very large transcripts, use recursive summarization
-        if USE_RECURSIVE_SUMMARIZATION and estimated_tokens > MAX_INPUT_TOKENS:
-            logging.info(f"Transcript is very large ({estimated_tokens} tokens), using recursive summarization")
-            return summarize_large_transcript(transcript, prompt)
-        
-        # Choose appropriate model based on length
-        model_to_use = choose_appropriate_model(transcript)
-        
-        # Use process_with_openai instead of direct API call for consistent handling
-        logging.info(f"Generating summary and blog using {model_to_use}...")
-        return process_with_openai(transcript, prompt, model_to_use, max_tokens=MAX_TOKENS)
-    
-    except Exception as e:
-        logging.error(f"Error generating summary: {str(e)}")
-        return None
-
-# ==================== VOCABULARY PROCESSING FUNCTIONS ====================
-# Dictionary to cache vocabulary mappings
-_vocabulary_cache = {}
-
-def load_vocabulary_mappings(vocab_file: str) -> Dict[str, str]:
-    """
-    Load vocabulary mappings from a JSON file.
-    
-    Args:
-        vocab_file: Path to the vocabulary JSON file
-        
-    Returns:
-        Dictionary of {incorrect_term: correct_term} mappings
-    """
-    # Return cached vocabulary if available
-    if vocab_file in _vocabulary_cache:
-        return _vocabulary_cache[vocab_file]
-        
-    if not os.path.exists(vocab_file):
-        logging.warning(f"Vocabulary file not found: {vocab_file}")
-        return {}
-        
-    try:
-        # Read file content once to avoid reading twice in case of error
-        with open(vocab_file, 'r', encoding='utf-8') as f:
-            content = f.read()
-            
-        try:
-            mappings = json.loads(content)
-        except json.JSONDecodeError as json_err:
-            # Provide more detailed information about the JSON parsing error
-            logging.error(f"JSON syntax error in vocabulary file: {str(json_err)}")
-            logging.error(f"Check your vocabulary file for issues near character position {json_err.pos}")
-            # Show the problematic part of the JSON
-            start_pos = max(0, json_err.pos - 20)
-            end_pos = min(len(content), json_err.pos + 20)
-            context = content[start_pos:end_pos]
-            pointer = ' ' * (min(20, json_err.pos - start_pos)) + '^'
-            logging.error(f"Context: ...{context}...")
-            logging.error(f"Position: ...{pointer}...")
-            return {}
-        
-        if not isinstance(mappings, dict):
-            logging.error(f"Vocabulary file must contain a JSON object/dictionary")
-            return {}
-        
-        # Validate entries - ensure keys and values are strings and not empty
-        valid_mappings = {}
-        for key, value in mappings.items():
-            if not isinstance(key, str) or not key.strip():
-                logging.warning(f"Skipping invalid vocabulary mapping key: {key}")
-                continue
-            if not isinstance(value, str):
-                logging.warning(f"Skipping non-string value for key '{key}': {value}")
-                continue
-            valid_mappings[key] = value
-            
-        if len(valid_mappings) < len(mappings):
-            logging.warning(f"Removed {len(mappings) - len(valid_mappings)} invalid mappings")
-            
-        # Cache the validated mappings
-        _vocabulary_cache[vocab_file] = valid_mappings
-        logging.info(f"Loaded {len(valid_mappings)} vocabulary mappings")
-        return valid_mappings
-    except Exception as e:
-        logging.error(f"Error loading vocabulary file: {str(e)}")
-        return {}
-
-def apply_vocabulary_corrections(text: str, vocab_mappings: Dict[str, str]) -> str:
-    """
-    Apply vocabulary corrections to the transcribed text.
-    
-    Args:
-        text: The text to correct
-        vocab_mappings: Dictionary of word mappings
-        
-    Returns:
-        Corrected text
-    """
-    if not vocab_mappings:
-        return text
-    
-    corrected_text = text
-    
-    # Sort mappings by length (descending) to handle longer phrases first
-    sorted_mappings = sorted(vocab_mappings.items(), key=lambda x: len(x[0]), reverse=True)
-    
-    for incorrect, correct in sorted_mappings:
-        # Use word boundaries for more accurate replacement
-        pattern = r'\b' + re.escape(incorrect) + r'\b'
-        corrected_text = re.sub(pattern, correct, corrected_text, flags=re.IGNORECASE)
-    
-    return corrected_text
-
-def process_transcript_with_vocabulary(transcript: str) -> str:
-    """
-    Process a transcript with custom vocabulary corrections.
-    
-    Args:
-        transcript: The transcript text
-        
-    Returns:
-        The processed transcript
-    """
-    if not USE_CUSTOM_VOCABULARY:
-        return transcript
-    
-    vocab_mappings = load_vocabulary_mappings(VOCABULARY_FILE)
-    if not vocab_mappings:
-        return transcript
-    
-    return apply_vocabulary_corrections(transcript, vocab_mappings)
-
-
-# ==================== FORMAT CONVERSION FUNCTIONS ====================
-def convert_markdown_to_html(markdown_text: str) -> str:
-    """
-    Convert markdown text to HTML.
-    
-    Args:
-        markdown_text: The markdown text to convert
-        
-    Returns:
-        HTML formatted text
-    """
-    try:
-        # Use the markdown library to convert text to HTML
-        html = markdown.markdown(markdown_text, extensions=['extra', 'nl2br', 'sane_lists'])
-        
-        # Create a complete HTML document with basic styling
-        html_document = f"""<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>WHYcast Blog</title>
-    <style>
-        body {{
-            font-family: Arial, sans-serif;
-            line-height: 1.6;
-            max-width: 800px;
-            margin: 0 auto;
-            padding: 20px;
-        }}
-        h1, h2, h3 {{
-            color: #333;
-        }}
-        a {{
-            color: #0066cc;
-        }}
-        blockquote {{
-            border-left: 4px solid #ccc;
-            padding-left: 16px;
-            margin-left: 0;
-            color: #555;
-        }}
-        code {{
-            background-color: #f4f4f4;
-            padding: 2px 5px;
-            border-radius: 3px;
-        }}
-        pre {{
-            background-color: #f4f4f4;
-            padding: 10px;
-            border-radius: 5px;
-            overflow-x: auto;
-        }}
-    </style>
-</head>
-<body>
-    {html}
-</body>
-</html>
-"""
-        return html_document
-    except Exception as e:
-        logging.error(f"Error converting markdown to HTML: {str(e)}")
-        # Return basic HTML with the original text if conversion fails
-        return f"<!DOCTYPE html><html><body><pre>{markdown_text}</pre></body></html>"
-
-def convert_markdown_to_wiki(markdown_text: str) -> str:
-    """
-    Convert markdown text to Wiki markup.
-    
-    Args:
-        markdown_text: The markdown text to convert
-        
-    Returns:
-        Wiki markup formatted text
-    """
-    try:
-        # Basic conversion rules for common markdown to Wiki syntax
-        wiki_text = markdown_text
-        
-        # Headers: Convert markdown headers to wiki headers
-        # e.g., "# Heading 1" -> "= Heading 1 ="
-        wiki_text = re.sub(r'^# (.+)$', r'= \1 =', wiki_text, flags=re.MULTILINE)
-        wiki_text = re.sub(r'^## (.+)$', r'== \1 ==', wiki_text, flags=re.MULTILINE)
-        wiki_text = re.sub(r'^### (.+)$', r'=== \1 ===', wiki_text, flags=re.MULTILINE)
-        wiki_text = re.sub(r'^#### (.+)$', r'==== \1 ====', wiki_text, flags=re.MULTILINE)
-        
-        # Bold: Convert **text** or __text__ to '''text'''
-        wiki_text = re.sub(r'\*\*(.+?)\*\*', r"'''\1'''", wiki_text)
-        wiki_text = re.sub(r'__(.+?)__', r"'''\1'''", wiki_text)
-        
-        # Italic: Convert *text* or _text_ to ''text''
-        wiki_text = re.sub(r'\*([^*]+?)\*', r"''\1''", wiki_text)
-        wiki_text = re.sub(r'_([^_]+?)_', r"''\1''", wiki_text)
-        
-        # Lists: Convert markdown lists to wiki lists
-        # Unordered lists: "- item" -> "* item"
-        wiki_text = re.sub(r'^- (.+)$', r'* \1', wiki_text, flags=re.MULTILINE)
-        
-        # Ordered lists: "1. item" -> "# item"
-        wiki_text = re.sub(r'^\d+\. (.+)$', r'# \1', wiki_text, flags=re.MULTILINE)
-        
-        # Links: Convert [text](url) to [url text]
-        wiki_text = re.sub(r'\[(.+?)\]\((.+?)\)', r'[\2 \1]', wiki_text)
-        
-        # Code blocks: Convert ```code``` to <syntaxhighlight>code</syntaxhighlight>
-        wiki_text = re.sub(r'```(.+?)```', r'<syntaxhighlight>\1</syntaxhighlight>', wiki_text, flags=re.DOTALL)
-        
-        # Inline code: Convert `code` to <code>code</code>
-        wiki_text = re.sub(r'`(.+?)`', r'<code>\1</code>', wiki_text)
-        
-        # Blockquotes: Convert > quote to <blockquote>quote</blockquote>
-        # First, group consecutive blockquote lines
-        blockquote_blocks = re.findall(r'((?:^> .+\n?)+)', wiki_text, flags=re.MULTILINE)
-        for block in blockquote_blocks:
-            # Remove the > prefix from each line and wrap in blockquote tags
-            cleaned_block = re.sub(r'^> (.+)$', r'\1', block, flags=re.MULTILINE).strip()
-            wiki_text = wiki_text.replace(block, f'<blockquote>{cleaned_block}</blockquote>\n\n')
-        
-        return wiki_text
-    except Exception as e:
-        logging.error(f"Error converting markdown to Wiki markup: {str(e)}")
-        return markdown_text  # Return original text if conversion fails
-
-def convert_existing_blogs(directory: str) -> None:
-    """
-    Convert all existing blog.txt files in the given directory to HTML and Wiki formats.
-    
-    Args:
-        directory: Directory containing blog text files
-    """
-    try:
-        # Create directory if it doesn't exist
-        os.makedirs(directory, exist_ok=True)
-    except Exception as e:
-        logging.error(f"Could not create or access directory {directory}: {str(e)}")
-        return
-    
-    if not os.path.isdir(directory):
-        logging.error(f"Invalid directory: {directory}")
-        return
-    
-    # Look for blog files (txt files that have "_blog" in their name)
-    blog_pattern = os.path.join(directory, "*_blog.txt")
-    blog_files = glob.glob(blog_pattern)
-    
-    if not blog_files:
-        logging.warning(f"No blog files found in directory: {directory}")
-        return
-    
-    logging.info(f"Found {len(blog_files)} blog files to convert")
-    converted_count = 0
-    
-    for blog_file in tqdm(blog_files, desc="Converting blogs"):
-        base_filename = os.path.splitext(blog_file)[0]  # Remove .txt extension
-        
-        # Define output paths
-        html_path = f"{base_filename}.html"
-        wiki_path = f"{base_filename}.wiki"
-        
-        try:
-            # Read the blog content
-            with open(blog_file, 'r', encoding='utf-8') as f:
-                blog_content = f.read()
-            
-            # Convert to HTML and save
-            html_content = convert_markdown_to_html(blog_content)
-            with open(html_path, "w", encoding="utf-8") as f:
-                f.write(html_content)
-                
-            # Convert to Wiki and save
-            wiki_content = convert_markdown_to_wiki(blog_content)
-            with open(wiki_path, "w", encoding="utf-8") as f:
-                f.write(wiki_content)
-            
-            logging.info(f"Converted {os.path.basename(blog_file)} to HTML and Wiki formats")
-            converted_count += 1
-            
-        except Exception as e:
-            logging.error(f"Error converting {blog_file}: {str(e)}")
-    
-    logging.info(f"Successfully converted {converted_count} out of {len(blog_files)} blog files")
+# Import utility functions from utils modules
+from utils.text_processing import (
+    estimate_token_count, split_into_chunks, truncate_transcript,
+    load_vocabulary_mappings, apply_vocabulary_corrections
+)
+from utils.file_helpers import read_prompt_file, check_file_size, write_transcript_files
+from utils.format_converters import convert_markdown_to_html, convert_markdown_to_wiki
+from utils.openai_processor import process_with_openai, choose_appropriate_model
 
 # ==================== TRANSCRIPTION FUNCTIONS ====================
 def is_cuda_available() -> bool:
@@ -1506,130 +585,6 @@ def transcribe_audio(model: WhisperModel, audio_file: str, speaker_segments: Opt
     logging.info(f"Transcription complete: {len(segments_list)} segments")
     return segments_list, info
 
-def write_transcript_files(segments: List, output_file: str, output_file_timestamped: str, 
-                          speaker_segments: Optional[List[Dict]] = None) -> str:
-    """
-    Write transcript files with and without timestamps, integrating speaker info.
-    
-    Args:
-        segments: List of transcription segments from Whisper
-        output_file: Path to save the clean transcript
-        output_file_timestamped: Path to save the timestamped transcript
-        speaker_segments: Optional list of speaker segments from diarization
-        
-    Returns:
-        Full transcript text
-    """
-    try:
-        # Prepare for writing the transcripts
-        full_transcript = []
-        timestamped_transcript = []
-        
-        # Track current speaker to avoid repeating speaker tags for consecutive segments
-        current_speaker = None
-        
-        print(f"\nTranscriptie bestanden aanmaken...")
-        print(f"- Schoon transcript: {os.path.basename(output_file)}")
-        print(f"- Tijdgemarkeerd transcript: {os.path.basename(output_file_timestamped)}")
-        
-        # Process each segment from Whisper
-        for i, segment in enumerate(tqdm(segments, desc="Transcriptie verwerken", unit="segment")):
-            start = segment.start
-            end = segment.end
-            text = segment.text.strip()
-            
-            if not text:  # Skip empty segments
-                continue
-            
-            # Calculate segment duration for better speaker detection of short segments
-            segment_duration = end - start
-            
-            # Format timestamp for the timestamped version
-            timestamp = format_timestamp(start, end)
-            
-            # Get speaker info if available
-            speaker_info = ""
-            speaker_prefix = ""
-            if speaker_segments:
-                # Use middle of segment to determine speaker with improved context-awareness
-                middle_time = (start + end) / 2
-                # Pass segment duration to the improved function
-                speaker = get_speaker_for_segment(middle_time, speaker_segments, segment_duration=segment_duration)
-                
-                if speaker:
-                    # Check if this is a short utterance that should inherit speaker from context
-                    is_short_utterance = segment_duration < 1.0 and len(text.split()) <= 5
-                    
-                    # For very short utterances with no clear speaker, try to maintain speaker continuity
-                    if is_short_utterance and not speaker and current_speaker:
-                        # Check if there's another segment right after this one
-                        if i < len(segments) - 1:
-                            next_segment = segments[i + 1]
-                            if next_segment.start - end < 1.0:  # If next segment starts within 1 second
-                                next_middle = (next_segment.start + next_segment.end) / 2
-                                next_speaker = get_speaker_for_segment(next_middle, speaker_segments)
-                                # If next segment has same speaker as current, keep it for continuity
-                                if next_speaker == current_speaker:
-                                    speaker = current_speaker
-                    
-                    if speaker:
-                        speaker_info = f"[{speaker}] "
-                        speaker_prefix = f"[{speaker}] "
-                        current_speaker = speaker
-                    else:
-                        # More aggressive search for a speaker with a wider context window
-                        speaker = get_speaker_for_segment(middle_time, speaker_segments, 
-                                                         segment_duration=segment_duration, 
-                                                         context_window=2.0)
-                        if speaker:
-                            speaker_info = f"[{speaker}] "
-                            speaker_prefix = f"[{speaker}] "
-                            current_speaker = speaker
-                        else:
-                            # Only mark as unknown if we are sure it's not part of previous speaker's utterance
-                            if current_speaker and segment_duration < 1.5 and start - prev_end < 1.0:
-                                # This is likely a continuation from previous speaker
-                                speaker_info = f"[{current_speaker}] "
-                                speaker_prefix = f"[{current_speaker}] "
-                            else:
-                                speaker_info = "[SPEAKER_UNKNOWN] "
-                                speaker_prefix = "[SPEAKER_UNKNOWN] "
-                                current_speaker = None
-                else:
-                    speaker_info = "[SPEAKER_UNKNOWN] "
-                    speaker_prefix = "[SPEAKER_UNKNOWN] "
-                    current_speaker = None
-            
-            # Add to transcript collections
-            clean_line = f"{speaker_prefix}{text}"
-            timestamped_line = f"{timestamp} {speaker_info}{text}"
-            
-            full_transcript.append(clean_line)
-            timestamped_transcript.append(timestamped_line)
-            
-            # Store the end time for checking continuity in the next iteration
-            prev_end = end
-        
-        # Join all lines
-        full_text = "\n".join(full_transcript)
-        timestamped_text = "\n".join(timestamped_transcript)
-        
-        # Write to files
-        with open(output_file, 'w', encoding='utf-8') as f:
-            f.write(full_text)
-        
-        with open(output_file_timestamped, 'w', encoding='utf-8') as f:
-            f.write(timestamped_text)
-            
-        print(f"Transcriptie bestanden succesvol aangemaakt:")
-        print(f"- {output_file}")
-        print(f"- {output_file_timestamped}")
-        
-        return full_text
-    except Exception as e:
-        logging.error(f"Error writing transcript files: {str(e)}")
-        return ""
-
 def regenerate_summary(transcript_file: str) -> bool:
     """
     Regenerate summary and blog from an existing transcript file.
@@ -1655,10 +610,10 @@ def regenerate_summary(transcript_file: str) -> bool:
         # Run the complete workflow to generate all outputs
         results = process_transcript_workflow(transcript)
         if not results:
-            logging.error("Failed to process transcript workflow")
+            logging.error("Failed to process transcript workflow.")
             return False
         
-        # Write all outputs to files
+        # Use the imported write_workflow_outputs from content_generator.py
         write_workflow_outputs(results, base)
         
         return True
@@ -2213,14 +1168,14 @@ def generate_history_extraction(transcript_file: str, force: bool = False) -> bo
         # Generate and write HTML version
         html_content = convert_markdown_to_html(history_extract)
         html_path = os.path.join(output_dir, f"{base_filename}_history.html")
-        with open(html_path, "w", encoding="utf-8") as f:
+        with open(html_path, 'w', encoding="utf-8") as f:
             f.write(html_content)
         logging.info(f"HTML history extraction saved to: {html_path}")
         
         # Generate and write Wiki version
         wiki_content = convert_markdown_to_wiki(history_extract)
         wiki_path = os.path.join(output_dir, f"{base_filename}_history.wiki")
-        with open(wiki_path, "w", encoding="utf-8") as f:
+        with open(wiki_path, 'w', encoding="utf-8") as f:
             f.write(wiki_content)
         logging.info(f"Wiki history extraction saved to: {wiki_path}")
         
@@ -2392,14 +1347,15 @@ def episode_already_processed(episode: Dict, download_dir: str) -> bool:
     
     return False
 
-def download_latest_episode(feed_url: str, download_dir: str) -> Optional[str]:
+def download_latest_episode(feed_url: str, download_dir: str, force: bool = False) -> Optional[str]:
     """
-    Download the latest episode from the podcast feed if not already processed.
+    Download the latest episode from the podcast feed if not already processed, unless force is True.
     
     Args:
         feed_url: URL of the RSS feed
         download_dir: Directory to save the downloaded file
-        
+        force: If True, always re-download and reprocess
+    
     Returns:
         Path to the downloaded file or None if no new episode or error
     """
@@ -2412,14 +1368,20 @@ def download_latest_episode(feed_url: str, download_dir: str) -> Optional[str]:
         logging.warning("No episode found to download")
         return None
     
-    # Check if already processed
-    if episode_already_processed(episode, download_dir):
+    # If force is True, always re-download and overwrite the file
+    filename = get_episode_filename(episode)
+    full_path = os.path.join(download_dir, filename)
+    if not force and episode_already_processed(episode, download_dir):
         logging.info(f"Episode '{episode['title']}' has already been processed, skipping")
         return None
     
-    # Generate filename
-    filename = get_episode_filename(episode)
-    full_path = os.path.join(download_dir, filename)
+    # If force and file exists, remove it before re-downloading
+    if force and os.path.exists(full_path):
+        try:
+            os.remove(full_path)
+            logging.info(f"Removed existing file before forced re-download: {full_path}")
+        except Exception as e:
+            logging.warning(f"Could not remove existing file: {full_path}: {str(e)}")
     
     # Download the file
     try:
@@ -2779,7 +1741,7 @@ def perform_speaker_diarization(audio_file: str, min_speakers: int = DIARIZATION
                 alternative_model_path = os.path.join(cache_dir, DIARIZATION_ALTERNATIVE_MODEL.replace("/", "_"))
                 
                 # Try loading alternative from local cache first
-                if os.path.exists(alternative_model_path):
+                if (os.path.exists(alternative_model_path)):
                     try:
                         logging.info(f"Proberen om alternatief model te laden van lokale cache: {alternative_model_path}")
                         pipeline = Pipeline.from_pretrained(
@@ -3628,11 +2590,11 @@ def write_transcript_files(segments: List, output_file: str, output_file_timesta
 def format_timestamp(start: float, end: Optional[float] = None) -> str:
     """
     Format a timestamp in seconds to HH:MM:SS format.
-    
+
     Args:
         start: Start timestamp in seconds
         end: Optional end timestamp in seconds
-        
+
     Returns:
         Formatted timestamp string
     """
@@ -3641,7 +2603,7 @@ def format_timestamp(start: float, end: Optional[float] = None) -> str:
         minutes = int((seconds % 3600) // 60)
         seconds = seconds % 60
         return f"{hours:02d}:{minutes:02d}:{seconds:05.2f}"
-    
+
     if end is None:
         return _format_single(start)
     else:
@@ -3742,87 +2704,6 @@ def process_summary(transcript: str, output_summary_file: str, output_blog_file:
     except Exception as e:
         logging.error(f"Fout bij genereren van samenvatting/blog: {str(e)}")
         return False
-
-def convert_markdown_to_html(markdown_text: str) -> str:
-    """
-    Convert Markdown text to HTML.
-    
-    Args:
-        markdown_text: The Markdown text to convert
-        
-    Returns:
-        HTML formatted text
-    """
-    try:
-        html = markdown.markdown(
-            markdown_text,
-            extensions=['extra', 'codehilite', 'tables']
-        )
-        
-        # Voeg een eenvoudig HTML-sjabloon toe
-        html_template = f"""<!DOCTYPE html>
-<html lang="nl">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>WHYcast Blog Post</title>
-    <style>
-        body {{ font-family: Arial, sans-serif; line-height: 1.6; max-width: 800px; margin: 0 auto; padding: 20px; }}
-        h1, h2, h3 {{ color: #2c3e50; }}
-        a {{ color: #3498db; text-decoration: none; }}
-        a:hover {{ text-decoration: underline; }}
-        blockquote {{ border-left: 4px solid #ccc; padding-left: 15px; margin-left: 0; color: #555; }}
-        code {{ background-color: #f0f0f0; padding: 2px 4px; border-radius: 3px; font-family: monospace; }}
-        pre {{ background-color: #f0f0f0; padding: 10px; border-radius: 3px; overflow-x: auto; }}
-        img {{ max-width: 100%; height: auto; }}
-    </style>
-</head>
-<body>
-    {html}
-</body>
-</html>
-"""
-        return html_template
-    except Exception as e:
-        logging.error(f"Fout bij conversie naar HTML: {str(e)}")
-        return markdown_text  # Als fallback, geef de oorspronkelijke markdown terug
-
-def convert_markdown_to_wiki(markdown_text: str) -> str:
-    """
-    Convert Markdown text to MediaWiki markup format.
-    This is a simple conversion that handles common elements.
-    
-    Args:
-        markdown_text: The Markdown text to convert
-        
-    Returns:
-        MediaWiki formatted text
-    """
-    try:
-        wiki_text = markdown_text
-        
-        # Headers (Markdown: # Header, MediaWiki: == Header ==)
-        wiki_text = re.sub(r'^# (.*?)$', r'= \1 =', wiki_text, flags=re.MULTILINE)
-        wiki_text = re.sub(r'^## (.*?)$', r'== \1 ==', wiki_text, flags=re.MULTILINE)
-        wiki_text = re.sub(r'^### (.*?)$', r'=== \1 ===', wiki_text, flags=re.MULTILINE)
-        wiki_text = re.sub(r'^#### (.*?)$', r'==== \1 ====', wiki_text, flags=re.MULTILINE)
-        
-        # Bold (Markdown: **text**, MediaWiki: '''text''')
-        wiki_text = re.sub(r'\*\*(.*?)\*\*', r"'''\1'''", wiki_text)
-        
-        # Italic (Markdown: *text*, MediaWiki: ''text'')
-        wiki_text = re.sub(r'\*(.*?)\*', r"''\1''", wiki_text)
-        
-        # Lists (Markdown: - item, MediaWiki: * item)
-        wiki_text = re.sub(r'^- (.*?)$', r'* \1', wiki_text, flags=re.MULTILINE)
-        
-        # Links (Markdown: [text](url), MediaWiki: [url text])
-        wiki_text = re.sub(r'\[(.*?)\]\((.*?)\)', r'[\2 \1]', wiki_text)
-        
-        return wiki_text
-    except Exception as e:
-        logging.error(f"Fout bij conversie naar Wiki: {str(e)}")
-        return markdown_text  # Als fallback, geef de oorspronkelijke markdown terug
 
 # ==================== ENTRY POINT ====================
 if __name__ == "__main__":
@@ -3955,7 +2836,7 @@ if __name__ == "__main__":
         download_dir = args.download_dir
         
         logging.info(f"Checking for the latest episode from {feed_url}")
-        episode_file = download_latest_episode(feed_url, download_dir)
+        episode_file = download_latest_episode(feed_url, download_dir, force=args.force)
         
         if (episode_file):
             logging.info(f"Processing newly downloaded episode: {episode_file}")
