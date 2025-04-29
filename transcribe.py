@@ -1835,6 +1835,7 @@ def perform_speaker_diarization(audio_file: str, min_speakers: int = DIARIZATION
         
         # Voorbereiden van audio om problemen met ongelijke tensorsegmenten te voorkomen
         try:
+            import torchaudio  # ensure torchaudio is available for audio processing
             print("Audio voorbereiden voor diarization...")
             waveform, sample_rate = torchaudio.load(audio_file)
             
