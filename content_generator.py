@@ -37,7 +37,8 @@ from config import (
     PROMPT_SUMMARY_FILE,
     PROMPT_BLOG_FILE,
     PROMPT_BLOG_ALT1_FILE,
-    PROMPT_HISTORY_EXTRACT_FILE
+    PROMPT_HISTORY_EXTRACT_FILE,
+    PROMPT_SPEAKER_ASSIGN_FILE
 )
 
 # Import utilities from other modules
@@ -172,6 +173,23 @@ def process_transcript_workflow(transcript: str) -> Optional[Dict[str, str]]:
     return results
 
 
+def generate_summary(transcript: str, prompt: str) -> Optional[str]:
+    """
+    Generate a summary using OpenAI.
+    """
+    model_name = choose_appropriate_model(transcript)
+    return process_with_openai(transcript, prompt, model_name)
+
+
+def generate_blog(transcript: str, summary: str, prompt: str) -> Optional[str]:
+    """
+    Generate a blog post using OpenAI from transcript and summary.
+    """
+    input_text = f"TRANSCRIPT:\n{transcript}\n\nSUMMARY:\n{summary}"
+    model_name = choose_appropriate_model(input_text)
+    return process_with_openai(input_text, prompt, model_name)
+
+
 def write_workflow_outputs(results: Dict[str, str], output_base: str) -> None:
     """
     Write the outputs from the workflow to files.
@@ -249,7 +267,7 @@ def process_directory_workflow(directory: str) -> None:
         gc.collect()
 
 
-def process_speaker_assignment_workflow(transcript: str, base_path: str) -> None:
+def process_speaker_assignment_workflow(transcript: str, base_path: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
     """
     Process transcript with speaker assignment prompt using o3-mini, chunking if needed.
     Output: <base>_with_speakers.txt, .html, .md
@@ -265,15 +283,17 @@ def process_speaker_assignment_workflow(transcript: str, base_path: str) -> None
     if not any(f"SPEAKER_" in line for line in transcript.splitlines()):
         raise ValueError("Transcript does not contain diarization speaker tags. Speaker assignment prompt requires diarized transcript.")
 
-    prompt = read_prompt_file(os.path.join("prompts", "speaker_assignment.txt"))
+    prompt = read_prompt_file(PROMPT_SPEAKER_ASSIGN_FILE)
     if not prompt:
-        raise RuntimeError("Speaker assignment prompt file not found.")
+        logging.warning("Speaker assignment prompt file not found or empty, skipping speaker assignment step.")
+        return None, None, None
 
     # Chunk transcript if needed
     chunks = split_into_chunks(transcript, max_chunk_size=MAX_INPUT_TOKENS * 4)  # 4 chars/token
     results = []
     for chunk in chunks:
-        result = process_with_openai(chunk, prompt, model="gpt-4o-2024-05-13", max_tokens=4096)
+        # Pass model_name positionally to avoid unexpected keyword
+        result = process_with_openai(chunk, prompt, "gpt-4o-2024-05-13", max_tokens=4096)
         results.append(result)
     full_result = "\n\n".join(results)
 

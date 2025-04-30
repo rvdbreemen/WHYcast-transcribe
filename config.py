@@ -5,7 +5,7 @@ import os
 import logging
 
 # Version information
-VERSION = "0.1.1"
+VERSION = "0.1.2"
 
 # Model configuration
 MODEL_SIZE = os.environ.get("WHISPER_MODEL_SIZE", "large-v3")

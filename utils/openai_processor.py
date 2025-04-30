@@ -11,13 +11,25 @@ This module provides functions for interacting with the OpenAI API, including:
 Intended for use in all modules that require LLM-based summarization, cleanup, or content generation.
 """
 
-# openai_processor.py: OpenAI API utilities for WHYcast Transcribe
+import os
 import logging
 from typing import Optional
 from openai import OpenAI, BadRequestError
 from config import MAX_TOKENS, MAX_INPUT_TOKENS, TEMPERATURE, MAX_CHUNK_SIZE, OPENAI_MODEL, OPENAI_LARGE_CONTEXT_MODEL
 from utils.text_processing import estimate_token_count, split_into_chunks
+from dotenv import load_dotenv
 
+load_dotenv()
+
+def ensure_api_key() -> str:
+    """
+    Ensure that the OpenAI API key is set in environment.
+    Returns the API key or raises ValueError if missing.
+    """
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        raise ValueError("OPENAI_API_KEY environment variable is not set")
+    return api_key
 
 def choose_appropriate_model(transcript: str) -> str:
     """

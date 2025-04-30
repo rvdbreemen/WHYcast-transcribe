@@ -2163,7 +2163,7 @@ def main(input_file: str, model_size: Optional[str] = None, output_dir: Optional
         if not skip_summary and os.path.exists(output_file):
             file_size_kb = os.path.getsize(output_file) / 1024
             logging.info(f"Transcript file size: {file_size_kb:.1f} KB")
-            check_file_size(output_file)
+            check_file_size(output_file, MAX_FILE_SIZE_KB)
             # Extra warning for extremely large files
             if file_size_kb > MAX_FILE_SIZE_KB * 2:
                 logging.warning(f"File is extremely large ({file_size_kb:.1f} KB). Processing may take significant time.")
