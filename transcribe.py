@@ -132,21 +132,19 @@ except Exception as e:
 def setup_logging():
     # Enhanced log format with line numbers and function names
     log_format = '%(asctime)s - %(levelname)s - [%(filename)s:%(lineno)d:%(funcName)s] - %(message)s'
-    logger = logging.getLogger()
-    logger.setLevel(logging.INFO)  # Standaard niveau op INFO
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.INFO)  # Standaard niveau op INFO
     
     # Remove any existing handlers
-    for handler in logger.handlers[:]:
-        logger.removeHandler(handler)
+    for handler in root_logger.handlers[:]:
+        root_logger.removeHandler(handler)
     
     # File handler with UTF-8 encoding
     log_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'transcribe.log')
     file_handler = logging.FileHandler(log_file, encoding='utf-8')
     file_handler.setFormatter(logging.Formatter(log_format))
     file_handler.setLevel(logging.INFO)  # Zet file handler op INFO niveau
-    logger.addHandler(file_handler)
-    
-    # Console handler with proper Unicode handling
+    root_logger.addHandler(file_handler)    # Console handler with proper Unicode handling
     try:
         # Configure console for UTF-8
         if sys.platform == 'win32':
@@ -183,14 +181,14 @@ def setup_logging():
             console_handler.setFormatter(logging.Formatter(log_format))
             console_handler.setLevel(logging.INFO)  # Zet console handler op INFO niveau
             
-        logger.addHandler(console_handler)
+        root_logger.addHandler(console_handler)
     except Exception as e:
         # Fallback to basic handler
         console_handler = logging.StreamHandler()
         console_handler.setFormatter(logging.Formatter(log_format))
         console_handler.setLevel(logging.INFO)  # Zet fallback handler op INFO niveau
-        logger.addHandler(console_handler)
-        logger.warning(f"Could not set up optimal console logging: {e}")
+        root_logger.addHandler(console_handler)
+        logging.warning(f"Could not set up optimal console logging: {e}")
     
     # Zet specifieke loggers die verbose kunnen zijn op WARNING niveau
     logging.getLogger("urllib3").setLevel(logging.WARNING)
@@ -233,14 +231,13 @@ def setup_logging():
             return not (hasattr(record, 'msg') and 
                        isinstance(record.msg, str) and 
                        "compile_threads set to" in record.msg)
-                       
-    # Apply the filter to all loggers
+                         # Apply the filter to all loggers
     root_logger = py_logging.getLogger()
     root_logger.addFilter(PyTorchFilter())
     
-    return logger
+    # No return value needed
 
-logger = setup_logging()
+setup_logging()
 
 # ==================== HUGGINGFACE API FUNCTIONS ====================
 def set_huggingface_token(token: str) -> bool:
@@ -938,8 +935,7 @@ def regenerate_all_cleaned(directory: str) -> None:
     """
     import os
     import glob
-    import logging
-
+    # Using global logging - don't import logging here
     if not os.path.isdir(directory):
         logging.error(f"Invalid directory: {directory}")
         return
@@ -947,7 +943,6 @@ def regenerate_all_cleaned(directory: str) -> None:
     transcript_files = glob.glob(os.path.join(directory, "*.txt"))
     # Filter out files that are already processed as cleaned or have other suffixes
     original_files = [f for f in transcript_files if not any(suffix in f for suffix in ["_cleaned.txt", "_ts.txt", "_summary.txt", "_blog.txt"])]
-    
     if not original_files:
         logging.warning(f"No original transcript files found in directory: {directory}")
         return
@@ -2037,7 +2032,7 @@ def transcription_exists(input_file: str) -> bool:
     """
     Check if the main transcript output file exists for the given input audio file.
     """
-    import os  # Import os within the function scope
+    # Use global os import instead of local import
     base = os.path.splitext(input_file)[0]
     transcript_file = f"{base}.txt"
     return os.path.exists(transcript_file)
@@ -2167,23 +2162,22 @@ def main(input_file: str, model_size: Optional[str] = None, output_dir: Optional
             # Extra warning for extremely large files
             if file_size_kb > MAX_FILE_SIZE_KB * 2:
                 logging.warning(f"File is extremely large ({file_size_kb:.1f} KB). Processing may take significant time.")
-        
-        # Generate and save summary, blog, and history extraction (if not skipped)
-        if not skip_summary:
+          # Generate and save summary, blog, and history extraction (if not skipped)
+        if not skip_summary:            # Ensure full_transcript is valid and non-empty
+            if not full_transcript or not full_transcript.strip():
+                logging.error("Full transcript is empty or invalid. Skipping workflow processing.")
+                return
+              # Run unified transcript workflow and write all outputs
             base_path, _ = os.path.splitext(input_file)
             os.environ["WORKFLOW_OUTPUT_BASE"] = base_path
-            logging.info(f"Set WORKFLOW_OUTPUT_BASE to {base_path} for speaker assignment workflow.")
-            results = process_transcript_workflow(full_transcript)
-            if results:
-                logging.info("Workflow results keys: %s", list(results.keys()))
+            results = process_transcript_workflow(full_transcript)            
+            if results is not None:
                 write_workflow_outputs(results, base_path)
-                if results.get('speaker_assignment'):
-                    logging.info(f"Speaker assignment output successfully generated for {base_path}.")
-                else:
-                    logging.warning(f"Speaker assignment output was not generated for {base_path}.")
             else:
-                logging.error("Failed to process transcript workflow")
+                logging.error(f"process_transcript_workflow returned no results for the input file: {input_file}")
+                logging.debug(f"Input file: {input_file}, Results: {results}")
     except Exception as e:
+        # Log the error and continue if in batch mode
         logging.error(f"An error occurred processing {input_file}: {str(e)}")
         if not is_batch_mode:
             sys.exit(1)
