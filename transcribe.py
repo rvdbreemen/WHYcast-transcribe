@@ -721,7 +721,6 @@ def speaker_assignment_step(transcript: str) -> Optional[str]:
     logging.info("Step 1: Speaker assignment")
     try:
         if any("SPEAKER_" in line for line in transcript.splitlines()):
-            from content_generator import process_speaker_assignment_workflow
             base_path = os.environ.get("WORKFLOW_OUTPUT_BASE", "output")
             txt_path = process_speaker_assignment_workflow(transcript, base_path)
             with open(txt_path, "r", encoding="utf-8") as f:
@@ -2249,56 +2248,67 @@ def episode_already_processed(episode: Dict, download_dir: str) -> bool:
     
     return False
 
-def download_latest_episode(feed_url: str, download_dir: str) -> Optional[str]:
+def download_latest_episode(feed_url: str, download_dir: str, force: bool = False) -> Optional[str]:
     """
     Download the latest episode from the podcast feed if not already processed.
-    
-    Args:
-        feed_url: URL of the RSS feed
-        download_dir: Directory to save the downloaded file
-        
-    Returns:
-        Path to the downloaded file or None if no new episode or error
+    If force is True, delete all related files and processed marker before downloading.
     """
-    # Create download directory if it doesn't exist
     os.makedirs(download_dir, exist_ok=True)
-    
-    # Get latest episode info
     episode = get_latest_episode(feed_url)
     if not episode:
         logging.warning("No episode found to download")
         return None
-    
-    # Check if already processed
+
+    # If force, delete all related files and remove from processed_episodes.txt
+    if force:
+        filename = get_episode_filename(episode)
+        base = os.path.splitext(filename)[0]
+        patterns = [f"{base}*", f"{base.lower()}*", f"{base.upper()}*"]
+        for pattern in patterns:
+            for f in glob.glob(os.path.join(download_dir, pattern)):
+                try:
+                    os.remove(f)
+                    logging.info(f"Deleted file: {f}")
+                except Exception as e:
+                    logging.warning(f"Could not delete file {f}: {e}")
+        # Remove from processed_episodes.txt
+        processed_file = os.path.join(download_dir, "processed_episodes.txt")
+        episode_id = get_episode_id(episode)
+        if os.path.exists(processed_file):
+            try:
+                with open(processed_file, 'r', encoding='utf-8') as f:
+                    lines = f.readlines()
+                with open(processed_file, 'w', encoding='utf-8') as f:
+                    for line in lines:
+                        if line.strip() != episode_id:
+                            f.write(line)
+                logging.info(f"Removed episode ID {episode_id} from processed_episodes.txt")
+            except Exception as e:
+                logging.warning(f"Could not update processed_episodes.txt: {e}")
+
+    # Check if already processed (after force cleanup)
     if episode_already_processed(episode, download_dir):
         logging.info(f"Episode '{episode['title']}' has already been processed, skipping")
         return None
-    
-    # Generate filename
+
     filename = get_episode_filename(episode)
     full_path = os.path.join(download_dir, filename)
-    
-    # Download the file
     try:
         logging.info(f"Downloading episode: {episode['title']}")
         response = requests.get(episode['audio_url'], stream=True)
         response.raise_for_status()
-        
         total_size = int(response.headers.get('content-length', 0))
         block_size = 8192
-        
         with open(full_path, 'wb') as f:
             with tqdm(total=total_size, unit='B', unit_scale=True, desc="Downloading") as progress_bar:
                 for chunk in response.iter_content(chunk_size=block_size):
                     if chunk:
                         f.write(chunk)
                         progress_bar.update(len(chunk))
-        
         logging.info(f"Downloaded episode to {full_path}")
         return full_path
     except Exception as e:
         logging.error(f"Error downloading episode: {str(e)}")
-        # Clean up partial download if it exists
         if os.path.exists(full_path):
             try:
                 os.remove(full_path)
@@ -2734,7 +2744,7 @@ def perform_speaker_diarization(audio_file: str, min_speakers: int = DIARIZATION
             waveform, sample_rate = torchaudio.load(audio_file)
             
             # Zorg dat we stereo naar mono converteren indien nodig
-            if waveform.size(0) > 1:
+            if (waveform.size(0) > 1):
                 waveform = torch.mean(waveform, dim=0, keepdim=True)
                 
             # Bereken totale lengte and zorg dat deze deelbaar is door 16000 (10ms window)
@@ -3814,7 +3824,7 @@ if __name__ == "__main__":
         download_dir = args.download_dir
         
         logging.info(f"Checking for the latest episode from {feed_url}")
-        episode_file = download_latest_episode(feed_url, download_dir)
+        episode_file = download_latest_episode(feed_url, download_dir, force=args.force)
         
         if (episode_file):
             logging.info(f"Processing newly downloaded episode: {episode_file}")
@@ -3895,6 +3905,7 @@ if __name__ == "__main__":
     elif args.batch:
         process_batch(args.input, model_size=args.model, output_dir=args.output_dir, skip_summary=args.skip_summary,
                     force=args.force, skip_vocabulary=args.skip_vocabulary,
+                    use_diarization=args.diarize if args.diarize else None if not args.no_diarize else False,
                     use_diarization=args.diarize if args.diarize else None if not args.no_diarize else False,
                     min_speakers=args.min_speakers, max_speakers=args.max_speakers,
                     diarization_model=args.diarization_model)
