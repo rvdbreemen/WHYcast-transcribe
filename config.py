@@ -16,8 +16,8 @@ BEAM_SIZE = int(os.environ.get("WHISPER_BEAM_SIZE", "5"))
 # OpenAI configuration
 OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4.1")  # Default model for general tasks
 OPENAI_LARGE_CONTEXT_MODEL = os.environ.get("OPENAI_LARGE_CONTEXT_MODEL", "gpt-4.1")  # Model for potentially long inputs (summary, blog)
-OPENAI_HISTORY_MODEL = os.environ.get("OPENAI_HISTORY_MODEL", "o4-mini")  # Model specifically for history extraction
-OPENAI_SPEAKER_MODEL = os.environ.get("OPENAI_SPEAKER_MODEL", "o4-mini")  # Model for speaker assignment
+OPENAI_HISTORY_MODEL = os.environ.get("OPENAI_HISTORY_MODEL", "gpt-4.1")  # Model specifically for history extraction
+OPENAI_SPEAKER_MODEL = os.environ.get("OPENAI_SPEAKER_MODEL", "gpt-4.1")  # Model for speaker assignment
 TEMPERATURE = float(os.environ.get("OPENAI_TEMPERATURE", "0.7"))
 MAX_TOKENS = int(os.environ.get("OPENAI_MAX_TOKENS", "4800"))  # Increased for longer summaries
 # Max tokens to send to OpenAI (considering model's max context - completion tokens)

@@ -1,6 +1,9 @@
 {
   "Y": "WHY",
   "Rai": "WHY",
+  "WAI": "WHY",
+  "WAI day": "WHYday",
+  "WAI2025": "WHY2025",  
   "why cast": "WHYcast",
   "Y2025": "WHY2025",
   "Y-Cast": "WHYcast",
@@ -34,5 +37,7 @@
   "Wicom": "Wiccon",
   "github": "GitHub",
   "git hub": "GitHub",
-  "get hub": "GitHub"
+  "get hub": "GitHub",
+  "Pai Grun.org": "PyGrunn.org",
+  "Pai Grun": "PyGrunn",
 }
