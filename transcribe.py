@@ -2033,7 +2033,7 @@ def regenerate_full_workflow(input_file: str) -> None:
     # Remove any known suffixes to get the pure base name
     known_suffixes = ["_cleaned", "_ts", "_summary", "_blog", "_blog_alt1"]
     for suffix in known_suffixes:
-        if base_name.endswith(suffix):
+        if (base_name.endswith(suffix)):
             base_name = base_name[:-len(suffix)]
             break
     
@@ -2306,6 +2306,7 @@ def download_latest_episode(feed_url: str, download_dir: str, force: bool = Fals
                         f.write(chunk)
                         progress_bar.update(len(chunk))
         logging.info(f"Downloaded episode to {full_path}")
+        
         return full_path
     except Exception as e:
         logging.error(f"Error downloading episode: {str(e)}")
@@ -2374,7 +2375,7 @@ def load_processed_episodes(download_dir: str) -> set:
     processed_file = os.path.join(download_dir, "processed_episodes.txt")
     processed = set()
     
-    if os.path.exists(processed_file):
+    if (os.path.exists(processed_file)):
         try:
             with open(processed_file, 'r', encoding='utf-8') as f:
                 for line in f:
@@ -2538,298 +2539,61 @@ def process_all_episodes(feed_url: str, download_dir: str, **kwargs) -> None:
     cleanup_resources(model)
     logging.info("Completed processing all episodes")
 
-def perform_speaker_diarization(audio_file: str, min_speakers: int = DIARIZATION_MIN_SPEAKERS, 
-                              max_speakers: int = DIARIZATION_MAX_SPEAKERS) -> Optional[List[Dict]]:
+def perform_speaker_diarization(
+    audio_file: str,
+    min_speakers: int = DIARIZATION_MIN_SPEAKERS,
+    max_speakers: int = DIARIZATION_MAX_SPEAKERS,
+    num_speakers: int = None,
+    huggingface_token: str = None
+) -> Optional[List[Dict]]:
     """
-    Perform speaker diarization on an audio file using pyannote.audio.
-    
-    Args:
-        audio_file: Path to the audio file
-        min_speakers: Minimum number of speakers to identify
-        max_speakers: Maximum number of speakers to identify
-        
-    Returns:
-        List of dictionaries containing speaker segments or None if failed
+    Speaker diarization using pyannote/speaker-diarization-3.1.
+    Always converts input to 16kHz mono MP3 with ffmpeg, loads in memory, and runs diarization.
     """
+    import os, subprocess, torch, torchaudio
+    from pyannote.audio import Pipeline
+
+    temp_mp3 = audio_file + ".ffmpeg.16k.mp3"
     try:
-        from pyannote.audio import Pipeline
-        
-        # Define cache directory for local models
+        # Step 1: Always convert to 16kHz mono MP3
+        ffmpeg_cmd = [
+            'ffmpeg', '-y', '-i', audio_file,
+            '-vn', '-acodec', 'libmp3lame', '-ar', '16000', '-ac', '1', temp_mp3
+        ]
+        result = subprocess.run(ffmpeg_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        if result.returncode != 0:
+            return None
+        # Step 2: Load audio in memory
+        waveform, sample_rate = torchaudio.load(temp_mp3)
+        # Step 3: Setup pipeline
+        token = huggingface_token or os.environ.get('HUGGINGFACE_TOKEN')
         cache_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models", "diarization")
-        os.makedirs(cache_dir, exist_ok=True)
-        
-        # Get HuggingFace token from .env - don't ask if not found since we first want to check .env
-        huggingface_token = os.environ.get('HUGGINGFACE_TOKEN')
-        
-        if not huggingface_token:
-            logging.warning("HuggingFace token niet gevonden in .env bestand.")
-            # Nu pas vragen om token als deze niet in .env staat
-            huggingface_token = get_huggingface_token(ask_if_missing=True)
-            
-        if not huggingface_token:
-            logging.warning("Geen HuggingFace token beschikbaar. Speaker diarization heeft een token nodig.")
-            logging.warning("Je kunt deze later instellen via de HUGGINGFACE_TOKEN environment variabele of in het .env bestand")
-            return None
-        
-        # First try to use a local cached model if available
-        pipeline = None
-        model_to_use = DIARIZATION_MODEL
-        local_model_path = os.path.join(cache_dir, model_to_use.replace("/", "_"))
-        
-        # Try loading from local cache first
-        if (os.path.exists(local_model_path)):
-            try:
-                logging.info(f"Proberen om diarization model te laden van lokale cache: {local_model_path}")
-                # Probeer te laden met verschillende API-versies
-                try:
-                    # Nieuwste versie met token parameter
-                    pipeline = Pipeline.from_pretrained(
-                        local_model_path,
-                        token=huggingface_token
-                    )
-                except (TypeError, ValueError):
-                    try:
-                        # Oudere versie met use_auth_token parameter
-                        pipeline = Pipeline.from_pretrained(
-                            local_model_path,
-                            use_auth_token=huggingface_token
-                        )
-                    except (TypeError, ValueError):
-                        # Probeer zonder token (indien model lokaal al volledig beschikbaar is)
-                        pipeline = Pipeline.from_pretrained(local_model_path)
-                        
-                logging.info(f"Diarization model succesvol geladen van lokale cache")
-            except Exception as e:
-                logging.warning(f"Kon model niet laden van lokale cache: {str(e)}")
-                pipeline = None
-        
-        # If local loading failed, try downloading the model and save it
-        if pipeline is None:
-            try:
-                logging.info(f"Diarization model downloaden: {DIARIZATION_MODEL}")
-                # Probeer beide parameter namen voor token authenticatie
-                try:
-                    pipeline = Pipeline.from_pretrained(
-                        DIARIZATION_MODEL,
-                        use_auth_token=huggingface_token,
-                        cache_dir=cache_dir
-                    )
-                except TypeError:
-                    # Probeer met 'token' parameter als 'use_auth_token' niet werkt (nieuwere versies)
-                    logging.info("Proberen met 'token' parameter in plaats van 'use_auth_token'")
-                    pipeline = Pipeline.from_pretrained(
-                        DIARIZATION_MODEL,
-                        token=huggingface_token,
-                        cache_dir=cache_dir
-                    )
-                
-                # Save the model locally for future use
-                try:
-                    logging.info(f"Model opslaan in lokale cache: {local_model_path}")
-                    # Nieuwere versies gebruiken save_pretrained in plaats van to_disk
-                    if hasattr(pipeline, 'to_disk'):
-                        pipeline.to_disk(local_model_path)
-                    elif hasattr(pipeline, 'save_pretrained'):
-                        pipeline.save_pretrained(local_model_path)
-                    else:
-                        logging.warning("Kon model niet opslaan: geen geschikte opslagmethode gevonden")
-                        # Sla het model niet op, maar ga verder met verwerking
-                    logging.info(f"Model succesvol opgeslagen in: {local_model_path}")
-                except Exception as save_error:
-                    logging.warning(f"Kon model niet opslaan naar schijf: {str(save_error)}")
-                    # Dit is niet kritiek, ga verder met verwerking
-            except Exception as primary_error:
-                error_message = str(primary_error)
-                logging.warning(f"Kon primaire diarization model niet laden: {error_message}")
-                
-                # If primary model fails, try the alternative model
-                alternative_model_path = os.path.join(cache_dir, DIARIZATION_ALTERNATIVE_MODEL.replace("/", "_"))
-                
-                # Try loading alternative from local cache first
-                if os.path.exists(alternative_model_path):
-                    try:
-                        logging.info(f"Proberen om alternatief model te laden van lokale cache: {alternative_model_path}")
-                        pipeline = Pipeline.from_pretrained(
-                            alternative_model_path,
-                            use_auth_token=huggingface_token
-                        )
-                        model_to_use = DIARIZATION_ALTERNATIVE_MODEL
-                        logging.info(f"Alternatief model succesvol geladen van cache.")
-                    except Exception as e:
-                        logging.warning(f"Kon alternatief model niet laden van cache: {str(e)}")
-                        pipeline = None
-                
-                # If local loading failed, try downloading the alternative model
-                if pipeline is None:
-                    try:
-                        logging.info(f"Alternatief diarization model downloaden: {DIARIZATION_ALTERNATIVE_MODEL}")
-                        # Probeer beide parameter namen voor token authenticatie
-                        try:
-                            pipeline = Pipeline.from_pretrained(
-                                DIARIZATION_ALTERNATIVE_MODEL,
-                                use_auth_token=huggingface_token,
-                                cache_dir=cache_dir
-                            )
-                        except TypeError:
-                            # Probeer met 'token' parameter als 'use_auth_token' niet werkt
-                            pipeline = Pipeline.from_pretrained(
-                                DIARIZATION_ALTERNATIVE_MODEL,
-                                token=huggingface_token,
-                                cache_dir=cache_dir
-                            )
-                            
-                        model_to_use = DIARIZATION_ALTERNATIVE_MODEL
-                        logging.info(f"Alternatief model succesvol geladen.")
-                        
-                        # Save the alternative model locally
-                        try:
-                            logging.info(f"Alternatief model opslaan in lokale cache: {alternative_model_path}")
-                            # Nieuwere versies gebruiken save_pretrained in plaats van to_disk
-                            if hasattr(pipeline, 'to_disk'):
-                                pipeline.to_disk(alternative_model_path)
-                            elif hasattr(pipeline, 'save_pretrained'):
-                                pipeline.save_pretrained(alternative_model_path)
-                            else:
-                                logging.warning("Kon alternatief model niet opslaan: geen geschikte opslagmethode gevonden")
-                                # Sla het model niet op, maar ga verder met verwerking
-                            logging.info(f"Alternatief model succesvol opgeslagen")
-                        except Exception as save_error:
-                            logging.warning(f"Kon alternatief model niet opslaan naar schijf: {str(save_error)}")
-                            # Dit is niet kritiek, ga verder met verwerking
-                    except Exception as alt_error:
-                        alt_error_message = str(alt_error)
-                        logging.error(f"Kon alternatief model niet laden: {alt_error_message}")
-                        
-                        if "unauthorized" in error_message.lower() or "access token" in error_message.lower() or "gated" in error_message.lower():
-                            logging.error(f"Toegangsfout voor diarization modellen. Controleer:")
-                            logging.error(f"1. Of je HUGGINGFACE_TOKEN geldig is")
-                            logging.error(f"2. Bezoek https://hf.co/{DIARIZATION_MODEL} en accepteer de gebruiksvoorwaarden")
-                            logging.error(f"3. Bezoek ook https://hf.co/{DIARIZATION_ALTERNATIVE_MODEL} en accepteer die voorwaarden")
-                            logging.error(f"4. Zorg dat je account toegang heeft tot deze modellen")
-                        else:
-                            logging.error(f"Fout bij laden van diarization modellen. Primaire fout: {error_message}")
-                            logging.error(f"Alternatieve fout: {alt_error_message}")
-                        return None
-        
-        if not pipeline:
-            logging.error("Kon geen diarization pipeline initialiseren.")
-            return None
-            
-        # Verplaats pipeline naar CUDA als beschikbaar
-        try:
-            import torch
-            if torch.cuda.is_available():
-                logging.info("CUDA beschikbaar, verplaatsen van diarization pipeline naar GPU")
-                print("GPU versnelling inschakelen voor diarization...")
-                pipeline.to(torch.device("cuda"))
-                print(f"Diarization pipeline verplaatst naar: {torch.cuda.get_device_name(0)}")
-            else:
-                logging.info("CUDA niet beschikbaar, diarization wordt op CPU uitgevoerd")
-                print("GPU niet beschikbaar, diarization wordt op CPU uitgevoerd")
-        except Exception as e:
-            logging.warning(f"Kon pipeline niet naar GPU verplaatsen: {str(e)}. Gebruik CPU.")
-            print("Kon GPU versnelling niet inschakelen, diarization wordt op CPU uitgevoerd")
-            
-        # Run diarization with configured parameters
-        logging.info(f"Diarization uitvoeren met model {model_to_use}, min_speakers={min_speakers}, max_speakers={max_speakers}")
-        
-        # Voeg extra logging toe voor beter voortgangsinzicht
-        start_time = time.time()
-        print(f"\nStart speaker diarization op {os.path.basename(audio_file)}...")
-        print(f"Dit kan enkele minuten duren afhankelijk van de lengte van het audiobestand.\n")
-        
-        # Voorbereiden van audio om problemen met ongelijke tensorsegmenten te voorkomen
-        try:
-            print("Audio voorbereiden voor diarization...")
-            waveform, sample_rate = torchaudio.load(audio_file)
-            
-            # Zorg dat we stereo naar mono converteren indien nodig
-            if (waveform.size(0) > 1):
-                waveform = torch.mean(waveform, dim=0, keepdim=True)
-                
-            # Bereken totale lengte and zorg dat deze deelbaar is door 16000 (10ms window)
-            # om ongelijke tensor-maten te voorkomen
-            length = waveform.size(1)
-            target_length = ((length // 16000) + 1) * 16000
-            
-            # Padding toevoegen als de lengte niet deelbaar is door 16000
-            if length < target_length:
-                padding = torch.zeros((1, target_length - length))
-                waveform = torch.cat([waveform, padding], dim=1)
-                
-            # Sla tijdelijk op als wav voor betere compatibiliteit
-            temp_audio_file = audio_file + ".temp.wav"
-            torchaudio.save(temp_audio_file, waveform, sample_rate)
-            
-            # Gebruik het bewerkte audio bestand
-            diarization_audio_file = temp_audio_file
-            print(f"Audio voorbereid: originele lengte={length}, nieuwe lengte={waveform.size(1)}")
-        except Exception as prep_error:
-            logging.warning(f"Kon audio niet voorbereiden: {str(prep_error)}, gebruiken origineel bestand")
-            diarization_audio_file = audio_file
-            
-        # Voer diarisatie uit
-        try:
-            diarization = pipeline(
-                diarization_audio_file,
-                min_speakers=min_speakers,
-                max_speakers=max_speakers
-            )
-            
-            # Verwijder tijdelijk bestand indien aangemaakt
-            if diarization_audio_file != audio_file and os.path.exists(diarization_audio_file):
-                try:
-                    os.remove(diarization_audio_file)
-                except:
-                    pass
-                    
-        except Exception as diar_error:
-            # Als er nog steeds een fout is, probeer fallback methode
-            logging.warning(f"Diarization fout: {str(diar_error)}, probeer fallback methode")
-            print("Eerste poging mislukt, probeer alternatieve methode...")
-            
-            # Als tijdelijk bestand bestaat, verwijder het
-            if diarization_audio_file != audio_file and os.path.exists(diarization_audio_file):
-                try:
-                    os.remove(diarization_audio_file)
-                except:
-                    pass
-                    
-            # Probeer met een eenvoudigere configuratie
-            diarization = pipeline(
-                audio_file,
-                min_speakers=min_speakers,
-                max_speakers=max_speakers,
-                segmentation_batch_size=1  # Kleinere batch size
-            )
-        
-        # Bereken en toon verwerkingstijd
-        elapsed_time = time.time() - start_time
-        print(f"\nDiarisatie voltooid in {elapsed_time:.1f} seconden.")
-        
-        # Convert to list of segments
-        print("Verwerken van diarisatie resultaten...")
-        segments = []
-        
-        # Maak een lijst van alle tracks en toon voortgang met tqdm
-        all_tracks = list(diarization.itertracks(yield_label=True))
-        unique_speakers = set()
-        
-        for turn, _, speaker in tqdm(all_tracks, desc="Segmenten verwerken", unit="segment"):
-            segments.append({
-                'start': turn.start,
-                'end': turn.end,
-                'speaker': speaker
-            })
-            unique_speakers.add(speaker)
-        
-        logging.info(f"Diarization voltooid met {len(segments)} segmenten en {len(unique_speakers)} sprekers")
-        print(f"Diarisatie geïdentificeerd: {len(unique_speakers)} unieke sprekers in {len(segments)} segmenten")
+        pipeline = Pipeline.from_pretrained(
+            "pyannote/speaker-diarization-3.1",
+            use_auth_token=token,
+            cache_dir=cache_dir
+        )
+        if torch.cuda.is_available():
+            pipeline.to(torch.device("cuda"))
+        # Step 4: Run diarization
+        diarization_kwargs = {'min_speakers': min_speakers, 'max_speakers': max_speakers}
+        if num_speakers is not None:
+            diarization_kwargs = {'num_speakers': num_speakers}
+        diarization = pipeline({"waveform": waveform, "sample_rate": sample_rate}, **diarization_kwargs)
+        # Step 5: Format output
+        segments = [
+            {'start': float(turn.start), 'end': float(turn.end), 'speaker': str(speaker)}
+            for turn, _, speaker in diarization.itertracks(yield_label=True)
+        ]
         return segments
-        
-    except Exception as e:
-        logging.error(f"Fout bij uitvoeren speaker diarization: {str(e)}")
+    except Exception:
         return None
+    finally:
+        try:
+            if os.path.exists(temp_mp3):
+                os.remove(temp_mp3)
+        except Exception:
+            pass
 
 def get_speaker_for_segment(timestamp: float, speaker_segments: List[Dict], 
                          segment_duration: float = 0.0, 
@@ -3905,7 +3669,6 @@ if __name__ == "__main__":
     elif args.batch:
         process_batch(args.input, model_size=args.model, output_dir=args.output_dir, skip_summary=args.skip_summary,
                     force=args.force, skip_vocabulary=args.skip_vocabulary,
-                    use_diarization=args.diarize if args.diarize else None if not args.no_diarize else False,
                     use_diarization=args.diarize if args.diarize else None if not args.no_diarize else False,
                     min_speakers=args.min_speakers, max_speakers=args.max_speakers,
                     diarization_model=args.diarization_model)
