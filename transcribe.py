@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 """
-WHYcast Transcribe - v0.1.0
+WHYcast Transcribe - v0.2.0
 
 A tool for transcribing podcast episodes with optional speaker diarization,
 summarization, and blog post generation.
