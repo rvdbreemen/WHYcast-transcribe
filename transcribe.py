@@ -26,6 +26,7 @@ import torch
 import torchaudio
 import time
 import hashlib
+import uuid
 
 # Onderdruk specifieke waarschuwingen
 warnings.filterwarnings("ignore", message="The MPEG_LAYER_III subtype is unknown to TorchAudio")
@@ -518,13 +519,17 @@ def process_with_openai(text: str, prompt: str, model_name: str, max_tokens: int
     try:
         api_key = ensure_api_key()
         client = OpenAI(api_key=api_key)
+        call_id = str(uuid.uuid4())
+        prompt_first_line = prompt.strip().splitlines()[0] if prompt.strip().splitlines() else prompt.strip()
+        logging.info(f"[OpenAI Call {call_id}] Model: {model_name}, Prompt first line: {prompt_first_line}")
+        print(f"[OpenAI Call {call_id}] Prompt: {prompt_first_line}")
         
         estimated_tokens = estimate_token_count(text)
-        logging.info(f"Processing text with OpenAI (~{estimated_tokens} tokens)")
+        logging.info(f"[OpenAI Call {call_id}] Processing text with OpenAI (~{estimated_tokens} tokens)")
         
         # If text is too long, truncate it
         if estimated_tokens > MAX_INPUT_TOKENS:
-            logging.warning(f"Text too long (~{estimated_tokens} tokens > {MAX_INPUT_TOKENS} limit), truncating...")
+            logging.warning(f"[OpenAI Call {call_id}] Text too long (~{estimated_tokens} tokens > {MAX_INPUT_TOKENS} limit), truncating...")
             text = truncate_transcript(text, MAX_INPUT_TOKENS)
         
         # Determine if we're using an o-series model (like o3-mini) that requires special parameter handling
@@ -552,11 +557,11 @@ def process_with_openai(text: str, prompt: str, model_name: str, max_tokens: int
             if "clean" in prompt.lower() and "transcript" in prompt.lower():
                 # For cleanup, give more tokens for output - use at least text length or double MAX_TOKENS
                 cleanup_max_tokens = max(estimate_token_count(text), MAX_TOKENS * 2)
-                logging.info(f"Using expanded token limit for cleanup: {cleanup_max_tokens}")
+                logging.info(f"[OpenAI Call {call_id}] Using expanded token limit for cleanup: {cleanup_max_tokens}")
                 
                 # Check if text needs to be processed in chunks due to size
                 if estimated_tokens > MAX_INPUT_TOKENS // 2:
-                    return process_large_text_in_chunks(text, prompt, model_name, client)
+                    return process_large_text_in_chunks(text, prompt, model_name, client, parent_call_id=call_id)
                 
                 # Add token parameter
                 params[token_param] = cleanup_max_tokens
@@ -573,16 +578,16 @@ def process_with_openai(text: str, prompt: str, model_name: str, max_tokens: int
             
             # Check if result might be truncated (ends abruptly without proper punctuation)
             if len(result) > 100 and not result.rstrip().endswith(('.', '!', '?', '"', ':', ';', ')', ']', '}')):
-                logging.warning("Generated text may be truncated (doesn't end with punctuation)")
+                logging.warning(f"[OpenAI Call {call_id}] Generated text may be truncated (doesn't end with punctuation)")
                 
             return result
                 
         except BadRequestError as e:
             if "maximum context length" in str(e).lower():
                 # Try with more aggressive truncation
-                logging.warning(f"Context length exceeded. Retrying with further truncation...")
+                logging.warning(f"[OpenAI Call {call_id}] Context length exceeded. Retrying with further truncation...")
                 text = truncate_transcript(text, MAX_INPUT_TOKENS // 2)
-                logging.info(f"Retrying with reduced text (~{estimate_token_count(text)} tokens)...")
+                logging.info(f"[OpenAI Call {call_id}] Retrying with reduced text (~{estimate_token_count(text)} tokens)...")
                 
                 # Update the message content with truncated text
                 params["messages"][1]["content"] = f"{prompt}\n\nHere's the text to process:\n\n{text}"
@@ -592,10 +597,10 @@ def process_with_openai(text: str, prompt: str, model_name: str, max_tokens: int
             else:
                 raise
     except Exception as e:
-        logging.error(f"Error processing with OpenAI: {str(e)}")
+        logging.error(f"[OpenAI Call {call_id}] Error processing with OpenAI: {str(e)}")
         return None
 
-def process_large_text_in_chunks(text: str, prompt: str, model_name: str, client: OpenAI) -> str:
+def process_large_text_in_chunks(text: str, prompt: str, model_name: str, client: OpenAI, parent_call_id: str = None) -> str:
     """
     Process very large text by breaking it into chunks and reassembling the results.
     
@@ -604,69 +609,49 @@ def process_large_text_in_chunks(text: str, prompt: str, model_name: str, client
         prompt: The processing instructions
         model_name: Model to use
         client: OpenAI client
-        
+        parent_call_id: Optional parent call ID for traceability
     Returns:
         Combined processed text
     """
-    logging.info("Text is very large, processing in chunks")
-    chunks = split_into_chunks(text, max_chunk_size=MAX_CHUNK_SIZE*2)
-    logging.info(f"Split text into {len(chunks)} chunks")
-    
-    # Determine if we're using an o-series model (like o3-mini) that requires special parameter handling
-    # NOTE: GPT-4o is NOT considered an o-series model in this context - it uses standard parameters
+    call_id = str(uuid.uuid4())
+    logging.info(f"[OpenAI Chunked Call {call_id}] Parent: {parent_call_id} | Model: {model_name} | Chunks incoming")
+    print(f"[OpenAI Chunked Call {call_id}] Parent: {parent_call_id} | Prompt: {prompt.strip().splitlines()[0] if prompt.strip().splitlines() else prompt.strip()}")
+    # ...existing code...
     is_o_series_model = model_name.startswith("o") and not model_name.startswith("gpt")
-    
-    # Set up parameters based on model type
     token_param = "max_completion_tokens" if is_o_series_model else "max_tokens"
-    token_limit = MAX_TOKENS * 2  # Use larger output limit for chunks
-    
+    token_limit = MAX_TOKENS * 2
     modified_prompt = f"{prompt}\n\nThis is a chunk of a longer transcript. Process this chunk following the instructions."
     processed_chunks = []
-    
-    # Add progress bar for chunk processing
-    for i, chunk in enumerate(tqdm(chunks, desc="Processing chunks")):
-        logging.info(f"Processing chunk {i+1}/{len(chunks)}")
+    for i, chunk in enumerate(tqdm(split_into_chunks(text, max_chunk_size=MAX_CHUNK_SIZE*2), desc="Processing chunks")):
+        chunk_call_id = str(uuid.uuid4())
+        chunk_first_line = modified_prompt.strip().splitlines()[0] if modified_prompt.strip().splitlines() else modified_prompt.strip()
+        logging.info(f"[OpenAI Chunk {chunk_call_id}] Parent: {call_id} | Chunk {i+1} | Prompt: {chunk_first_line}")
+        print(f"[OpenAI Chunk {chunk_call_id}] Parent: {call_id} | Chunk {i+1} | Prompt: {chunk_first_line}")
         try:
-            # Create parameters dictionary with proper token limit parameter
             params = {
                 "model": model_name,
                 "messages": [
                     {"role": "system", "content": "You are a helpful assistant that processes transcript chunks."},
-                    {"role": "user", "content": f"{modified_prompt}\n\nChunk {i+1}/{len(chunks)}:\n\n{chunk}"}
+                    {"role": "user", "content": f"{modified_prompt}\n\nChunk {i+1} of text:\n\n{chunk}"}
                 ]
             }
-            
-            # Add temperature only for models that support it (non-"o" series)
             if not is_o_series_model:
                 params["temperature"] = TEMPERATURE
-                
-            # Add token parameter
             params[token_param] = token_limit
-            
             response = client.chat.completions.create(**params)
             processed_chunks.append(response.choices[0].message.content)
-            logging.info(f"Successfully processed chunk {i+1}")
+            logging.info(f"[OpenAI Chunk {chunk_call_id}] Successfully processed chunk {i+1}")
         except Exception as e:
-            logging.error(f"Error processing chunk {i+1}: {str(e)}")
-            # If processing fails, include original chunk to avoid data loss
+            logging.error(f"[OpenAI Chunk {chunk_call_id}] Error processing chunk {i+1}: {str(e)}")
             processed_chunks.append(chunk)
-    
-    # Combine processed chunks
     combined_text = "\n\n".join(processed_chunks)
-    
-    # Optionally, run a final pass to ensure consistency across chunk boundaries
     if len(processed_chunks) > 1:
         try:
-            logging.info("Running final pass to ensure consistency across chunk boundaries")
-            # Estimate token count of combined text
+            logging.info(f"[OpenAI Chunked Call {call_id}] Running final pass to ensure consistency across chunk boundaries")
             combined_tokens = estimate_token_count(combined_text)
-            
-            # If combined text is still too large, just return it as is
             if combined_tokens > MAX_INPUT_TOKENS:
-                logging.warning(f"Combined text is too large for final pass (~{combined_tokens} tokens)")
+                logging.warning(f"[OpenAI Chunked Call {call_id}] Combined text is too large for final pass (~{combined_tokens} tokens)")
                 return combined_text
-            
-            # Create parameters for the consistency pass
             params = {
                 "model": model_name,
                 "messages": [
@@ -674,20 +659,14 @@ def process_large_text_in_chunks(text: str, prompt: str, model_name: str, client
                     {"role": "user", "content": f"This is a processed transcript that was handled in chunks. Please ensure consistency across chunk boundaries and fix any obvious issues.\n\n{combined_text}"}
                 ]
             }
-            
-            # Add temperature only for models that support it (non-"o" series)
             if not is_o_series_model:
                 params["temperature"] = TEMPERATURE
-                
-            # Add token parameter
             params[token_param] = MAX_TOKENS
-            
             response = client.chat.completions.create(**params)
             return response.choices[0].message.content
         except Exception as e:
-            logging.error(f"Error in final consistency pass: {str(e)}")
+            logging.error(f"[OpenAI Chunked Call {call_id}] Error in final consistency pass: {str(e)}")
             return combined_text
-    
     return combined_text
 
 def process_transcript_workflow(transcript: str) -> Dict[str, Optional[str]]:

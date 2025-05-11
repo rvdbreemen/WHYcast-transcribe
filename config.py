@@ -19,7 +19,7 @@ OPENAI_LARGE_CONTEXT_MODEL = os.environ.get("OPENAI_LARGE_CONTEXT_MODEL", "gpt-4
 OPENAI_HISTORY_MODEL = os.environ.get("OPENAI_HISTORY_MODEL", "gpt-4.1")  # Model specifically for history extraction
 OPENAI_SPEAKER_MODEL = os.environ.get("OPENAI_SPEAKER_MODEL", "o4-mini")  # Model for speaker assignment
 TEMPERATURE = float(os.environ.get("OPENAI_TEMPERATURE", "0.7"))
-MAX_TOKENS = int(os.environ.get("OPENAI_MAX_TOKENS", "4800"))  # Increased for longer summaries
+MAX_TOKENS = int(os.environ.get("OPENAI_MAX_TOKENS", "16000"))  # Increased for longer summaries
 # Max tokens to send to OpenAI (considering model's max context - completion tokens)
 MAX_INPUT_TOKENS = int(os.environ.get("OPENAI_MAX_INPUT_TOKENS", "60000"))  # Increased to handle 200kB
 # Number of tokens to use for estimating text length (OpenAI uses ~4 chars per token on average)
