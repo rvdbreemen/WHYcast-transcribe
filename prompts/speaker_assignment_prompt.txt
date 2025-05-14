@@ -23,8 +23,8 @@ Output:
 - Use plain text only for speaker labels (e.g., Host:), no bold, italics, or colors.
 - For readability, mention the speaker label only once at the start of their turn, and group all consecutive lines by the same speaker together as a single block.
 - When the speaker changes, start a new block with the new speaker's label.
-- Reflow and combine the text within each speaker block to improve readability and natural flow, while preserving all utterances, including filler words, hesitations, and interruptions.
-- Do not shorten, summarize, or add content beyond what is in the transcript.
+- Be very precies, and just reflow and combine the text within each speaker block to improve readability and natural flow, while preserving all utterances, including filler words, hesitations, and interruptions.
+- Stick closely to the transcript. Do not shorten OR summarize OR add content beyond what is in the transcript. 
 - Format output as clean markdown, with each speaker’s dialogue as a paragraph under their label.
 - Review the final result to ensure accuracy, completeness, and readability.
 
