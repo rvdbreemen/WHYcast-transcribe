@@ -8,8 +8,8 @@ A tool for transcribing podcast episodes with optional speaker diarization,
 summarization, and blog post generation.
 """
 
-import os
-import sys
+import os  # type: ignore
+import sys  # type: ignore
 import re
 import glob
 import json
@@ -17,16 +17,16 @@ import logging
 import argparse
 import time
 from datetime import datetime
-from typing import List, Dict, Tuple, Optional, Union, Any, Callable
+from typing import List, Dict, Tuple, Optional, Union, Any, Callable, Set  # type: ignore
 import warnings
-import requests
-import urllib.parse
-import markdown  # New import for markdown to HTML conversion
-import torch
-import torchaudio
-import time
+import requests  # type: ignore
+import markdown  # type: ignore
+import torch  # type: ignore
+import torchaudio  # type: ignore
 import hashlib
 import uuid
+
+SpeakerSegment = Dict[str, Any]
 
 # Onderdruk specifieke waarschuwingen
 warnings.filterwarnings("ignore", message="The MPEG_LAYER_III subtype is unknown to TorchAudio")
@@ -51,55 +51,63 @@ except ImportError:
 
 # Import required optional modules
 try:
-    from faster_whisper import WhisperModel
+    from faster_whisper import WhisperModel  # type: ignore
 except ImportError:
     logging.error("faster-whisper not installed. Use pip install faster-whisper")
     sys.exit(1)
 
 try:
-    from openai import OpenAI
-    OPENAI_AVAILABLE = True
-    from openai import BadRequestError
+    from openai import OpenAI  # type: ignore
+    openai_available = True
+    from openai import BadRequestError  # type: ignore
 except ImportError:
     logging.warning("openai not installed. Summarization and blog generation will not be available.")
-    OPENAI_AVAILABLE = False
+    openai_available = False
     class BadRequestError(Exception):
         pass
 
 try:
-    import feedparser
-    FEEDPARSER_AVAILABLE = True
+    import feedparser  # type: ignore
+    feedparser_available = True
 except ImportError:
     logging.warning("feedparser not installed. RSS feed parsing will not be available.")
-    FEEDPARSER_AVAILABLE = False
+    feedparser_available = False
 
 try:
-    from tqdm import tqdm
-    TQDM_AVAILABLE = True
+    from tqdm import tqdm  # type: ignore
+    tqdm_available = True
 except ImportError:
     logging.warning("tqdm not installed. Progress bars will not be available.")
-    TQDM_AVAILABLE = False
+    tqdm_available = False
     
     # Simple fallback for tqdm if not available
     class tqdm:
-        def __init__(self, iterable=None, **kwargs):
-            self.iterable = iterable
-            self.total = len(iterable) if iterable is not None else 0
-            self.n = 0
-            self.desc = kwargs.get('desc', '')
+        def __init__(self, iterable: Optional[Any] = None, **kwargs: Any) -> None:
+            self.iterable: Optional[Any] = iterable
+            self.total: int = len(iterable) if iterable is not None else 0
+            self.n: int = 0
+            self.desc: str = kwargs.get('desc', '')
             
-        def __iter__(self):
+        def __iter__(self) -> Any:
+            if self.iterable is None:
+                return
             for obj in self.iterable:
                 yield obj
                 self.n += 1
                 if self.n % 10 == 0:
                     print(f"{self.desc}: {self.n}/{self.total}")
                     
-        def update(self, n=1):
+        def update(self, n: int = 1) -> None:
             self.n += n
             
-        def close(self):
+        def close(self) -> None:
             pass
+
+        def __enter__(self) -> "tqdm":
+            return self
+
+        def __exit__(self, exc_type: type, exc_val: BaseException, exc_tb: Any) -> None:
+            self.close()
 
 # Try to import configuration
 try:
@@ -107,7 +115,7 @@ try:
         VERSION, MODEL_SIZE, DEVICE, COMPUTE_TYPE, BEAM_SIZE,
         OPENAI_MODEL, OPENAI_LARGE_CONTEXT_MODEL, OPENAI_HISTORY_MODEL,
         TEMPERATURE, MAX_TOKENS, MAX_INPUT_TOKENS, CHARS_PER_TOKEN,
-        PROMPT_CLEANUP_FILE, PROMPT_SUMMARY_FILE, PROMPT_BLOG_FILE, PROMPT_BLOG_ALT1_FILE, PROMPT_HISTORY_EXTRACT_FILE, PROMPT_SPEAKER_ASSIGN_FILE, MAX_FILE_SIZE_KB,
+        PROMPT_CLEANUP_FILE, PROMPT_SUMMARY_FILE, PROMPT_BLOG_FILE, PROMPT_BLOG_ALT1_FILE, PROMPT_HISTORY_EXTRACT_FILE, MAX_FILE_SIZE_KB,
         USE_RECURSIVE_SUMMARIZATION, MAX_CHUNK_SIZE, CHUNK_OVERLAP,
         VOCABULARY_FILE, USE_CUSTOM_VOCABULARY,
         USE_SPEAKER_DIARIZATION, DIARIZATION_MODEL, DIARIZATION_ALTERNATIVE_MODEL, 
@@ -123,11 +131,11 @@ except Exception as e:
     sys.exit(1)
 
 # Set up logging to both console and file
-def setup_logging():
+def setup_logging(verbose: bool = False) -> logging.Logger:
     # Enhanced log format with line numbers and function names
     log_format = '%(asctime)s - %(levelname)s - [%(filename)s:%(lineno)d:%(funcName)s] - %(message)s'
     logger = logging.getLogger()
-    logger.setLevel(logging.INFO)  # Standaard niveau op INFO
+    logger.setLevel(logging.DEBUG if verbose else logging.INFO)  # Standaard niveau op INFO
     
     # Remove any existing handlers
     for handler in logger.handlers[:]:
@@ -137,23 +145,22 @@ def setup_logging():
     log_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'transcribe.log')
     file_handler = logging.FileHandler(log_file, encoding='utf-8')
     file_handler.setFormatter(logging.Formatter(log_format))
-    file_handler.setLevel(logging.INFO)  # Zet file handler op INFO niveau
+    file_handler.setLevel(logging.DEBUG if verbose else logging.INFO)  # Zet file handler op INFO niveau
     logger.addHandler(file_handler)
     
     # Console handler with proper Unicode handling
     try:
         # Configure console for UTF-8
         if sys.platform == 'win32':
-            import locale
             # Use error handler that replaces problematic characters
             console_handler = logging.StreamHandler()
             console_handler.setFormatter(logging.Formatter(log_format))
-            console_handler.setLevel(logging.INFO)  # Zet console handler op INFO niveau
+            console_handler.setLevel(logging.DEBUG if verbose else logging.INFO)  # Zet console handler op INFO niveau
             console_handler.setStream(open(os.devnull, 'w', encoding='utf-8'))  # Dummy stream for initial setup
             
             # Custom StreamHandler that handles encoding errors
             class EncodingSafeStreamHandler(logging.StreamHandler):
-                def emit(self, record):
+                def emit(self, record: logging.LogRecord) -> None:
                     try:
                         msg = self.format(record)
                         stream = self.stream
@@ -170,19 +177,19 @@ def setup_logging():
             # Use our custom handler
             console_handler = EncodingSafeStreamHandler(sys.stdout)
             console_handler.setFormatter(logging.Formatter(log_format))
-            console_handler.setLevel(logging.INFO)  # Zet custom handler op INFO niveau
+            console_handler.setLevel(logging.DEBUG if verbose else logging.INFO)  # Zet custom handler op INFO niveau
         else:
             # On non-Windows platforms, standard handler usually works fine
             console_handler = logging.StreamHandler(sys.stdout)
             console_handler.setFormatter(logging.Formatter(log_format))
-            console_handler.setLevel(logging.INFO)  # Zet console handler op INFO niveau
+            console_handler.setLevel(logging.DEBUG if verbose else logging.INFO)  # Zet console handler op INFO niveau
             
         logger.addHandler(console_handler)
     except Exception as e:
         # Fallback to basic handler
         console_handler = logging.StreamHandler()
         console_handler.setFormatter(logging.Formatter(log_format))
-        console_handler.setLevel(logging.INFO)  # Zet fallback handler op INFO niveau
+        console_handler.setLevel(logging.DEBUG if verbose else logging.INFO)  # Zet fallback handler op INFO niveau
         logger.addHandler(console_handler)
         logger.warning(f"Could not set up optimal console logging: {e}")
     
@@ -222,7 +229,7 @@ def setup_logging():
     # Suppress PyTorch Inductor compile_threads warnings
     import logging as py_logging
     class PyTorchFilter(py_logging.Filter):
-        def filter(self, record):
+        def filter(self, record: logging.LogRecord) -> bool:
             # Filter out the compile_threads messages
             return not (hasattr(record, 'msg') and 
                        isinstance(record.msg, str) and 
@@ -539,14 +546,26 @@ def process_with_openai(text: str, prompt: str, model_name: str, max_tokens: int
         # Set up parameters based on model type
         token_param = "max_completion_tokens" if is_o_series_model else "max_tokens"
         
-        # Create base parameters dict
-        params = {
-            "model": model_name,
-            "messages": [
-                {"role": "system", "content": "You are a helpful assistant that processes transcripts."},
-                {"role": "user", "content": f"{prompt}\n\nHere's the text to process:\n\n{text}"}
-            ]
-        }
+        # Special system prompt and reasoning_effort for o4-mini to encourage high reasoning effort
+        if model_name == "o4-mini":
+            system_prompt = "You are an expert in speaker identification and transcript formatting for podcasts."
+            params = {
+                "model": model_name,
+                "reasoning_effort": "high",
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": f"{prompt}\n\nHere's the text to process:\n\n{text}"}
+                ]
+            }
+        else:
+            system_prompt = "You are a helpful assistant that processes transcripts."
+            params = {
+                "model": model_name,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": f"{prompt}\n\nHere's the text to process:\n\n{text}"}
+                ]
+            }
         
         # Add temperature only for models that support it (non-"o" series)
         if not is_o_series_model:
@@ -600,7 +619,7 @@ def process_with_openai(text: str, prompt: str, model_name: str, max_tokens: int
         logging.error(f"[OpenAI Call {call_id}] Error processing with OpenAI: {str(e)}")
         return None
 
-def process_large_text_in_chunks(text: str, prompt: str, model_name: str, client: OpenAI, parent_call_id: str = None) -> str:
+def process_large_text_in_chunks(text: str, prompt: str, model_name: str, client: Any, parent_call_id: Optional[str] = None) -> str:
     """
     Process very large text by breaking it into chunks and reassembling the results.
     
@@ -616,7 +635,6 @@ def process_large_text_in_chunks(text: str, prompt: str, model_name: str, client
     call_id = str(uuid.uuid4())
     logging.info(f"[OpenAI Chunked Call {call_id}] Parent: {parent_call_id} | Model: {model_name} | Chunks incoming")
     print(f"[OpenAI Chunked Call {call_id}] Parent: {parent_call_id} | Prompt: {prompt.strip().splitlines()[0] if prompt.strip().splitlines() else prompt.strip()}")
-    # ...existing code...
     is_o_series_model = model_name.startswith("o") and not model_name.startswith("gpt")
     token_param = "max_completion_tokens" if is_o_series_model else "max_tokens"
     token_limit = MAX_TOKENS * 2
@@ -669,7 +687,7 @@ def process_large_text_in_chunks(text: str, prompt: str, model_name: str, client
             return combined_text
     return combined_text
 
-def process_transcript_workflow(transcript: str) -> Dict[str, Optional[str]]:
+def process_transcript_workflow(transcript: str, output_base: str) -> Dict[str, Optional[str]]:
     """
     Orchestrate the full transcript processing workflow:
     1. Speaker assignment
@@ -679,69 +697,103 @@ def process_transcript_workflow(transcript: str) -> Dict[str, Optional[str]]:
     5. Alternative blog
     6. History extraction
     Returns a dictionary of all results.
+    Args:
+        transcript: The input transcript string.
+        output_base: The base path for output files.
     """
     results = {}
-    results['speaker_assignment'] = speaker_assignment_step(transcript)
-    cleaned = cleanup_step(transcript)
-    results['cleaned_transcript'] = cleaned
-    results['summary'] = summary_step(cleaned)
-    results['blog'] = blog_step(cleaned, results['summary'])
-    results['blog_alt1'] = alt_blog_step(cleaned, results['summary'])
-    results['history_extract'] = history_step(cleaned)
+    # Pass output_base to each step
+    results['speaker_assignment'] = speaker_assignment_step(transcript, output_base)
+    cleaned = cleanup_step(transcript, output_base) # cleanup_step now also handles its own writing
+    results['cleaned_transcript'] = cleaned 
+    results['summary'] = summary_step(cleaned, output_base)
+    results['blog'] = blog_step(cleaned, results['summary'], output_base)
+    results['blog_alt1'] = alt_blog_step(cleaned, results['summary'], output_base)
+    results['history_extract'] = history_step(cleaned, output_base)
     return results
 
-def speaker_assignment_step(transcript: str) -> Optional[str]:
+def speaker_assignment_step(transcript: str, output_base: str) -> Optional[str]:
     """
     Step 1: Run speaker assignment on the raw transcript.
     Checks for diarization tags and, if present, uses the speaker assignment workflow
     to generate a transcript with speaker names. Returns the speaker-assigned transcript as a string,
     or None if not applicable or failed.
+    Args:
+        transcript: The input transcript string.
+        output_base: The base path for output files.
     """
     logging.info("Step 1: Speaker assignment")
     try:
         if any("SPEAKER_" in line for line in transcript.splitlines()):
-            base_path = os.environ.get("WORKFLOW_OUTPUT_BASE", "output")
-            txt_path = process_speaker_assignment_workflow(transcript, base_path)
+            # process_speaker_assignment_workflow uses output_base to create its own files if needed
+            # and returns the path to the primary .txt output.
+            txt_path = process_speaker_assignment_workflow(transcript, output_base) 
             with open(txt_path, "r", encoding="utf-8") as f:
-                return f.read()
+                result = f.read()
+            if result:
+                # write_variants for speaker_assignment specifically handles the result from process_speaker_assignment_workflow
+                write_variants(result, output_base, "speaker_assignment")
+            return result
     except Exception as e:
         logging.error(f"Speaker assignment failed: {e}")
     return None
 
-def cleanup_step(transcript: str) -> str:
+def cleanup_step(transcript: str, output_base: str) -> str:
     """
     Step 2: Cleanup transcript via OpenAI.
     Uses a prompt to clean up the transcript, removing filler words, fixing grammar, etc.
     Returns the cleaned transcript as a string. If cleanup fails, returns the original transcript.
+    Writes its output using write_variants.
+    Args:
+        transcript: The input transcript string.
+        output_base: The base path for output files.
     """
     prompt = read_prompt_file(PROMPT_CLEANUP_FILE)
+    final_transcript: str
     if not prompt:
         logging.warning("Cleanup prompt missing, skipping cleanup")
-        return transcript
-    logging.info("Step 2: Cleaning up transcript...")
-    model = choose_appropriate_model(transcript)
-    cleaned = process_with_openai(transcript, prompt, model, max_tokens=MAX_TOKENS * 2)
-    if not cleaned or len(cleaned) < len(transcript) * 0.5:
-        logging.warning("Cleanup result invalid, using original transcript")
-        return transcript
-    return cleaned
+        final_transcript = transcript
+    else:
+        logging.info("Step 2: Cleaning up transcript...")
+        model = choose_appropriate_model(transcript)
+        cleaned = process_with_openai(transcript, prompt, model, max_tokens=MAX_TOKENS * 2)
+        if not cleaned or len(cleaned) < len(transcript) * 0.5:
+            logging.warning("Cleanup result invalid, using original transcript")
+            final_transcript = transcript
+        else:
+            final_transcript = cleaned
+    
+    write_variants(final_transcript, output_base, "cleaned")
+    return final_transcript
 
-def summary_step(cleaned: str) -> Optional[str]:
+def summary_step(cleaned: str, output_base: str) -> Optional[str]:
     """
     Step 3: Generate summary from the cleaned transcript.
     Uses a prompt to summarize the cleaned transcript. Returns the summary as a string, or None if failed.
+    Writes its output using write_variants.
+    Args:
+        cleaned: The cleaned transcript string.
+        output_base: The base path for output files.
     """
     prompt = read_prompt_file(PROMPT_SUMMARY_FILE)
     if not prompt:
         logging.warning("Summary prompt missing, skipping summary")
         return None
     logging.info("Step 3: Generating summary...")
-    return process_with_openai(cleaned, prompt, choose_appropriate_model(cleaned))
+    result = process_with_openai(cleaned, prompt, choose_appropriate_model(cleaned))
+    if result:
+        write_variants(result, output_base, "summary")
+    return result
 
-def blog_step(cleaned: str, summary: Optional[str]) -> Optional[str]:
+def blog_step(cleaned: str, summary: Optional[str], output_base: str) -> Optional[str]:
     """
     Step 4: Generate blog post from the cleaned transcript and summary.
     Uses a prompt to generate a blog post. Returns the blog post as a string, or None if failed.
+    Writes its output using write_variants.
+    Args:
+        cleaned: The cleaned transcript string.
+        summary: The summary string (optional).
+        output_base: The base path for output files.
     """
     if not summary:
         return None
@@ -750,13 +802,21 @@ def blog_step(cleaned: str, summary: Optional[str]) -> Optional[str]:
         logging.warning("Blog prompt missing, skipping blog generation")
         return None
     logging.info("Step 4: Generating blog post...")
-    input_text = f"CLEANED TRANSCRIPT:\n{cleaned}\n\nSUMMARY:\n{summary}"
-    return process_with_openai(input_text, prompt, choose_appropriate_model(input_text), max_tokens=MAX_TOKENS * 2)
+    input_text = f"CLEANED TRANSCRIPT:\\n{cleaned}\\n\\nSUMMARY:\\n{summary}"
+    result = process_with_openai(input_text, prompt, choose_appropriate_model(input_text), max_tokens=MAX_TOKENS * 2)
+    if result:
+        write_variants(result, output_base, "blog")
+    return result
 
-def alt_blog_step(cleaned: str, summary: Optional[str]) -> Optional[str]:
+def alt_blog_step(cleaned: str, summary: Optional[str], output_base: str) -> Optional[str]:
     """
     Step 5: Generate alternative blog post from the cleaned transcript and summary.
     Uses an alternative prompt to generate a different style of blog post. Returns the alt blog post as a string, or None if failed.
+    Writes its output using write_variants.
+    Args:
+        cleaned: The cleaned transcript string.
+        summary: The summary string (optional).
+        output_base: The base path for output files.
     """
     if not summary or not os.path.isfile(PROMPT_BLOG_ALT1_FILE):
         return None
@@ -765,149 +825,30 @@ def alt_blog_step(cleaned: str, summary: Optional[str]) -> Optional[str]:
         logging.warning("Alt blog prompt empty, skipping")
         return None
     logging.info("Step 5: Generating alternative blog post...")
-    input_text = f"CLEANED TRANSCRIPT:\n{cleaned}\n\nSUMMARY:\n{summary}"
-    return process_with_openai(input_text, prompt, choose_appropriate_model(input_text), max_tokens=MAX_TOKENS * 2)
+    input_text = f"CLEANED TRANSCRIPT:\\n{cleaned}\\n\\nSUMMARY:\\n{summary}"
+    result = process_with_openai(input_text, prompt, choose_appropriate_model(input_text), max_tokens=MAX_TOKENS * 2)
+    if result:
+        write_variants(result, output_base, "blog_alt1")
+    return result
 
-def history_step(cleaned: str) -> Optional[str]:
+def history_step(cleaned: str, output_base: str) -> Optional[str]:
     """
     Step 6: Generate history extraction from the cleaned transcript.
     Uses a prompt to extract historical lessons or context from the transcript. Returns the history extraction as a string, or None if failed.
+    Writes its output using write_variants.
+    Args:
+        cleaned: The cleaned transcript string.
+        output_base: The base path for output files.
     """
     prompt = read_prompt_file(PROMPT_HISTORY_EXTRACT_FILE)
     if not prompt:
         logging.warning("History prompt missing, skipping history extraction")
         return None
     logging.info("Step 6: Generating history extraction...")
-    return process_with_openai(cleaned, prompt, OPENAI_HISTORY_MODEL, max_tokens=MAX_TOKENS * 2)
-
-def write_workflow_outputs(results: Dict[str, str], output_base: str) -> None:
-    """
-    Write the outputs from the workflow to files.
-    
-    Args:
-        results: Dictionary with cleaned_transcript, summary, blog, and history_extract
-        output_base: Base path for output files
-    """
-    # Write cleaned transcript
-    if 'cleaned_transcript' in results and results['cleaned_transcript']:
-        cleaned_path = f"{output_base}_cleaned.txt"
-        with open(cleaned_path, "w", encoding="utf-8") as f:
-            f.write(results['cleaned_transcript'])
-        logging.info(f"Cleaned transcript saved to: {cleaned_path}")
-    
-    # Write summary
-    if 'summary' in results and results['summary']:
-        summary_path = f"{output_base}_summary.txt"
-        with open(summary_path, "w", encoding="utf-8") as f:
-            f.write(results['summary'])
-        logging.info(f"Summary saved to: {summary_path}")
-    
-    # Write blog post
-    if 'blog' in results and results['blog']:
-        # Get base filename without any special suffixes
-        base_filename = os.path.basename(output_base)
-        output_dir = os.path.dirname(output_base)
-        blog_path = os.path.join(output_dir, f"{base_filename}_blog.txt")
-        
-        with open(blog_path, "w", encoding="utf-8") as f:
-            f.write(results['blog'])
-        logging.info(f"Blog post saved to: {blog_path}")
-        
-        # Generate and write HTML version
-        html_content = convert_markdown_to_html(results['blog'])
-        html_path = os.path.join(output_dir, f"{base_filename}_blog.html")
-        with open(html_path, "w", encoding="utf-8") as f:
-            f.write(html_content)
-        logging.info(f"HTML blog post saved to: {html_path}")
-        
-        # Generate and write Wiki version
-        wiki_content = convert_markdown_to_wiki(results['blog'])
-        wiki_path = os.path.join(output_dir, f"{base_filename}_blog.wiki")
-        with open(wiki_path, "w", encoding="utf-8") as f:
-            f.write(wiki_content)
-        logging.info(f"Wiki blog post saved to: {wiki_path}")
-        
-    # Write blog post
-    if 'blog_alt1' in results and results['blog_alt1']:
-        # Get base filename without any special suffixes
-        base_filename = os.path.basename(output_base)
-        output_dir = os.path.dirname(output_base)
-        blog_alt1_path = os.path.join(output_dir, f"{base_filename}_blog_alt1.txt")
-        
-        with open(blog_alt1_path, "w", encoding="utf-8") as f:
-            f.write(results['blog_alt1'])
-        logging.info(f"Blog alt1 post saved to: {blog_alt1_path}")
-        
-        # Generate and write HTML version
-        html_content = convert_markdown_to_html(results['blog_alt1'])
-        html_path = os.path.join(output_dir, f"{base_filename}_blog_alt1.html")
-        with open(html_path, "w", encoding="utf-8") as f:
-            f.write(html_content)
-        logging.info(f"HTML blog alt 1post saved to: {html_path}")
-        
-        # Generate and write Wiki version
-        wiki_content = convert_markdown_to_wiki(results['blog_alt1'])
-        wiki_path = os.path.join(output_dir, f"{base_filename}_blog_alt1.wiki")
-        with open(wiki_path, "w", encoding="utf-8") as f:
-            f.write(wiki_content)
-        logging.info(f"Wiki blog alt1 post saved to: {wiki_path}")
-    
-    # Write history extraction
-    if 'history_extract' in results and results['history_extract']:
-        base_filename = os.path.basename(output_base)
-        output_dir = os.path.dirname(output_base)
-        history_path = os.path.join(output_dir, f"{base_filename}_history.txt")
-        with open(history_path, "w", encoding="utf-8") as f:
-            f.write(results['history_extract'])
-        logging.info(f"History extraction saved to: {history_path}")
-        
-        # Generate and write HTML version
-        html_content = convert_markdown_to_html(results['history_extract'])
-        html_path = os.path.join(output_dir, f"{base_filename}_history.html")
-        with open(html_path, "w", encoding="utf-8") as f:
-            f.write(html_content)
-        logging.info(f"HTML history extraction saved to: {html_path}")
-        
-        # Generate and write Wiki version
-        wiki_content = convert_markdown_to_wiki(results['history_extract'])
-        wiki_path = os.path.join(output_dir, f"{base_filename}_history.wiki")
-        with open(wiki_path, "w", encoding="utf-8") as f:
-            f.write(wiki_content)
-        logging.info(f"Wiki history extraction saved to: {wiki_path}")
-    
-    # Step 6: Speaker assignment
-    speaker_prompt = read_prompt_file(PROMPT_SPEAKER_ASSIGN_FILE)
-    if USE_SPEAKER_DIARIZATION and speaker_prompt:
-        logging.info("Step 6: Assigning speaker names...")
-        try:
-            ts_path = f"{output_base}_ts.txt"
-            with open(ts_path, 'r', encoding='utf-8') as f:
-                ts_text = f.read()
-            assignment = process_with_openai(ts_text, speaker_prompt, OPENAI_SPEAKER_MODEL)
-            if assignment:
-                assign_path = f"{output_base}_speaker_assignment.txt"
-                with open(assign_path, 'w', encoding='utf-8') as af:
-                    af.write(assignment)
-                logging.info(f"Speaker assignment saved to: {assign_path}")
-                results['speaker_assignment'] = assignment
-                # Generate HTML version of speaker assignment
-                html_content = convert_markdown_to_html(assignment)
-                html_path = f"{output_base}_speaker_assignment.html"
-                with open(html_path, "w", encoding="utf-8") as hf:
-                    hf.write(html_content)
-                logging.info(f"HTML speaker assignment saved to: {html_path}")
-                # Generate Wiki version of speaker assignment
-                wiki_content = convert_markdown_to_wiki(assignment)
-                wiki_path = f"{output_base}_speaker_assignment.wiki"
-                with open(wiki_path, "w", encoding="utf-8") as wf:
-                    wf.write(wiki_content)
-                logging.info(f"Wiki speaker assignment saved to: {wiki_path}")
-            else:
-                results['speaker_assignment'] = None
-                logging.warning("Speaker assignment returned no result.")
-        except Exception as e:
-            results['speaker_assignment'] = None
-            logging.error(f"Error during speaker assignment: {str(e)}")
+    result = process_with_openai(cleaned, prompt, OPENAI_HISTORY_MODEL, max_tokens=MAX_TOKENS * 2)
+    if result:
+        write_variants(result, output_base, "history")
+    return result
 
 def generate_summary_and_blog(transcript: str, prompt: str) -> Optional[str]:
     """
@@ -1237,6 +1178,22 @@ def convert_existing_blogs(directory: str) -> None:
     
     logging.info(f"Successfully converted {converted_count} out of {len(blog_files)} blog files")
 
+def write_variants(content: str, base: str, suffix: str) -> None:
+    """
+    Write three files for the given content:
+      {base}_{suffix}.txt, .html, .wiki
+    """
+    txt_path = f"{base}_{suffix}.txt"
+    html_path = f"{base}_{suffix}.html"
+    wiki_path = f"{base}_{suffix}.wiki"
+    with open(txt_path, "w", encoding="utf-8") as f:
+        f.write(content)
+    with open(html_path, "w", encoding="utf-8") as f:
+        f.write(convert_markdown_to_html(content))
+    with open(wiki_path, "w", encoding="utf-8") as f:
+        f.write(convert_markdown_to_wiki(content))
+    logging.info(f"Wrote {suffix}: {txt_path}, {html_path}, {wiki_path}")
+
 # ==================== TRANSCRIPTION FUNCTIONS ====================
 def is_cuda_available() -> bool:
     """
@@ -1336,7 +1293,7 @@ def setup_model(model_size: str = MODEL_SIZE) -> WhisperModel:
             num_workers=4
         )
 
-def transcribe_audio(model: WhisperModel, audio_file: str, speaker_segments: Optional[List[Dict]] = None) -> Tuple[List, object]:
+def transcribe_audio(model: WhisperModel, audio_file: str, speaker_segments: Optional[List[SpeakerSegment]] = None) -> Tuple[List[Any], object]:
     """
     Transcribe audio file using the Whisper model.
     
@@ -1391,7 +1348,7 @@ def transcribe_audio(model: WhisperModel, audio_file: str, speaker_segments: Opt
     current_speaker = None
     
     # Definieer functie voor live output
-    def process_segment(segment):
+    def process_segment(segment: Any) -> Any:
         text = segment.text
         
         # Pas woordenboek toe op elke segment
@@ -1418,14 +1375,14 @@ def transcribe_audio(model: WhisperModel, audio_file: str, speaker_segments: Opt
                 speaker_info = "[SPEAKER_UNKNOWN] "
         
         # Toon de tekst direct in de console
-        print(f"{format_timestamp(segment.start, segment.end)} {speaker_info}{text}")
+        print(f"{format_timestamp(segment.start)} {speaker_info}{text}")
         
         # Pas de tekst toe in het segment
         segment.text = text
         return segment
     
     # Function to collect segments with real-time processing
-    def collect_with_live_output(segments_generator):
+    def collect_with_live_output(segments_generator: Any) -> List[Any]:
         print("\n--- Live Transcriptie Output ---")
         result = []
         for segment in segments_generator:
@@ -1480,8 +1437,8 @@ def transcribe_audio(model: WhisperModel, audio_file: str, speaker_segments: Opt
     logging.info(f"Transcription complete: {len(segments_list)} segments")
     return segments_list, info
 
-def write_transcript_files(segments: List, output_file: str, output_file_timestamped: str, 
-                          speaker_segments: Optional[List[Dict]] = None) -> str:
+def write_transcript_files(segments: List[Any], output_file: str, output_file_timestamped: str, 
+                          speaker_segments: Optional[List[SpeakerSegment]] = None) -> str:
     """
     Write transcript files with and without timestamps, integrating speaker info.
     
@@ -1519,7 +1476,7 @@ def write_transcript_files(segments: List, output_file: str, output_file_timesta
             segment_duration = end - start
             
             # Format timestamp for the timestamped version
-            timestamp = format_timestamp(start, end)
+            timestamp = format_timestamp(start)
             
             # Get speaker info if available
             speaker_info = ""
@@ -1627,13 +1584,10 @@ def regenerate_summary(transcript_file: str) -> bool:
         base = os.path.splitext(transcript_file)[0]
         
         # Run the complete workflow to generate all outputs
-        results = process_transcript_workflow(transcript)
+        results = process_transcript_workflow(transcript, base) # Pass base as output_base
         if not results:
             logging.error("Failed to process transcript workflow")
             return False
-        
-        # Write all outputs to files
-        write_workflow_outputs(results, base)
         
         return True
     except Exception as e:
@@ -1804,7 +1758,7 @@ def regenerate_blog_only(transcript_file: str, summary_file: str) -> bool:
             logging.info(f"Wiki blog post saved to: {wiki_path}")
         
         return True
-                        
+                    
     except Exception as e:
         logging.error(f"Error regenerating blog: {str(e)}")
         return False
@@ -2023,16 +1977,16 @@ def regenerate_full_workflow(input_file: str) -> None:
     logging.info(f"Running full workflow on existing transcript: {transcript_file}")
     with open(transcript_file, "r", encoding="utf-8") as f:
         full_transcript = f.read()
-    results = process_transcript_workflow(full_transcript)
+    results = process_transcript_workflow(full_transcript, output_base) # Pass output_base
     if not results:
         logging.error("Failed to process transcript workflow.")
         return
-    
-    write_workflow_outputs(results, output_base)
 
 def regenerate_all_full_workflow(directory: str) -> None:
     """
     Run the full workflow regeneration on all transcript files in the given directory.
+    
+    Args:
     
     Args:
         directory: Directory containing transcript files
@@ -2134,8 +2088,138 @@ def regenerate_blogs_from_cleaned(directory: str) -> None:
     
     logging.info(f"Successfully generated {processed_count} history extractions out of {len(transcript_files) - skipped_count} files processed")
 
+def generate_history_extraction(transcript_file: str, force: bool = False) -> bool:
+    """
+    Generate history extraction from an existing transcript file.
+    
+    Args:
+        transcript_file: Path to the transcript file
+        force: If True, regenerate even if output file exists
+        
+    Returns:
+        Success status (True/False)
+    """
+    if not os.path.exists(transcript_file):
+        logging.error(f"Transcript file does not exist: {transcript_file}")
+        return False
+    
+    try:
+        # Create path for output file
+        base = os.path.splitext(transcript_file)[0]
+        history_file = f"{base}_history.txt"
+        
+        # Check if output file already exists
+        if os.path.exists(history_file) and not force:
+            logging.info(f"History extraction file already exists: {history_file}")
+            logging.info("Use --force to regenerate")
+            return True
+        
+        # Read the transcript
+        # First try to use the cleaned transcript if it exists
+        cleaned_file = f"{base}_cleaned.txt"
+        if os.path.exists(cleaned_file):
+            with open(cleaned_file, 'r', encoding='utf-8') as f:
+                transcript = f.read()
+                logging.info(f"Using cleaned transcript: {cleaned_file}")
+        else:
+            with open(transcript_file, 'r', encoding='utf-8') as f:
+                transcript = f.read()
+                logging.info(f"Using original transcript: {transcript_file}")
+        
+        # Read the history extraction prompt
+        prompt = read_prompt_file(PROMPT_HISTORY_EXTRACT_FILE)
+        if not prompt:
+            logging.warning("History extraction prompt file not found or empty")
+            return False
+
+        logging.info("Generating history extraction...")
+        
+        # Generate history extraction
+        history_extract = process_with_openai(transcript, prompt, OPENAI_HISTORY_MODEL, max_tokens=MAX_TOKENS * 2)
+        
+        if not history_extract:
+            logging.error("Failed to generate history extraction")
+            return False
+        
+        # Save history extraction to file
+        with open(history_file, 'w', encoding='utf-8') as f:
+            f.write(history_extract)
+        
+        logging.info(f"History extraction saved to: {history_file}")
+        
+        # Optionally convert to HTML and Wiki formats
+        html_file = f"{base}_history.html"
+        wiki_file = f"{base}_history.wiki"
+        
+        # Create HTML version
+        with open(html_file, 'w', encoding='utf-8') as f:
+            html_content = markdown.markdown(history_extract)
+            f.write(f"<html><head><title>History Extraction</title></head><body>{html_content}</body></html>")
+        
+        # Create Wiki version
+        with open(wiki_file, 'w', encoding='utf-8') as f:
+            f.write(history_extract)
+        
+        logging.info(f"Also saved HTML and Wiki versions")
+        
+        return True
+    except Exception as e:
+        logging.error(f"Error generating history extraction: {str(e)}")
+        if logging.getLogger().isEnabledFor(logging.DEBUG):
+            logging.exception("Exception details:")
+        return False
+
+def regenerate_all_history_extractions(directory: str, force: bool = False) -> None:
+    """
+    Regenerate history extractions for all transcript files in the directory.
+    
+    Args:
+        directory: Directory containing transcript files
+        force: If True, regenerate even if output files exist
+    """
+    # Create directory if it doesn't exist (especially for default 'podcasts' directory)
+    try:
+        os.makedirs(directory, exist_ok=True)
+    except Exception as e:
+        logging.error(f"Could not create or access directory {directory}: {str(e)}")
+        return
+    
+    if not os.path.isdir(directory):
+        logging.error(f"Invalid directory: {directory}")
+        return
+    
+    transcript_files = []
+    for ext in ["*.txt"]:
+        pattern = os.path.join(directory, ext)
+        transcript_files.extend(glob.glob(pattern))
+    
+    # Filter out files that are not plain transcript files
+    # (i.e., exclude files with _cleaned, _summary, _blog, _ts, etc. in their names)
+    transcript_files = [
+        f for f in transcript_files 
+        if not any(marker in os.path.basename(f) for marker in ["_cleaned", "_summary", "_blog", "_history", "_speaker", "_ts"])
+    ]
+    
+    if not transcript_files:
+        logging.warning(f"No transcript files found in {directory}")
+        return
+    
+    logging.info(f"Found {len(transcript_files)} transcript files, generating history extractions...")
+    
+    # Process each transcript file
+    processed_count = 0
+    for i, transcript_file in enumerate(transcript_files):
+        logging.info(f"Processing {i+1}/{len(transcript_files)}: {os.path.basename(transcript_file)}")
+        try:
+            if generate_history_extraction(transcript_file, force=force):
+                processed_count += 1
+        except Exception as e:
+            logging.error(f"Error processing {transcript_file}: {str(e)}")
+    
+    logging.info(f"Successfully regenerated {processed_count} history extractions out of {len(transcript_files)} transcript files")
+
 # ==================== PODCAST FEED FUNCTIONS ====================
-def get_latest_episode(feed_url: str) -> Optional[Dict]:
+def get_latest_episode(feed_url: str) -> Optional[Dict[str, Any]]:
     """
     Get the latest episode from a podcast RSS feed.
     
@@ -2178,7 +2262,7 @@ def get_latest_episode(feed_url: str) -> Optional[Dict]:
         logging.error(f"Error fetching podcast feed: {str(e)}")
         return None
 
-def get_episode_filename(episode: Dict) -> str:
+def get_episode_filename(episode: Dict[str, Any]) -> str:
     """
     Generate a filename for the episode based on its title.
     
@@ -2196,7 +2280,7 @@ def get_episode_filename(episode: Dict) -> str:
     title = re.sub(r'\s+', '_', title)
     return f"{title}.mp3"
 
-def episode_already_processed(episode: Dict, download_dir: str) -> bool:
+def episode_already_processed(episode: Dict[str, Any], download_dir: str) -> bool:
     """
     Check if an episode has already been processed.
     
@@ -2244,26 +2328,26 @@ def download_latest_episode(feed_url: str, download_dir: str, force: bool = Fals
         base = os.path.splitext(filename)[0]
         patterns = [f"{base}*", f"{base.lower()}*", f"{base.upper()}*"]
         for pattern in patterns:
-            for f in glob.glob(os.path.join(download_dir, pattern)):
+            for fpath in glob.glob(os.path.join(download_dir, pattern)):
                 try:
-                    os.remove(f)
-                    logging.info(f"Deleted file: {f}")
+                    os.remove(fpath)
+                    logging.info(f"Deleted existing file due to force: {fpath}")
                 except Exception as e:
-                    logging.warning(f"Could not delete file {f}: {e}")
-        # Remove from processed_episodes.txt
+                    logging.warning(f"Failed to delete file {fpath}: {e}")
+        # Remove entry from processed_episodes.txt
         processed_file = os.path.join(download_dir, "processed_episodes.txt")
         episode_id = get_episode_id(episode)
         if os.path.exists(processed_file):
             try:
-                with open(processed_file, 'r', encoding='utf-8') as f:
-                    lines = f.readlines()
-                with open(processed_file, 'w', encoding='utf-8') as f:
+                with open(processed_file, 'r', encoding='utf-8') as pf:
+                    lines = pf.readlines()
+                with open(processed_file, 'w', encoding='utf-8') as pf:
                     for line in lines:
                         if line.strip() != episode_id:
-                            f.write(line)
-                logging.info(f"Removed episode ID {episode_id} from processed_episodes.txt")
+                            pf.write(line)
+                logging.info(f"Removed episode ID from processed list: {episode_id}")
             except Exception as e:
-                logging.warning(f"Could not update processed_episodes.txt: {e}")
+                logging.warning(f"Failed to update processed episodes file: {e}")
 
     # Check if already processed (after force cleanup)
     if episode_already_processed(episode, download_dir):
@@ -2296,7 +2380,7 @@ def download_latest_episode(feed_url: str, download_dir: str, force: bool = Fals
                 pass
         return None
 
-def get_all_episodes(feed_url: str) -> List[Dict]:
+def get_all_episodes(feed_url: str) -> List[Dict[str, Any]]:
     """
     Get all episodes from a podcast RSS feed.
     
@@ -2365,7 +2449,7 @@ def load_processed_episodes(download_dir: str) -> set:
     
     return processed
 
-def mark_episode_processed(episode: Dict, download_dir: str) -> None:
+def mark_episode_processed(episode: Dict[str, Any], download_dir: str) -> None:
     """
     Mark an episode as processed by storing its ID.
     
@@ -2387,7 +2471,7 @@ def mark_episode_processed(episode: Dict, download_dir: str) -> None:
     except Exception as e:
         logging.error(f"Error marking episode as processed: {str(e)}")
 
-def get_episode_id(episode: Dict) -> str:
+def get_episode_id(episode: Dict[str, Any]) -> str:
     """
     Get a unique ID for an episode.
     
@@ -2524,13 +2608,13 @@ def perform_speaker_diarization(
     max_speakers: int = DIARIZATION_MAX_SPEAKERS,
     num_speakers: int = None,
     huggingface_token: str = None
-) -> Optional[List[Dict]]:
+) -> Optional[List[SpeakerSegment]]:
     """
     Speaker diarization using pyannote/speaker-diarization-3.1.
     Always converts input to 16kHz mono MP3 with ffmpeg, loads in memory, and runs diarization.
     """
-    import os, subprocess, torch, torchaudio
-    from pyannote.audio import Pipeline
+    import os, subprocess, torch, torchaudio  # type: ignore
+    from pyannote.audio import Pipeline  # type: ignore
 
     temp_mp3 = audio_file + ".ffmpeg.16k.mp3"
     try:
@@ -2574,7 +2658,7 @@ def perform_speaker_diarization(
         except Exception:
             pass
 
-def get_speaker_for_segment(timestamp: float, speaker_segments: List[Dict], 
+def get_speaker_for_segment(timestamp: float, speaker_segments: List[SpeakerSegment], 
                          segment_duration: float = 0.0, 
                          context_window: float = 1.0) -> Optional[str]:
     """
@@ -2779,9 +2863,9 @@ def main(input_file: str, model_size: Optional[str] = None, output_dir: Optional
             # Temporarily override the global DIARIZATION_MODEL if specified
             original_model = None
             if diarization_model:
-                global DIARIZATION_MODEL  # Declare global before using it
+                global DIARIZATION_MODEL
                 original_model = DIARIZATION_MODEL
-                DIARIZATION_MODEL = diarization_model
+                DIARIZATION_MODEL = diarization_model # type: ignore
                 logging.info(f"Using custom diarization model: {DIARIZATION_MODEL}")
             
             # Perform diarization
@@ -2793,7 +2877,7 @@ def main(input_file: str, model_size: Optional[str] = None, output_dir: Optional
             
             # Restore original model name if it was changed
             if original_model:
-                DIARIZATION_MODEL = original_model
+                DIARIZATION_MODEL = original_model # type: ignore
                 
             if not speaker_segments:
                 logging.warning("Speaker diarization failed or no speakers detected")
@@ -2806,6 +2890,13 @@ def main(input_file: str, model_size: Optional[str] = None, output_dir: Optional
         # Write transcript files with speaker information
         full_transcript = write_transcript_files(segments, output_file, output_file_timestamped, speaker_segments)
         
+        # Debug: print the first 10 lines of the transcript without timestamps
+        print("\n--- DEBUG: First 10 lines of transcript without timestamps ---")
+        for line in full_transcript.splitlines()[:10]:
+            print(line)
+        print("--- END DEBUG ---")
+        
+        
         # Check output file size before summary
         if not skip_summary and os.path.exists(output_file):
             file_size_kb = os.path.getsize(output_file) / 1024
@@ -2817,13 +2908,10 @@ def main(input_file: str, model_size: Optional[str] = None, output_dir: Optional
         
         # Generate and save summary, blog, and history extraction (if not skipped)
         if not skip_summary:
-            base_path, _ = os.path.splitext(input_file)
-            os.environ["WORKFLOW_OUTPUT_BASE"] = base_path
-            logging.info(f"Set WORKFLOW_OUTPUT_BASE to {base_path} for speaker assignment workflow.")
-            results = process_transcript_workflow(full_transcript)
+            base_path, _ = os.path.splitext(input_file) # This base_path is used for WORKFLOW_OUTPUT_BASE
+            results = process_transcript_workflow(full_transcript, base_path) # Pass base_path as output_base
             if results:
                 logging.info("Workflow results keys: %s", list(results.keys()))
-                write_workflow_outputs(results, base_path)
                 if results.get('speaker_assignment'):
                     logging.info(f"Speaker assignment output successfully generated for {base_path}.")
                 else:
@@ -2929,311 +3017,6 @@ def show_cuda_diagnostics():
         except Exception as e:
             print(f"Fout: {e}")
     print("=======================\n")
-
-def setup_model(model_size: str) -> WhisperModel:
-    """
-    Set up the Whisper model.
-    
-    Args:
-        model_size: Size of the model to use
-        
-    Returns:
-        Initialized WhisperModel
-    """
-    logging.info(f"Loading Whisper model: {model_size}")
-    
-    # Toon CUDA diagnostiek
-    show_cuda_diagnostics()
-    
-    # Determine device based on available hardware
-    device = DEVICE
-    if device.lower() == "cuda" and not torch.cuda.is_available():
-        logging.warning("CUDA requested but not available, falling back to CPU")
-        device = "cpu"
-    
-    if device.lower() != "cpu":
-        logging.info(f"CUDA is available, using device: {device}")
-        logging.info(f"GPU: {torch.cuda.get_device_name(0)}")
-    else:
-        logging.info("Using CPU for transcription (slower)")
-        
-    # Initialize model
-    model = WhisperModel(
-        model_size,
-        device=device,
-        compute_type=COMPUTE_TYPE,
-        download_root=os.path.join(os.path.dirname(os.path.abspath(__file__)), "models", "whisper"),
-    )
-    logging.info(f"Successfully loaded {model_size} model")
-    return model
-
-def transcribe_audio(model: WhisperModel, audio_file: str, speaker_segments: Optional[List[Dict]] = None) -> Tuple[List, object]:
-    """
-    Transcribe audio file using the Whisper model.
-    
-    Args:
-        model: Initialized WhisperModel instance
-        audio_file: Path to the audio file to transcribe
-        speaker_segments: Optional list of speaker segments from diarization
-        
-    Returns:
-        Tuple of (segments, info)
-    """
-    import os  # Add the missing import here
-    
-    logging.info(f"Transcribing audio file: {audio_file}")
-    print(f"\nStart transcriptie van {os.path.basename(audio_file)}...")
-    start_time = time.time()
-    
-    # Load custom vocabulary if enabled
-    word_list = None
-    word_replacements = {}
-    if USE_CUSTOM_VOCABULARY and os.path.exists(VOCABULARY_FILE):
-        try:
-            with open(VOCABULARY_FILE, 'r', encoding='utf-8') as f:
-                vocabulary = json.load(f)
-            
-            # Maak een lijst van woorden voor word_list parameter
-            word_list = []
-            
-            # Lees vervangingen voor post-processing
-            for original, replacement in vocabulary.items():
-                word_replacements[original.lower()] = replacement
-                # Voeg ook de vervanging toe aan de word_list
-                word_list.append(replacement)
-            
-            if word_list:
-                logging.info(f"Loaded {len(word_list)} custom vocabulary words")
-                print(f"Aangepaste woordenlijst geladen met {len(word_list)} woorden")
-        except Exception as e:
-            logging.error(f"Error loading vocabulary: {str(e)}")
-    
-    # Maak basic transcriptie parameters
-    transcription_params = {
-        'beam_size': BEAM_SIZE,
-        'word_timestamps': True,  # Enable word timestamps for better alignment with diarization
-        'vad_filter': True,       # Filter out non-speech parts
-        'vad_parameters': dict(min_silence_duration_ms=500),  # Configure VAD for better accuracy
-        'initial_prompt': "This is a podcast transcription.",
-        'condition_on_previous_text': True,
-    }
-    
-    # Bijhouden van huidige spreker om herhalingen te vermijden
-    current_speaker = None
-    
-    # Definieer functie voor live output
-    def process_segment(segment):
-        text = segment.text
-        
-        # Pas woordenboek toe op elke segment
-        if word_replacements:
-            for original, replacement in word_replacements.items():
-                # Vervang hele woorden met case-insensitive match
-                pattern = r'\b' + re.escape(original) + r'\b'
-                text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
-        
-        # Voeg sprekerinfo toe als beschikbaar
-        speaker_info = ""
-        nonlocal current_speaker
-        
-        if speaker_segments:
-            # Gebruik middelpunt van het segment om spreker te bepalen
-            segment_middle = (segment.start + segment.end) / 2
-            speaker = get_speaker_for_segment(segment_middle, speaker_segments)
-            
-            # Altijd speaker tonen, niet alleen bij wisseling
-            if speaker:
-                speaker_info = f"[{speaker}] "
-                current_speaker = speaker
-            else:
-                speaker_info = "[SPEAKER_UNKNOWN] "
-        
-        # Toon de tekst direct in de console
-        print(f"{format_timestamp(segment.start, segment.end)} {speaker_info}{text}")
-        
-        # Pas de tekst toe in het segment
-        segment.text = text
-        return segment
-    
-    # Function to collect segments with real-time processing
-    def collect_with_live_output(segments_generator):
-        print("\n--- Live Transcriptie Output ---")
-        result = []
-        for segment in segments_generator:
-            # Process each segment for replacements and logging
-            segment = process_segment(segment)
-            result.append(segment)
-        print("--- Einde Live Transcriptie ---\n")
-        return result
-    
-    # Execute transcription with appropriate parameters
-    try:
-        # Voeg word_list alleen toe als deze is gedefinieerd en niet leeg is
-        if word_list:
-            try:
-                # Probeer met word_list
-                print("Transcriptie uitvoeren met aangepaste woordenlijst...")
-                segments_generator, info = model.transcribe(
-                    audio_file,
-                    **transcription_params,
-                    word_list=word_list
-                )
-                segments_list = collect_with_live_output(segments_generator)
-            except TypeError as e:
-                # Als word_list niet wordt ondersteund, probeer zonder
-                logging.warning(f"word_list parameter niet ondersteund in deze versie van faster_whisper: {e}")
-                logging.info("Transcriptie uitvoeren zonder aangepaste woordenlijst")
-                print("word_list niet ondersteund, transcriptie uitvoeren zonder aangepaste woordenlijst...")
-                segments_generator, info = model.transcribe(
-                    audio_file, 
-                    **transcription_params
-                )
-                segments_list = collect_with_live_output(segments_generator)
-        else:
-            # Als er geen word_list is, gebruik de standaard parameters
-            print("Transcriptie uitvoeren...")
-            segments_generator, info = model.transcribe(
-                audio_file,
-                **transcription_params
-            )
-            segments_list = collect_with_live_output(segments_generator)
-            
-    except Exception as e:
-        logging.error(f"Error tijdens transcriptie: {str(e)}")
-        raise
-    
-    # Bereken en toon verwerkingstijd
-    elapsed_time = time.time() - start_time
-    print(f"\nTranscriptie voltooid in {elapsed_time:.1f} seconden.")
-    print(f"Taal gedetecteerd: {info.language} (waarschijnlijkheid: {info.language_probability:.2f})")
-    print(f"Aantal segmenten: {len(segments_list)}")
-    
-    logging.info(f"Transcription complete: {len(segments_list)} segments")
-    return segments_list, info
-
-def write_transcript_files(segments: List, output_file: str, output_file_timestamped: str, 
-                          speaker_segments: Optional[List[Dict]] = None) -> str:
-    """
-    Write transcript files with and without timestamps, integrating speaker info.
-    
-    Args:
-        segments: List of transcription segments from Whisper
-        output_file: Path to save the clean transcript
-        output_file_timestamped: Path to save the timestamped transcript
-        speaker_segments: Optional list of speaker segments from diarization
-        
-    Returns:
-        Full transcript text
-    """
-    try:
-        # Prepare for writing the transcripts
-        full_transcript = []
-        timestamped_transcript = []
-        
-        # Track current speaker to avoid repeating speaker tags for consecutive segments
-        current_speaker = None
-        
-        print(f"\nTranscriptie bestanden aanmaken...")
-        print(f"- Schoon transcript: {os.path.basename(output_file)}")
-        print(f"- Tijdgemarkeerd transcript: {os.path.basename(output_file_timestamped)}")
-        
-        # Process each segment from Whisper
-        for i, segment in enumerate(tqdm(segments, desc="Transcriptie verwerken", unit="segment")):
-            start = segment.start
-            end = segment.end
-            text = segment.text.strip()
-            
-            if not text:  # Skip empty segments
-                continue
-            
-            # Calculate segment duration for better speaker detection of short segments
-            segment_duration = end - start
-            
-            # Format timestamp for the timestamped version
-            timestamp = format_timestamp(start, end)
-            
-            # Get speaker info if available
-            speaker_info = ""
-            speaker_prefix = ""
-            if speaker_segments:
-                # Use middle of segment to determine speaker with improved context-awareness
-                middle_time = (start + end) / 2
-                # Pass segment duration to the improved function
-                speaker = get_speaker_for_segment(middle_time, speaker_segments, segment_duration=segment_duration)
-                
-                if speaker:
-                    # Check if this is a short utterance that should inherit speaker from context
-                    is_short_utterance = segment_duration < 1.0 and len(text.split()) <= 5
-                    
-                    # For very short utterances with no clear speaker, try to maintain speaker continuity
-                    if is_short_utterance and not speaker and current_speaker:
-                        # Check if there's another segment right after this one
-                        if i < len(segments) - 1:
-                            next_segment = segments[i + 1]
-                            if next_segment.start - end < 1.0:  # If next segment starts within 1 second
-                                next_middle = (next_segment.start + next_segment.end) / 2
-                                next_speaker = get_speaker_for_segment(next_middle, speaker_segments)
-                                # If next segment has same speaker as current, keep it for continuity
-                                if next_speaker == current_speaker:
-                                    speaker = current_speaker
-                    
-                    if speaker:
-                        speaker_info = f"[{speaker}] "
-                        speaker_prefix = f"[{speaker}] "
-                        current_speaker = speaker
-                    else:
-                        # More aggressive search for a speaker with a wider context window
-                        speaker = get_speaker_for_segment(middle_time, speaker_segments, 
-                                                         segment_duration=segment_duration, 
-                                                         context_window=2.0)
-                        if speaker:
-                            speaker_info = f"[{speaker}] "
-                            speaker_prefix = f"[{speaker}] "
-                            current_speaker = speaker
-                        else:
-                            # Only mark as unknown if we are sure it's not part of previous speaker's utterance
-                            if current_speaker and segment_duration < 1.5 and start - prev_end < 1.0:
-                                # This is likely a continuation from previous speaker
-                                speaker_info = f"[{current_speaker}] "
-                                speaker_prefix = f"[{current_speaker}] "
-                            else:
-                                speaker_info = "[SPEAKER_UNKNOWN] "
-                                speaker_prefix = "[SPEAKER_UNKNOWN] "
-                                current_speaker = None
-                else:
-                    speaker_info = "[SPEAKER_UNKNOWN] "
-                    speaker_prefix = "[SPEAKER_UNKNOWN] "
-                    current_speaker = None
-            
-            # Add to transcript collections
-            clean_line = f"{speaker_prefix}{text}"
-            timestamped_line = f"{timestamp} {speaker_info}{text}"
-            
-            full_transcript.append(clean_line)
-            timestamped_transcript.append(timestamped_line)
-            
-            # Store the end time for checking continuity in the next iteration
-            prev_end = end
-        
-        # Join all lines
-        full_text = "\n".join(full_transcript)
-        timestamped_text = "\n".join(timestamped_transcript)
-        
-        # Write to files
-        with open(output_file, 'w', encoding='utf-8') as f:
-            f.write(full_text)
-        
-        with open(output_file_timestamped, 'w', encoding='utf-8') as f:
-            f.write(timestamped_text)
-            
-        print(f"Transcriptie bestanden succesvol aangemaakt:")
-        print(f"- {output_file}")
-        print(f"- {output_file_timestamped}")
-        
-        return full_text
-    except Exception as e:
-        logging.error(f"Error writing transcript files: {str(e)}")
-        return ""
 
 def format_timestamp(start: float, end: Optional[float] = None) -> str:
     """
@@ -3353,346 +3136,534 @@ def process_summary(transcript: str, output_summary_file: str, output_blog_file:
         logging.error(f"Fout bij genereren van samenvatting/blog: {str(e)}")
         return False
 
-def convert_markdown_to_html(markdown_text: str) -> str:
-    """
-    Convert Markdown text to HTML.
-    
-    Args:
-        markdown_text: The Markdown text to convert
-        
-    Returns:
-        HTML formatted text
-    """
-    try:
-        html = markdown.markdown(
-            markdown_text,
-            extensions=['extra', 'codehilite', 'tables']
-        )
-        
-        # Voeg een eenvoudig HTML-sjabloon toe
-        html_template = f"""<!DOCTYPE html>
-<html lang="nl">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>WHYcast Blog Post</title>
-    <style>
-        body {{ font-family: Arial, sans-serif; line-height: 1.6; max-width: 800px; margin: 0 auto; padding: 20px; }}
-        h1, h2, h3 {{ color: #2c3e50; }}
-        a {{ color: #3498db; text-decoration: none; }}
-        a:hover {{ text-decoration: underline; }}
-        blockquote {{ border-left: 4px solid #ccc; padding-left: 15px; margin-left: 0; color: #555; }}
-        code {{ background-color: #f0f0f0; padding: 2px 4px; border-radius: 3px; font-family: monospace; }}
-        pre {{ background-color: #f0f0f0; padding: 10px; border-radius: 3px; overflow-x: auto; }}
-        img {{ max-width: 100%; height: auto; }}
-    </style>
-</head>
-<body>
-    {html}
-</body>
-</html>
+# ==================== CLI FUNCTIONS ====================
+def parse_args():
+    """Parse command line arguments with modern argparse structure."""
+    parser = argparse.ArgumentParser(
+        description=f'WHYcast Transcribe v{VERSION} - Transcribe podcast episodes with AI-powered features',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Transcribe a single audio file
+  transcribe.py transcribe podcast.mp3
+  
+  # Process all MP3 files in a directory
+  transcribe.py batch ~/podcasts --all
+  
+  # Regenerate a summary from an existing transcript
+  transcribe.py regenerate summary transcript.txt
+  
+  # Download and process the latest podcast episode
+  transcribe.py download latest
 """
-        return html_template
-    except Exception as e:
-        logging.error(f"Fout bij conversie naar HTML: {str(e)}")
-        return markdown_text  # Als fallback, geef de oorspronkelijke markdown terug
-
-def convert_markdown_to_wiki(markdown_text: str) -> str:
-    """
-    Convert Markdown text to MediaWiki markup format.
-    This is a simple conversion that handles common elements.
+    )
     
-    Args:
-        markdown_text: The Markdown text to convert
+    # Create subparsers for different command groups
+    subparsers = parser.add_subparsers(dest='command', required=True, help='Command to execute')
+    
+    # Add common argument groups that will be reused across commands
+    def add_common_model_options(parser):
+        model_group = parser.add_argument_group('Model Options')
+        model_group.add_argument('--model', '-m', help=f'Model size (default: {MODEL_SIZE})')
+        model_group.add_argument('--diarization-model', 
+                               help=f'Diarization model (default: {DIARIZATION_MODEL})')
         
-    Returns:
-        MediaWiki formatted text
-    """
-    try:
-        wiki_text = markdown_text
+    def add_common_output_options(parser):
+        output_group = parser.add_argument_group('Output Options')
+        output_group.add_argument('--output-dir', '-o', help='Directory to save output files')
+        output_group.add_argument('--skip-summary', '-s', action='store_true', help='Skip summary generation')
         
-        # Headers (Markdown: # Header, MediaWiki: == Header ==)
-        wiki_text = re.sub(r'^# (.*?)$', r'= \1 =', wiki_text, flags=re.MULTILINE)
-        wiki_text = re.sub(r'^## (.*?)$', r'== \1 ==', wiki_text, flags=re.MULTILINE)
-        wiki_text = re.sub(r'^### (.*?)$', r'=== \1 ===', wiki_text, flags=re.MULTILINE)
-        wiki_text = re.sub(r'^#### (.*?)$', r'==== \1 ====', wiki_text, flags=re.MULTILINE)
+    def add_common_speaker_options(parser):
+        speaker_group = parser.add_argument_group('Speaker Options')
+        speaker_group.add_argument('--diarize', action='store_true', help='Enable speaker diarization')
+        speaker_group.add_argument('--no-diarize', action='store_true', help='Disable speaker diarization')
+        speaker_group.add_argument('--min-speakers', type=int, 
+                                 help=f'Minimum number of speakers (default: {DIARIZATION_MIN_SPEAKERS})')
+        speaker_group.add_argument('--max-speakers', type=int,
+                                 help=f'Maximum number of speakers (default: {DIARIZATION_MAX_SPEAKERS})')
         
-        # Bold (Markdown: **text**, MediaWiki: '''text''')
-        wiki_text = re.sub(r'\*\*(.*?)\*\*', r"'''\1'''", wiki_text)
-        
-        # Italic (Markdown: *text*, MediaWiki: ''text'')
-        wiki_text = re.sub(r'\*(.*?)\*', r"''\1''", wiki_text)
-        
-        # Lists (Markdown: - item, MediaWiki: * item)
-        wiki_text = re.sub(r'^- (.*?)$', r'* \1', wiki_text, flags=re.MULTILINE)
-        
-        # Links (Markdown: [text](url), MediaWiki: [url text])
-        wiki_text = re.sub(r'\[(.*?)\]\((.*?)\)', r'[\2 \1]', wiki_text)
-        
-        return wiki_text
-    except Exception as e:
-        logging.error(f"Fout bij conversie naar Wiki: {str(e)}")
-        return markdown_text  # Als fallback, geef de oorspronkelijke markdown terug
-
-# ==================== ENTRY POINT ====================
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description=f'WHYcast Transcribe v{VERSION} - Transcribe audio files and generate summaries')
-    parser.add_argument('input', nargs='?', help='Path to the input audio file, directory, or glob pattern (default: current directory for regeneration options)')
-    parser.add_argument('--batch', '-b', action='store_true', help='Process multiple files matching pattern')
-    parser.add_argument('--all-mp3s', '-a', action='store_true', help='Process all MP3 files in directory')
-    parser.add_argument('--model', '-m', help='Model size (e.g., "large-v3", "medium", "small")')
-    parser.add_argument('--output-dir', '-o', help='Directory to save output files')
-    parser.add_argument('--skip-summary', '-s', action='store_true', help='Skip summary generation')
-    parser.add_argument('--force', '-f', action='store_true', help='Force regeneration of transcriptions even if they exist')
-    parser.add_argument('--verbose', '-v', action='store_true', help='Enable verbose logging')
+    def add_common_process_options(parser):
+        process_group = parser.add_argument_group('Process Options')
+        process_group.add_argument('--force', '-f', action='store_true', 
+                                 help='Force regeneration even if files exist')
+        process_group.add_argument('--skip-vocabulary', action='store_true', 
+                                 help='Skip custom vocabulary corrections')
+        process_group.add_argument('--verbose', '-v', action='store_true', 
+                                 help='Enable verbose logging')
+    
+    # === TRANSCRIBE command (single file) ===
+    transcribe_parser = subparsers.add_parser('transcribe', 
+                                            help='Transcribe a single audio file')
+    transcribe_parser.add_argument('input', 
+                                 help='Path to the audio file to transcribe')
+    add_common_model_options(transcribe_parser)
+    add_common_output_options(transcribe_parser)
+    add_common_speaker_options(transcribe_parser)
+    add_common_process_options(transcribe_parser)
+    
+    # === BATCH command (multiple files) ===
+    batch_parser = subparsers.add_parser('batch', 
+                                       help='Process multiple audio files')
+    batch_parser.add_argument('input', nargs='?', default='.', 
+                            help='Directory or glob pattern (default: current dir)')
+    batch_parser.add_argument('--all', '-a', action='store_true', 
+                            help='Process all MP3 files in directory')
+    add_common_model_options(batch_parser)
+    add_common_output_options(batch_parser)
+    add_common_speaker_options(batch_parser)
+    add_common_process_options(batch_parser)
+    
+    # === REGENERATE command with subcommands ===
+    regenerate_parser = subparsers.add_parser('regenerate', 
+                                           help='Regenerate outputs from existing files')
+    regenerate_subparsers = regenerate_parser.add_subparsers(dest='regenerate_command', required=True)
+    
+    # Regenerate summary subcommand
+    summary_parser = regenerate_subparsers.add_parser('summary', 
+                                                   help='Regenerate summary and blog from transcript')
+    summary_parser.add_argument('input', help='Path to transcript file')
+    add_common_process_options(summary_parser)
+    
+    # Regenerate cleaned subcommand
+    cleaned_parser = regenerate_subparsers.add_parser('cleaned', 
+                                                   help='Regenerate cleaned transcript')
+    cleaned_parser.add_argument('input', help='Path to transcript file')
+    add_common_process_options(cleaned_parser)
+    
+    # Regenerate blog subcommand
+    blog_parser = regenerate_subparsers.add_parser('blog', 
+                                               help='Regenerate blog post from transcript and summary')
+    blog_parser.add_argument('input', help='Path to transcript or cleaned transcript file')
+    add_common_process_options(blog_parser)
+    
+    # Regenerate all-blogs subcommand
+    all_blogs_parser = regenerate_subparsers.add_parser('all-blogs', 
+                                                    help='Regenerate all blog posts in directory')
+    all_blogs_parser.add_argument('directory', nargs='?', default='podcasts', 
+                               help='Directory containing transcript files (default: podcasts)')
+    add_common_process_options(all_blogs_parser)
+    
+    # Regenerate all-summaries subcommand
+    all_summaries_parser = regenerate_subparsers.add_parser('all-summaries', 
+                                                        help='Regenerate all summaries in directory')
+    all_summaries_parser.add_argument('directory', nargs='?', default='podcasts', 
+                                   help='Directory containing transcript files (default: podcasts)')
+    add_common_process_options(all_summaries_parser)
+    
+    # Regenerate workflow subcommand
+    workflow_parser = regenerate_subparsers.add_parser('workflow', 
+                                                    help='Run full workflow on existing transcript')
+    workflow_parser.add_argument('input', help='Path to transcript file')
+    add_common_process_options(workflow_parser)
+    
+    # Regenerate all-workflows subcommand
+    all_workflows_parser = regenerate_subparsers.add_parser('all-workflows', 
+                                                        help='Run full workflow on all transcripts')
+    all_workflows_parser.add_argument('directory', nargs='?', default='podcasts', 
+                                   help='Directory containing transcript files (default: podcasts)')
+    add_common_process_options(all_workflows_parser)
+    
+    # Regenerate history subcommand
+    history_parser = regenerate_subparsers.add_parser('history', 
+                                                   help='Generate history extraction from transcript')
+    history_parser.add_argument('input', help='Path to transcript file')
+    add_common_process_options(history_parser)
+    
+    # Regenerate all-histories subcommand
+    all_histories_parser = regenerate_subparsers.add_parser('all-histories', 
+                                                        help='Generate history for all transcripts')
+    all_histories_parser.add_argument('directory', nargs='?', default='podcasts', 
+                                   help='Directory containing transcript files (default: podcasts)')
+    add_common_process_options(all_histories_parser)
+    
+    # Regenerate speaker-assignment subcommand
+    speaker_parser = regenerate_subparsers.add_parser('speaker-assignment', 
+                                                   help='Regenerate speaker assignment')
+    speaker_parser.add_argument('input', help='Path to transcript file')
+    add_common_speaker_options(speaker_parser)
+    add_common_process_options(speaker_parser)
+    
+    # === CONVERT command ===
+    convert_parser = subparsers.add_parser('convert', help='Convert file formats')
+    convert_subparsers = convert_parser.add_subparsers(dest='convert_command', required=True)
+    
+    # Convert blogs subcommand
+    blogs_parser = convert_subparsers.add_parser('blogs', 
+                                             help='Convert blog text files to HTML and Wiki formats')
+    blogs_parser.add_argument('directory', nargs='?', default='podcasts', 
+                           help='Directory containing blog files (default: podcasts)')
+    
+    # === DOWNLOAD command ===
+    download_parser = subparsers.add_parser('download', help='Download podcast episodes')
+    download_subparsers = download_parser.add_subparsers(dest='download_command', required=True)
+    
+    # Download latest subcommand
+    latest_parser = download_subparsers.add_parser('latest', help='Download latest episode')
+    latest_parser.add_argument('--feed', '-F', default="https://whycast.podcast.audio/@whycast/feed.xml", 
+                           help='RSS feed URL (default: WHYcast feed)')
+    latest_parser.add_argument('--output-dir', '-o', default='podcasts', 
+                           help='Download directory (default: podcasts)')
+    latest_parser.add_argument('--force', '-f', action='store_true', 
+                           help='Force redownload even if exists')
+    
+    # Download all subcommand
+    all_parser = download_subparsers.add_parser('all', help='Download all episodes')
+    all_parser.add_argument('--feed', '-F', default="https://whycast.podcast.audio/@whycast/feed.xml", 
+                         help='RSS feed URL (default: WHYcast feed)')
+    all_parser.add_argument('--output-dir', '-o', default='podcasts', 
+                         help='Download directory (default: podcasts)')
+    all_parser.add_argument('--force', '-f', action='store_true', 
+                         help='Force redownload even if exists')
+    
+    # === CONFIG command ===
+    config_parser = subparsers.add_parser('config', help='Configure settings')
+    config_subparsers = config_parser.add_subparsers(dest='config_command', required=True)
+    
+    # Config set-token subcommand
+    token_parser = config_subparsers.add_parser('set-token', help='Set API token')
+    token_parser.add_argument('--huggingface', type=str, 
+                           help='HuggingFace API token for speaker diarization')
+    
+    # === VERSION command (directly under main parser) ===
     parser.add_argument('--version', action='version', version=f'WHYcast Transcribe v{VERSION}')
-    parser.add_argument('--regenerate-summary', '-r', action='store_true', help='Regenerate summary and blog from existing transcript')
-    parser.add_argument('--regenerate-all-summaries', '-R', action='store_true', 
-                         help='Regenerate summaries for all transcripts in directory (uses current dir if no input)')
-    parser.add_argument('--regenerate-all-blogs', '-B', action='store_true', 
-                         help='Regenerate only blog posts for all transcripts in directory (uses current dir if no input)')
-    parser.add_argument('--regenerate-cleaned', '-rc', action='store_true', 
-                         help='Regenerate cleaned version from existing transcript')
-    parser.add_argument('--skip-vocabulary', action='store_true', help='Skip custom vocabulary corrections')
-    parser.add_argument('--regenerate-all-cleaned', action='store_true',
-                        help='Regenerate cleaned transcripts for all transcript files in directory (uses input dir or download-dir if not provided)')
-    parser.add_argument('--regenerate-full-workflow', action='store_true',
-                        help='Run a single workflow to generate cleaned, summary, blog, and blog_alt1 from existing transcript')
-    parser.add_argument('--regenerate-blogs-from-cleaned', action='store_true',
-                       help='Regenerate blog posts using only cleaned transcripts')
-    parser.add_argument('--regenerate-all-history', action='store_true',
-                       help='Generate history extractions for all transcript files in directory')
-    parser.add_argument('--regenerate-speaker-assignment', action='store_true',
-                       help='Regenerate speaker assignment from an existing transcript file')
     
-    # Add podcast feed arguments
-    parser.add_argument('--feed', '-F', default="https://whycast.podcast.audio/@whycast/feed.xml", 
-                       help='RSS feed URL to download latest episode (default: WHYcast feed)')
-    parser.add_argument('--download-dir', '-D', default='podcasts', 
-                       help='Directory to save downloaded episodes (default: podcasts)')
-    parser.add_argument('--no-download', '-N', action='store_true', 
-                       help='Disable automatic podcast download')
-    
-    # Add new argument for processing all episodes
-    parser.add_argument('--all-episodes', '-A', action='store_true', 
-                       help='Process all episodes from the podcast feed instead of just the latest')
-    
-    # Add new argument for converting existing blogs to HTML and Wiki formats
-    parser.add_argument('--convert-blogs', '-C', action='store_true',
-                       help='Convert existing blog text files to HTML and Wiki formats')
-    
-    # Add speaker diarization arguments
-    parser.add_argument('--diarize', action='store_true',
-                       help='Enable speaker diarization (override config setting)')
-    parser.add_argument('--no-diarize', action='store_true',
-                       help='Disable speaker diarization (override config setting)')
-    parser.add_argument('--min-speakers', type=int,
-                       help=f'Minimum number of speakers for diarization (default: {DIARIZATION_MIN_SPEAKERS})')
-    parser.add_argument('--max-speakers', type=int,
-                       help=f'Maximum number of speakers for diarization (default: {DIARIZATION_MAX_SPEAKERS})')
-    parser.add_argument('--diarization-model', 
-                       help=f'Diarization model to use (default: {DIARIZATION_MODEL}, alt: {DIARIZATION_ALTERNATIVE_MODEL})')
-    parser.add_argument('--huggingface-token', type=str,
-                       help='Set HuggingFace API token for speaker diarization')
-    
-    # Add arguments for history extraction
-    parser.add_argument('--generate-history', '-H', action='store_true',
-                       help='Generate history lesson extraction from an existing transcript file')
-    # Note: --regenerate-all-history is already defined earlier in the code
-    
-    args = parser.parse_args()
-    
-    logging.info(f"WHYcast Transcribe {VERSION} starting up")
-    
-    # Set logging level based on verbosity
-    if args.verbose:
-        # Alleen het hoofdprogramma logger op debug level zetten,
-        # niet alle externe modules
-        logging.getLogger('__main__').setLevel(logging.DEBUG)
-        logging.info("Verbose modus ingeschakeld: Extra logging voor hoofdprogramma")
-    else:
-        # Zorg dat alle loggers op INFO of hoger staan
-        for name in logging.root.manager.loggerDict:
-            if name.startswith('matplotlib') or name.startswith('PIL') or \
-               name.startswith('urllib3') or name.startswith('httpx') or \
-               name.startswith('huggingface_hub'):
-                logging.getLogger(name).setLevel(logging.WARNING)
-            else:
-                logging.getLogger(name).setLevel(logging.INFO)
-    
-    # Set HuggingFace token if provided
-    if args.huggingface_token:
-        set_huggingface_token(args.huggingface_token)
-        logging.info("HuggingFace token set from command line argument")
-    
-    # Check if we should convert blogs
-    if args.convert_blogs:
-        directory = args.input if args.input else args.download_dir
-        logging.info(f"Converting all blog files in directory: {directory}")
-        convert_existing_blogs(directory)
-        sys.exit(0)
-    
-    # Check if we should process all episodes
-    should_process_all_episodes = (args.all_episodes and 
-                                not args.no_download and
-                                not args.input and 
-                                not args.regenerate_all_summaries and
-                                not args.regenerate_all_blogs and
-                                not args.regenerate_blogs_from_cleaned and
-                                not args.regenerate_summary)
-    
-    if should_process_all_episodes:
-        feed_url = args.feed
-        download_dir = args.download_dir
+    return parser.parse_args()
+
+def cli() -> int:
+    """Main CLI entry point, returns exit code."""
+    try:
+        args = parse_args()
         
-        logging.info(f"Processing all episodes from {feed_url}")
-        process_all_episodes(feed_url, download_dir, model_size=args.model, 
-                           output_dir=args.output_dir, skip_summary=args.skip_summary, 
-                           force=args.force, use_diarization=args.diarize if args.diarize else None if not args.no_diarize else False,
-                           min_speakers=args.min_speakers, max_speakers=args.max_speakers,
-                           diarization_model=args.diarization_model)
-        sys.exit(0)
-    
-    # Determine if we should check the podcast feed for latest episode (original behavior)
-    should_check_feed = (not args.no_download and 
-                         not args.all_episodes and
-                         not args.input and 
-                         not args.regenerate_all_summaries and
-                         not args.regenerate_all_blogs and
-                         not args.regenerate_blogs_from_cleaned and
-                         not args.regenerate_summary)
-    
-    if should_check_feed:
-        feed_url = args.feed
-        download_dir = args.download_dir
+        # Set up logging based on verbosity - available in all subcommands
+        setup_logging(args.verbose if hasattr(args, 'verbose') else False)
         
-        logging.info(f"Checking for the latest episode from {feed_url}")
-        episode_file = download_latest_episode(feed_url, download_dir, force=args.force)
+        logging.info(f"WHYcast Transcribe {VERSION} starting up")
         
-        if (episode_file):
-            logging.info(f"Processing newly downloaded episode: {episode_file}")
-            main(episode_file, model_size=args.model, output_dir=args.output_dir, 
-                 skip_summary=args.skip_summary, force=args.force,
-                 use_diarization=args.diarize if args.diarize else None if not args.no_diarize else False,
-                 min_speakers=args.min_speakers, max_speakers=args.max_speakers,
-                 diarization_model=args.diarization_model)
-            sys.exit(0)
+        # Set HuggingFace token if provided in config command
+        if args.command == 'config' and args.config_command == 'set-token' and args.huggingface:
+            set_huggingface_token(args.huggingface)
+            logging.info("HuggingFace token set from command line argument")
+            return 0
+        
+        # Dispatch based on command
+        if args.command == "transcribe":
+            return handle_transcribe_command(args)
+        elif args.command == "batch":
+            return handle_batch_command(args)
+        elif args.command == "regenerate":
+            return handle_regenerate_command(args)
+        elif args.command == "convert":
+            return handle_convert_command(args)
+        elif args.command == "download":
+            return handle_download_command(args)
         else:
-            logging.info("No new episode to download or process")
-            sys.exit(0)
+            logging.error(f"Unknown command: {args.command}")
+            return 1
+            
+    except KeyboardInterrupt:
+        logging.warning("Operation cancelled by user")
+        return 130  # Standard exit code for SIGINT
+    except Exception as e:
+        logging.error(f"Unhandled error: {str(e)}")
+        if logging.getLogger().isEnabledFor(logging.DEBUG):
+            logging.exception("Exception details:")
+        return 1
     
-    # Continue with existing functionality if input is provided or special mode is requested
-    if args.regenerate_blogs_from_cleaned:
-        directory = args.input if args.input else args.download_dir
-        logging.info(f"Regenerating blogs from cleaned transcripts in directory: {directory}")
-        regenerate_blogs_from_cleaned(directory)
-    elif args.regenerate_all_blogs:
-        # Allow regenerate_all_blogs without an input by using podcasts directory
-        directory = args.input if args.input else args.download_dir
-        logging.info(f"Regenerating all blogs in directory: {directory}")
-        regenerate_all_blogs(directory)
-    elif args.regenerate_all_summaries:
-        # Allow regenerate_all_summaries without an input by using podcasts directory
-        directory = args.input if args.input else args.download_dir
-        logging.info(f"Regenerating all summaries in directory: {directory}")
-        regenerate_all_summaries(directory)
-    elif args.regenerate_all_cleaned:
-        directory = args.input if args.input else args.download_dir
-        logging.info(f"Regenerating all cleaned transcripts in directory: {directory}")
-        regenerate_all_cleaned(directory)
-    elif not args.input:
-        parser.print_help()
-        sys.exit(1)
-    elif args.regenerate_cleaned:
-        if os.path.isdir(args.input):
-            logging.error("Please specify a transcript file when using --regenerate-cleaned, not a directory")
-            sys.exit(1)
-        elif not os.path.isfile(args.input):
-            logging.error(f"Input file does not exist: {args.input}")
-            sys.exit(1)
-        else:
-            success = regenerate_cleaned_transcript(args.input)
-            if not success:
-                sys.exit(1)
-    elif args.regenerate_summary:
-        if os.path.isdir(args.input):
-            logging.error("Please specify a transcript file when using --regenerate-summary, not a directory")
-            sys.exit(1)
-        elif not os.path.isfile(args.input):
-            logging.error(f"Input file does not exist: {args.input}")
-            sys.exit(1)
-        else:
-            main(args.input, regenerate_summary_only=True, skip_vocabulary=args.skip_vocabulary,
+    return 0
+
+def handle_transcribe_command(args) -> int:
+    """Handle the 'transcribe' command"""
+    try:
+        # Validate parameters
+        if not os.path.exists(args.input):
+            logging.error(f"Input file not found: {args.input}")
+            return 1
+        
+        # Call main function with appropriate parameters
+        main(
+            input_file=args.input,
+            model_size=args.model,
+            output_dir=args.output_dir,
+            skip_summary=args.skip_summary,
+            force=args.force,
+            skip_vocabulary=args.skip_vocabulary if hasattr(args, 'skip_vocabulary') else False,
+            use_diarization=args.diarize if args.diarize else None if not args.no_diarize else False,
+            min_speakers=args.min_speakers,
+            max_speakers=args.max_speakers,
+            diarization_model=args.diarization_model
+        )
+        return 0
+    except Exception as e:
+        logging.error(f"Error in transcribe command: {str(e)}")
+        if logging.getLogger().isEnabledFor(logging.DEBUG):
+            logging.exception("Exception details:")
+        return 1
+
+def handle_batch_command(args) -> int:
+    """Handle the 'batch' command"""
+    try:
+        if args.all:
+            process_all_mp3s(
+                args.input, 
+                model_size=args.model, 
+                output_dir=args.output_dir,
+                skip_summary=args.skip_summary,
+                force=args.force,
+                skip_vocabulary=args.skip_vocabulary if hasattr(args, 'skip_vocabulary') else False,
                 use_diarization=args.diarize if args.diarize else None if not args.no_diarize else False,
-                min_speakers=args.min_speakers, max_speakers=args.max_speakers,
-                diarization_model=args.diarization_model)
-    elif args.regenerate_full_workflow:
-        if not args.input:
-            logging.error("You must specify an input file or directory with --regenerate-full-workflow.")
-            sys.exit(1)
-        
-        if os.path.isdir(args.input):
-            # Process all transcripts in directory
-            logging.info(f"Running full workflow for all transcripts in directory: {args.input}")
-            regenerate_all_full_workflow(args.input)
+                min_speakers=args.min_speakers,
+                max_speakers=args.max_speakers,
+                diarization_model=args.diarization_model
+            )
         else:
-            # Process single file
+            process_batch(
+                args.input,
+                model_size=args.model,
+                output_dir=args.output_dir,
+                skip_summary=args.skip_summary,
+                force=args.force,
+                skip_vocabulary=args.skip_vocabulary if hasattr(args, 'skip_vocabulary') else False,
+                use_diarization=args.diarize if args.diarize else None if not args.no_diarize else False,
+                min_speakers=args.min_speakers,
+                max_speakers=args.max_speakers,
+                diarization_model=args.diarization_model
+            )
+        return 0
+    except Exception as e:
+        logging.error(f"Error in batch command: {str(e)}")
+        if logging.getLogger().isEnabledFor(logging.DEBUG):
+            logging.exception("Exception details:")
+        return 1
+
+def handle_regenerate_command(args) -> int:
+    """Handle the 'regenerate' command with subcommands"""
+    try:
+        if args.regenerate_command == "summary":
+            if not os.path.isfile(args.input):
+                logging.error(f"Input file does not exist: {args.input}")
+                return 1
+            success = regenerate_summary(args.input)
+            return 0 if success else 1
+            
+        elif args.regenerate_command == "cleaned":
+            if not os.path.isfile(args.input):
+                logging.error(f"Input file does not exist: {args.input}")
+                return 1
+            success = regenerate_cleaned_transcript(args.input)
+            return 0 if success else 1
+            
+        elif args.regenerate_command == "blog":
+            if not os.path.isfile(args.input):
+                logging.error(f"Input file does not exist: {args.input}")
+                return 1
+            
+            # Determine if this is a cleaned transcript or regular transcript
+            base = os.path.splitext(args.input)[0]
+            summary_file = f"{base}_summary.txt"
+            
+            if not os.path.isfile(summary_file):
+                logging.error(f"Summary file not found: {summary_file}")
+                return 1
+                
+            success = regenerate_blog_only(args.input, summary_file)
+            return 0 if success else 1
+            
+        elif args.regenerate_command == "all-blogs":
+            regenerate_all_blogs(args.directory)
+            return 0
+            
+        elif args.regenerate_command == "all-summaries":
+            regenerate_all_summaries(args.directory)
+            return 0
+            
+        elif args.regenerate_command == "workflow":
+            if not os.path.isfile(args.input):
+                logging.error(f"Input file does not exist: {args.input}")
+                return 1
             regenerate_full_workflow(args.input)
-        sys.exit(0)
-    elif args.all_mp3s:
-        process_all_mp3s(args.input, model_size=args.model, output_dir=args.output_dir, skip_summary=args.skip_summary,
-                        force=args.force, skip_vocabulary=args.skip_vocabulary,
-                        use_diarization=args.diarize if args.diarize else None if not args.no_diarize else False,
-                        min_speakers=args.min_speakers, max_speakers=args.max_speakers,
-                        diarization_model=args.diarization_model)
-    elif args.batch:
-        process_batch(args.input, model_size=args.model, output_dir=args.output_dir, skip_summary=args.skip_summary,
-                    force=args.force, skip_vocabulary=args.skip_vocabulary,
-                    use_diarization=args.diarize if args.diarize else None if not args.no_diarize else False,
-                    min_speakers=args.min_speakers, max_speakers=args.max_speakers,
-                    diarization_model=args.diarization_model)
-    elif args.regenerate_all_history:
-        directory = args.input if args.input else args.download_dir
-        logging.info(f"Generating history extractions for all transcripts in directory: {directory}")
-        regenerate_all_history_extractions(directory, force=args.force)
-    elif args.generate_history:
-        if os.path.isdir(args.input):
-            logging.error("Please specify a transcript file when using --generate-history, not a directory")
-            sys.exit(1)
-        elif not os.path.isfile(args.input):
-            logging.error(f"Input file does not exist: {args.input}")
-            sys.exit(1)
-        else:
-            success = generate_history_extraction(args.input, force=args.force)
-            if not success:
-                sys.exit(1)
-    elif args.regenerate_speaker_assignment:
-        if os.path.isdir(args.input):
-            logging.error("Please specify a transcript file when using --regenerate-speaker-assignment, not a directory")
-            sys.exit(1)
-        elif not os.path.isfile(args.input):
-            logging.error(f"Input file does not exist: {args.input}")
-            sys.exit(1)
-        else:
+            return 0
+            
+        elif args.regenerate_command == "all-workflows":
+            regenerate_all_full_workflow(args.directory)
+            return 0
+            
+        elif args.regenerate_command == "history":
+            if not os.path.isfile(args.input):
+                logging.error(f"Input file does not exist: {args.input}")
+                return 1
+            success = generate_history_extraction(args.input, force=args.force if hasattr(args, 'force') else False)
+            return 0 if success else 1
+            
+        elif args.regenerate_command == "all-histories":
+            regenerate_all_history_extractions(args.directory, force=args.force if hasattr(args, 'force') else False)
+            return 0
+            
+        elif args.regenerate_command == "speaker-assignment":
+            if not os.path.isfile(args.input):
+                logging.error(f"Input file does not exist: {args.input}")
+                return 1
+            
             # Read transcript
             with open(args.input, 'r', encoding='utf-8') as f:
                 transcript = f.read()
             base = os.path.splitext(args.input)[0]
             # Set output base for workflow
             os.environ["WORKFLOW_OUTPUT_BASE"] = base
-            from content_generator import process_speaker_assignment_workflow
             try:
-                txt_path = process_speaker_assignment_workflow(transcript, base)
+                txt_path = process_speaker_assignment_workflow(
+                    transcript, base,
+                    use_diarization=args.diarize if hasattr(args, 'diarize') else None,
+                    min_speakers=args.min_speakers if hasattr(args, 'min_speakers') else None,
+                    max_speakers=args.max_speakers if hasattr(args, 'max_speakers') else None,
+                    diarization_model=args.diarization_model if hasattr(args, 'diarization_model') else None
+                )
                 logging.info(f"Speaker assignment generated: {txt_path}")
                 print(f"Speaker assignment generated: {txt_path}")
             except Exception as e:
                 logging.error(f"Speaker assignment failed: {e}")
                 print(f"Speaker assignment failed: {e}")
-                sys.exit(1)
-            sys.exit(0)
+                return 1
+            
+        else:
+            logging.error(f"Unknown regenerate subcommand: {args.regenerate_command}")
+            return 1
+            
+    except Exception as e:
+        logging.error(f"Error in regenerate command: {str(e)}")
+        if logging.getLogger().isEnabledFor(logging.DEBUG):
+            logging.exception("Exception details:")
+        return 1
+        
+    return 0
+
+def handle_convert_command(args) -> int:
+    """Handle the 'convert' command with subcommands"""
+    try:
+        if args.convert_command == "blogs":
+            convert_existing_blogs(args.directory)
+            return 0
+        else:
+            logging.error(f"Unknown convert subcommand: {args.convert_command}")
+            return 1
+    except Exception as e:
+        logging.error(f"Error in convert command: {str(e)}")
+        if logging.getLogger().isEnabledFor(logging.DEBUG):
+            logging.exception("Exception details:")
+        return 1
+
+def handle_download_command(args) -> int:
+    """Handle the 'download' command with subcommands"""
+    try:
+        if args.download_command == "latest":
+            episode_file = download_latest_episode(args.feed, args.output_dir, force=args.force)
+            
+            if episode_file:
+                logging.info(f"Processing newly downloaded episode: {episode_file}")
+                main(
+                    input_file=episode_file,
+                    output_dir=args.output_dir,
+                    force=args.force
+                )
+            else:
+                logging.info("No new episode to download or process")
+                
+            return 0
+            
+        elif args.download_command == "all":
+            process_all_episodes(
+                args.feed,
+                args.output_dir,
+                force=args.force
+            )
+            return 0
+            
+        else:
+            logging.error(f"Unknown download subcommand: {args.download_command}")
+            return 1
+            
+    except Exception as e:
+        logging.error(f"Error in download command: {str(e)}")
+        if logging.getLogger().isEnabledFor(logging.DEBUG):
+            logging.exception("Exception details:")
+        return 1
+
+def process_speaker_assignment_workflow(transcript_content: str, output_base: str,
+                                        use_diarization: Optional[bool] = None,
+                                        min_speakers: Optional[int] = None,
+                                        max_speakers: Optional[int] = None,
+                                        diarization_model_override: Optional[str] = None,
+                                        huggingface_token_override: Optional[str] = None) -> str:
+    """
+    Run speaker diarization and assign speaker tags to transcript.
+    Returns the path to the generated speaker-assigned clean transcript file.
+    """
+    # Determine diarization settings
+    use_diar = use_diarization if use_diarization is not None else USE_SPEAKER_DIARIZATION
+    if use_diar:
+        segments = perform_speaker_diarization(
+            output_base + ".mp3",
+            min_speakers=min_speakers or DIARIZATION_MIN_SPEAKERS,
+            max_speakers=max_speakers or DIARIZATION_MAX_SPEAKERS,
+            huggingface_token=os.environ.get("huggingface_token"),
+            diarization_model=diarization_model_override or DIARIZATION_MODEL
+        )
     else:
-        main(args.input, model_size=args.model, output_dir=args.output_dir, skip_summary=args.skip_summary,
-            force=args.force, skip_vocabulary=args.skip_vocabulary,
-            use_diarization=args.diarize if args.diarize else None if not args.no_diarize else False,
-            min_speakers=args.min_speakers, max_speakers=args.max_speakers,
-            diarization_model=args.diarization_model)
+        segments = None
+
+    # Transcribe audio with or without diarization segments
+    model = setup_model()
+    segments_list, info = transcribe_audio(model, output_base + ".mp3", speaker_segments=segments)
+
+    # Paths for speaker assignment outputs
+    clean_txt = f"{output_base}_speaker_assignment.txt"
+    ts_txt = f"{output_base}_ts_speaker_assignment.txt"
+
+    # Write transcripts with speaker tags
+    full_text = write_transcript_files(segments_list, clean_txt, ts_txt, speaker_segments=segments)
+
+    # Generate HTML and Wiki versions
+    html_path = f"{output_base}_speaker_assignment.html"
+    wiki_path = f"{output_base}_speaker_assignment.wiki"
+    with open(html_path, 'w', encoding='utf-8') as f:
+        f.write(convert_markdown_to_html(full_text))
+    with open(wiki_path, 'w', encoding='utf-8') as f:
+        f.write(convert_markdown_to_wiki(full_text))
+
+    return clean_txt
+
+def default_run(force: bool = False) -> int:
+    """
+    Default workflow when no CLI parameters are given: download latest episode and run full workflow.
+    If force=True, clears existing files before download.
+    """
+    # Default feed and output directory
+    default_feed = "https://whycast.podcast.audio/@whycast/feed.xml"
+    output_dir = "podcasts"
+    # Fetch and download latest episode
+    episode_file = download_latest_episode(default_feed, output_dir, force=force)
+    if not episode_file:
+        logging.info("No new episode to download or already processed.")
+        return 0
+    # Run full processing pipeline
+    try:
+        # Transcribe, diarize, assign speakers, cleanup, summary, blog, history
+        main(
+            input_file=episode_file,
+            output_dir=output_dir,
+            force=force
+        )
+        return 0
+    except Exception as e:
+        logging.error(f"Error in default run: {e}")
+        return 1
+
+# ==================== ENTRY POINT ====================
+if __name__ == "__main__":
+    # If run with only --force or -f, use default workflow with force
+    if len(sys.argv) == 2 and sys.argv[1] in ('--force', '-f'):
+        sys.exit(default_run(force=True))
+    # If no args, run default workflow without force
+    if len(sys.argv) == 1:
+        sys.exit(default_run(force=False))
+    # Otherwise use full CLI
+    sys.exit(cli())
