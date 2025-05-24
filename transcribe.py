@@ -122,6 +122,8 @@ except Exception as e:
     sys.stderr.write(f"Error in configuration: {str(e)}\n")
     sys.exit(1)
 
+# process_speaker_assignment_workflow is now defined below in this file
+
 # Set up logging to both console and file
 def setup_logging():
     # Enhanced log format with line numbers and function names
@@ -681,8 +683,13 @@ def process_transcript_workflow(transcript: str) -> Dict[str, Optional[str]]:
     Returns a dictionary of all results.
     """
     results = {}
-    results['speaker_assignment'] = speaker_assignment_step(transcript)
-    cleaned = cleanup_step(transcript)
+    speaker_assigned_transcript = speaker_assignment_step(transcript)
+    results['speaker_assignment'] = speaker_assigned_transcript
+    
+    # Use speaker-assigned transcript for cleanup if available, otherwise use original
+    transcript_for_cleanup = speaker_assigned_transcript if speaker_assigned_transcript else transcript
+    cleaned = cleanup_step(transcript_for_cleanup)
+    
     results['cleaned_transcript'] = cleaned
     results['summary'] = summary_step(cleaned)
     results['blog'] = blog_step(cleaned, results['summary'])
@@ -3434,6 +3441,44 @@ def convert_markdown_to_wiki(markdown_text: str) -> str:
         logging.error(f"Fout bij conversie naar Wiki: {str(e)}")
         return markdown_text  # Als fallback, geef de oorspronkelijke markdown terug
 
+def process_speaker_assignment_workflow(transcript: str, base_path: str) -> str:
+    """
+    Process transcript with speaker assignment prompt using o3-mini, chunking if needed.
+    Output: <base>_speaker_assignment.txt, .html, .wiki
+    Returns the path to the generated .txt file.
+    """
+    import os
+    
+    # Check for diarization tags in transcript
+    if not any(f"SPEAKER_" in line for line in transcript.splitlines()):
+        raise ValueError("Transcript does not contain diarization speaker tags. Speaker assignment prompt requires diarized transcript.")
+
+    prompt = read_prompt_file(os.path.join("prompts", "speaker_assignment_prompt.txt"))
+    if not prompt:
+        raise RuntimeError("Speaker assignment prompt file not found.")
+
+    # Chunk transcript if needed
+    chunks = split_into_chunks(transcript, max_chunk_size=MAX_INPUT_TOKENS * 4)  # 4 chars/token
+    results = []
+    for chunk in chunks:
+        result = process_with_openai(chunk, prompt, OPENAI_SPEAKER_MODEL, max_tokens=MAX_TOKENS)
+        results.append(result)
+    full_result = "\n\n".join(results)
+
+    # Write .txt (markdown)
+    txt_path = f"{base_path}_speaker_assignment.txt"
+    with open(txt_path, "w", encoding="utf-8") as f:
+        f.write(full_result)
+    # Write .html
+    html_path = f"{base_path}_speaker_assignment.html"
+    with open(html_path, "w", encoding="utf-8") as f:
+        f.write(convert_markdown_to_html(full_result))
+    # Write .wiki
+    wiki_path = f"{base_path}_speaker_assignment.wiki"
+    with open(wiki_path, "w", encoding="utf-8") as f:
+        f.write(convert_markdown_to_wiki(full_result))
+    return txt_path
+
 # ==================== ENTRY POINT ====================
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=f'WHYcast Transcribe v{VERSION} - Transcribe audio files and generate summaries')
@@ -3680,7 +3725,6 @@ if __name__ == "__main__":
             base = os.path.splitext(args.input)[0]
             # Set output base for workflow
             os.environ["WORKFLOW_OUTPUT_BASE"] = base
-            from content_generator import process_speaker_assignment_workflow
             try:
                 txt_path = process_speaker_assignment_workflow(transcript, base)
                 logging.info(f"Speaker assignment generated: {txt_path}")
@@ -3694,5 +3738,4 @@ if __name__ == "__main__":
         main(args.input, model_size=args.model, output_dir=args.output_dir, skip_summary=args.skip_summary,
             force=args.force, skip_vocabulary=args.skip_vocabulary,
             use_diarization=args.diarize if args.diarize else None if not args.no_diarize else False,
-            min_speakers=args.min_speakers, max_speakers=args.max_speakers,
-            diarization_model=args.diarization_model)
+            min_speakers=args.min_speakers, max_speakers=args.max_speakers,            diarization_model=args.diarization_model)
