@@ -11,7 +11,7 @@ and conversion of unsupported formats for compatibility with diarization and tra
 import os
 import logging
 import subprocess
-import shutil
+import shlex
 from typing import Optional, Tuple
 
 # Set up logger
@@ -83,18 +83,36 @@ def convert_audio_to_wav(input_file: str, output_dir: Optional[str] = None) -> O
         
         # Run ffmpeg to convert the file
         logger.info(f"Converting {input_file} to WAV format")
-        print(f"Converting {os.path.basename(input_file)} to WAV format for compatibility...")
+        print(f"Converting {os.path.basename(input_file)} to WAV format for compatibility...")        # Use subprocess to call ffmpeg with proper security
         
-        # Use subprocess to call ffmpeg
-        result = subprocess.run([
+        # Validate input file path exists and is a file
+        if not os.path.isfile(input_file):
+            logger.error(f"Input file does not exist or is not a file: {input_file}")
+            return None
+            
+        # Build command with validated arguments
+        command = [
             'ffmpeg', 
-            '-i', input_file,  # Input file
+            '-i', os.path.abspath(input_file),  # Use absolute path for security
             '-acodec', 'pcm_s16le',  # Convert to PCM WAV
             '-ar', '44100',  # Sample rate
             '-ac', '1',  # Mono audio
             '-y',  # Overwrite output file if it exists
-            output_file
-        ], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding='utf-8')
+            os.path.abspath(output_file)  # Use absolute path for security
+        ]
+        
+        # Log the command for debugging (with escaped arguments for safe logging)
+        escaped_command = [shlex.quote(arg) for arg in command]
+        logger.info(f"Executing: {' '.join(escaped_command)}")
+        
+        result = subprocess.run(
+            command, 
+            stdout=subprocess.PIPE, 
+            stderr=subprocess.PIPE, 
+            text=True, 
+            encoding='utf-8',
+            timeout=300  # 5 minute timeout for security
+        )
         
         if result.returncode != 0:
             logger.error(f"Error converting audio: {result.stderr}")

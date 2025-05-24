@@ -17,16 +17,18 @@ import logging
 import argparse
 import time
 from datetime import datetime
-from typing import List, Dict, Tuple, Optional, Union, Any, Callable
+from typing import List, Dict, Tuple, Optional
 import warnings
 import requests
-import urllib.parse
 import markdown  # New import for markdown to HTML conversion
 import torch
-import torchaudio
-import time
 import hashlib
 import uuid
+
+# Initialize availability flags as module-level variables
+openai_available = False
+feedparser_available = False
+tqdm_available = False
 
 # Onderdruk specifieke waarschuwingen
 warnings.filterwarnings("ignore", message="The MPEG_LAYER_III subtype is unknown to TorchAudio")
@@ -58,27 +60,30 @@ except ImportError:
 
 try:
     from openai import OpenAI
-    OPENAI_AVAILABLE = True
     from openai import BadRequestError
+    openai_available = True
 except ImportError:
     logging.warning("openai not installed. Summarization and blog generation will not be available.")
-    OPENAI_AVAILABLE = False
+    # Create fallback class for BadRequestError
     class BadRequestError(Exception):
         pass
 
+# Custom security exception
+class SecurityError(Exception):
+    """Raised when a security-related validation fails"""
+    pass
+
 try:
     import feedparser
-    FEEDPARSER_AVAILABLE = True
+    feedparser_available = True
 except ImportError:
     logging.warning("feedparser not installed. RSS feed parsing will not be available.")
-    FEEDPARSER_AVAILABLE = False
 
 try:
     from tqdm import tqdm
-    TQDM_AVAILABLE = True
+    tqdm_available = True
 except ImportError:
     logging.warning("tqdm not installed. Progress bars will not be available.")
-    TQDM_AVAILABLE = False
     
     # Simple fallback for tqdm if not available
     class tqdm:
@@ -143,10 +148,8 @@ def setup_logging():
     logger.addHandler(file_handler)
     
     # Console handler with proper Unicode handling
-    try:
-        # Configure console for UTF-8
+    try:        # Configure console for UTF-8
         if sys.platform == 'win32':
-            import locale
             # Use error handler that replaces problematic characters
             console_handler = logging.StreamHandler()
             console_handler.setFormatter(logging.Formatter(log_format))
@@ -316,18 +319,138 @@ def get_huggingface_token(ask_if_missing: bool = True) -> Optional[str]:
 # ==================== API FUNCTIONS ====================
 def ensure_api_key() -> str:
     """
-    Ensure that the OpenAI API key is available.
+    Ensure that the OpenAI API key is available and valid.
     
     Returns:
-        str: The API key if available
+        str: The API key if available and valid
         
     Raises:
-        ValueError: If the API key is not set
+        ValueError: If the API key is not set or invalid
+        SecurityError: If the API key format is suspicious
     """
     api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
-        raise ValueError("OPENAI_API_KEY environment variable is not set")
+        raise ValueError(
+            "OPENAI_API_KEY environment variable is not set. "
+            "Please set your OpenAI API key in the .env file or environment variables."
+        )
+    
+    # Security: Basic validation of API key format
+    api_key = api_key.strip()
+    if len(api_key) < 20:
+        raise ValueError("OPENAI_API_KEY appears to be too short to be valid")
+    
+    # Security: Check for suspicious characters that could indicate injection
+    if any(char in api_key for char in [';', '&', '|', '`', '$', '\n', '\r']):
+        raise SecurityError("OPENAI_API_KEY contains suspicious characters")
+    
+    # Security: Basic format check for OpenAI API keys (should start with 'sk-')
+    if not api_key.startswith('sk-'):
+        logging.warning("OPENAI_API_KEY doesn't start with 'sk-', this may not be a valid OpenAI API key")
+    
     return api_key
+
+def validate_file_path(file_path: str, must_exist: bool = True, check_readable: bool = True) -> str:
+    """
+    Validate and sanitize a file path for security.
+    
+    Args:
+        file_path: The file path to validate
+        must_exist: Whether the file must exist
+        check_readable: Whether to check if the file is readable
+        
+    Returns:
+        The validated and normalized file path
+        
+    Raises:
+        ValueError: If the file path is invalid
+        SecurityError: If the file path contains suspicious elements
+        FileNotFoundError: If the file must exist but doesn't
+    """
+    if not file_path or not isinstance(file_path, str):
+        raise ValueError("File path must be a non-empty string")
+    
+    # Security: Remove any null bytes
+    file_path = file_path.replace('\0', '')
+    
+    # Security: Check for path traversal attempts
+    if '..' in file_path or file_path.startswith('/') or '\\' in file_path.replace(os.sep, ''):
+        # Allow normal Windows paths but block suspicious ones
+        normalized = os.path.normpath(file_path)
+        if '..' in normalized:
+            raise SecurityError(f"Path traversal detected in file path: {file_path}")
+    
+    # Security: Check for suspicious characters
+    suspicious_chars = ['<', '>', '|', '*', '?', '"']
+    if any(char in file_path for char in suspicious_chars):
+        raise SecurityError(f"Suspicious characters detected in file path: {file_path}")
+    
+    # Normalize the path
+    normalized_path = os.path.normpath(os.path.abspath(file_path))
+    
+    # Check existence if required
+    if must_exist and not os.path.exists(normalized_path):
+        raise FileNotFoundError(f"File not found: {normalized_path}")
+    
+    # Check if it's actually a file (not a directory) if it exists
+    if os.path.exists(normalized_path) and not os.path.isfile(normalized_path):
+        raise ValueError(f"Path exists but is not a file: {normalized_path}")
+    
+    # Check readability if required
+    if check_readable and os.path.exists(normalized_path):
+        if not os.access(normalized_path, os.R_OK):
+            raise PermissionError(f"File is not readable: {normalized_path}")
+    
+    return normalized_path
+
+def validate_directory_path(dir_path: str, create_if_missing: bool = False) -> str:
+    """
+    Validate and sanitize a directory path for security.
+    
+    Args:
+        dir_path: The directory path to validate
+        create_if_missing: Whether to create the directory if it doesn't exist
+        
+    Returns:
+        The validated and normalized directory path
+        
+    Raises:
+        ValueError: If the directory path is invalid
+        SecurityError: If the directory path contains suspicious elements
+    """
+    if not dir_path or not isinstance(dir_path, str):
+        raise ValueError("Directory path must be a non-empty string")
+    
+    # Security: Remove any null bytes
+    dir_path = dir_path.replace('\0', '')
+    
+    # Security: Check for path traversal attempts
+    if '..' in dir_path:
+        normalized = os.path.normpath(dir_path)
+        if '..' in normalized:
+            raise SecurityError(f"Path traversal detected in directory path: {dir_path}")
+    
+    # Security: Check for suspicious characters
+    suspicious_chars = ['<', '>', '|', '*', '?', '"']
+    if any(char in dir_path for char in suspicious_chars):
+        raise SecurityError(f"Suspicious characters detected in directory path: {dir_path}")
+    
+    # Normalize the path
+    normalized_path = os.path.normpath(os.path.abspath(dir_path))
+    
+    # Create directory if requested and it doesn't exist
+    if create_if_missing and not os.path.exists(normalized_path):
+        try:
+            os.makedirs(normalized_path, exist_ok=True)
+            logging.info(f"Created directory: {normalized_path}")
+        except Exception as e:
+            raise PermissionError(f"Cannot create directory {normalized_path}: {str(e)}")
+    
+    # Check if it's actually a directory if it exists
+    if os.path.exists(normalized_path) and not os.path.isdir(normalized_path):
+        raise ValueError(f"Path exists but is not a directory: {normalized_path}")
+    
+    return normalized_path
 
 def read_prompt_file(prompt_file: str) -> Optional[str]:
     """
@@ -2536,18 +2659,36 @@ def perform_speaker_diarization(
     Speaker diarization using pyannote/speaker-diarization-3.1.
     Always converts input to 16kHz mono MP3 with ffmpeg, loads in memory, and runs diarization.
     """
-    import os, subprocess, torch, torchaudio
+    import os, subprocess, torch, torchaudio, shlex
     from pyannote.audio import Pipeline
+
+    # Security: Validate input file path exists and is a file
+    if not os.path.isfile(audio_file):
+        logging.error(f"Input file does not exist or is not a file: {audio_file}")
+        return None
 
     temp_mp3 = audio_file + ".ffmpeg.16k.mp3"
     try:
-        # Step 1: Always convert to 16kHz mono MP3
+        # Step 1: Always convert to 16kHz mono MP3 with secure subprocess handling
         ffmpeg_cmd = [
-            'ffmpeg', '-y', '-i', audio_file,
-            '-vn', '-acodec', 'libmp3lame', '-ar', '16000', '-ac', '1', temp_mp3
+            'ffmpeg', '-y', '-i', os.path.abspath(audio_file),  # Use absolute path for security
+            '-vn', '-acodec', 'libmp3lame', '-ar', '16000', '-ac', '1', 
+            os.path.abspath(temp_mp3)  # Use absolute path for security
         ]
-        result = subprocess.run(ffmpeg_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        
+        # Log the command for debugging (with escaped arguments for safe logging)
+        escaped_command = [shlex.quote(arg) for arg in ffmpeg_cmd]
+        logging.info(f"Executing diarization ffmpeg: {' '.join(escaped_command)}")
+        
+        result = subprocess.run(
+            ffmpeg_cmd, 
+            stdout=subprocess.PIPE, 
+            stderr=subprocess.PIPE, 
+            text=True,
+            timeout=600  # 10 minute timeout for security
+        )
         if result.returncode != 0:
+            logging.error(f"FFmpeg conversion failed for diarization: {result.stderr}")
             return None
         # Step 2: Load audio in memory
         waveform, sample_rate = torchaudio.load(temp_mp3)
@@ -2937,43 +3078,6 @@ def show_cuda_diagnostics():
             print(f"Fout: {e}")
     print("=======================\n")
 
-def setup_model(model_size: str) -> WhisperModel:
-    """
-    Set up the Whisper model.
-    
-    Args:
-        model_size: Size of the model to use
-        
-    Returns:
-        Initialized WhisperModel
-    """
-    logging.info(f"Loading Whisper model: {model_size}")
-    
-    # Toon CUDA diagnostiek
-    show_cuda_diagnostics()
-    
-    # Determine device based on available hardware
-    device = DEVICE
-    if device.lower() == "cuda" and not torch.cuda.is_available():
-        logging.warning("CUDA requested but not available, falling back to CPU")
-        device = "cpu"
-    
-    if device.lower() != "cpu":
-        logging.info(f"CUDA is available, using device: {device}")
-        logging.info(f"GPU: {torch.cuda.get_device_name(0)}")
-    else:
-        logging.info("Using CPU for transcription (slower)")
-        
-    # Initialize model
-    model = WhisperModel(
-        model_size,
-        device=device,
-        compute_type=COMPUTE_TYPE,
-        download_root=os.path.join(os.path.dirname(os.path.abspath(__file__)), "models", "whisper"),
-    )
-    logging.info(f"Successfully loaded {model_size} model")
-    return model
-
 def transcribe_audio(model: WhisperModel, audio_file: str, speaker_segments: Optional[List[Dict]] = None) -> Tuple[List, object]:
     """
     Transcribe audio file using the Whisper model.
@@ -3356,90 +3460,9 @@ def process_summary(transcript: str, output_summary_file: str, output_blog_file:
         
         return True
         
-    except Exception as e:
+    except Exception as e:        
         logging.error(f"Fout bij genereren van samenvatting/blog: {str(e)}")
         return False
-
-def convert_markdown_to_html(markdown_text: str) -> str:
-    """
-    Convert Markdown text to HTML.
-    
-    Args:
-        markdown_text: The Markdown text to convert
-        
-    Returns:
-        HTML formatted text
-    """
-    try:
-        html = markdown.markdown(
-            markdown_text,
-            extensions=['extra', 'codehilite', 'tables']
-        )
-        
-        # Voeg een eenvoudig HTML-sjabloon toe
-        html_template = f"""<!DOCTYPE html>
-<html lang="nl">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>WHYcast Blog Post</title>
-    <style>
-        body {{ font-family: Arial, sans-serif; line-height: 1.6; max-width: 800px; margin: 0 auto; padding: 20px; }}
-        h1, h2, h3 {{ color: #2c3e50; }}
-        a {{ color: #3498db; text-decoration: none; }}
-        a:hover {{ text-decoration: underline; }}
-        blockquote {{ border-left: 4px solid #ccc; padding-left: 15px; margin-left: 0; color: #555; }}
-        code {{ background-color: #f0f0f0; padding: 2px 4px; border-radius: 3px; font-family: monospace; }}
-        pre {{ background-color: #f0f0f0; padding: 10px; border-radius: 3px; overflow-x: auto; }}
-        img {{ max-width: 100%; height: auto; }}
-    </style>
-</head>
-<body>
-    {html}
-</body>
-</html>
-"""
-        return html_template
-    except Exception as e:
-        logging.error(f"Fout bij conversie naar HTML: {str(e)}")
-        return markdown_text  # Als fallback, geef de oorspronkelijke markdown terug
-
-def convert_markdown_to_wiki(markdown_text: str) -> str:
-    """
-    Convert Markdown text to MediaWiki markup format.
-    This is a simple conversion that handles common elements.
-    
-    Args:
-        markdown_text: The Markdown text to convert
-        
-    Returns:
-        MediaWiki formatted text
-    """
-    try:
-        wiki_text = markdown_text
-        
-        # Headers (Markdown: # Header, MediaWiki: == Header ==)
-        wiki_text = re.sub(r'^# (.*?)$', r'= \1 =', wiki_text, flags=re.MULTILINE)
-        wiki_text = re.sub(r'^## (.*?)$', r'== \1 ==', wiki_text, flags=re.MULTILINE)
-        wiki_text = re.sub(r'^### (.*?)$', r'=== \1 ===', wiki_text, flags=re.MULTILINE)
-        wiki_text = re.sub(r'^#### (.*?)$', r'==== \1 ====', wiki_text, flags=re.MULTILINE)
-        
-        # Bold (Markdown: **text**, MediaWiki: '''text''')
-        wiki_text = re.sub(r'\*\*(.*?)\*\*', r"'''\1'''", wiki_text)
-        
-        # Italic (Markdown: *text*, MediaWiki: ''text'')
-        wiki_text = re.sub(r'\*(.*?)\*', r"''\1''", wiki_text)
-        
-        # Lists (Markdown: - item, MediaWiki: * item)
-        wiki_text = re.sub(r'^- (.*?)$', r'* \1', wiki_text, flags=re.MULTILINE)
-        
-        # Links (Markdown: [text](url), MediaWiki: [url text])
-        wiki_text = re.sub(r'\[(.*?)\]\((.*?)\)', r'[\2 \1]', wiki_text)
-        
-        return wiki_text
-    except Exception as e:
-        logging.error(f"Fout bij conversie naar Wiki: {str(e)}")
-        return markdown_text  # Als fallback, geef de oorspronkelijke markdown terug
 
 def process_speaker_assignment_workflow(transcript: str, base_path: str) -> str:
     """
