@@ -17,7 +17,7 @@ import logging
 import argparse
 import time
 from datetime import datetime
-from typing import List, Dict, Tuple, Optional
+from typing import List, Dict, Tuple, Optional, Any
 import warnings
 import requests
 import markdown  # New import for markdown to HTML conversion
@@ -25,6 +25,7 @@ import torch
 import hashlib
 import uuid
 import feedparser
+import subprocess  # New import for subprocess
 
 # Initialize availability flags as module-level variables
 openai_available = False
@@ -1187,7 +1188,6 @@ def convert_existing_blogs(directory: str) -> None:
         
         try:
             # Read the blog content
-            with open(blog_file, 'r', encoding='utf-8') as f:
                 blog_content = f.read()
             
             # Convert to HTML and save
@@ -1391,8 +1391,8 @@ def transcribe_audio(model: WhisperModel, audio_file: str, speaker_segments: Opt
                 speaker_info = "[SPEAKER_UNKNOWN] "
         
         # Toon de tekst direct in de console
-        print(f"{format_timestamp(segment.start} {speaker_info}{text}")
-        
+        print(f"{format_timestamp(segment.start)} {speaker_info}{text}")
+
         # Pas de tekst toe in het segment
         segment.text = text
         return segment
@@ -1812,7 +1812,7 @@ def full_workflow(audio_file=None, output_dir=None, rssfeed=None):
     base_path = os.path.join(output_dir, base_name)
     # Step 2: Prepare audio
     print("[1/4] Preparing audio ...")
-    prepared_audio, is_temp = prepare_audio_for_diarization(str(audio_file))
+    prepared_audio = prepare_audio_for_diarization(str(audio_file))
     print(f"Prepared audio: {prepared_audio}")
     # Step 3: Transcribe audio (with diarization)
     print("[2/4] Running speaker diarization ...")
@@ -1833,13 +1833,77 @@ def full_workflow(audio_file=None, output_dir=None, rssfeed=None):
         process_transcript_workflow(transcript_text)
     else:
         print("Transcript text is empty, skipping transcript workflow.")
-    # Clean up temp audio if needed
-    if is_temp:
-        try:
-            from utils.audio_processor import cleanup_temp_audio
-            cleanup_temp_audio(prepared_audio)
-        except Exception as e:
-            print(f"Could not clean up temp audio: {e}")
+    # No temp audio cleanup needed
+
+def prepare_audio_for_diarization(audio_file: str, output_dir: Optional[str] = None) -> str:
+    """
+    Ensures the audio file is in a compatible mono 16kHz mp3 format for diarization/transcription.
+    Always creates a new file for diarization, never overwrites the original.
+    Returns the path to the prepared mp3 file.
+    """
+    import hashlib
+    if output_dir is None:
+        output_dir = os.path.dirname(audio_file)
+    os.makedirs(output_dir, exist_ok=True)
+    base, _ = os.path.splitext(os.path.basename(audio_file))
+    hash_suffix = hashlib.md5(audio_file.encode('utf-8')).hexdigest()[:8]
+    output_file = os.path.join(output_dir, f"{base}_mono16k_{hash_suffix}.mp3")
+
+    if os.path.exists(output_file):
+        logging.info(f"Prepared audio already exists: {output_file}")
+        return output_file
+
+    ffmpeg_cmd = [
+        'ffmpeg', '-y', '-i', audio_file, '-vn', '-ar', '16000', '-ac', '1', '-b:a', '192k', output_file
+    ]
+    try:
+        logging.info(f"Converting {audio_file} to mono 16kHz mp3 using ffmpeg (output: {output_file})...")
+        result = subprocess.run(ffmpeg_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+        logging.info(f"ffmpeg output: {result.stdout.decode(errors='ignore')}")
+        logging.info(f"Audio converted to {output_file}")
+        return output_file
+    except Exception as e:
+        logging.error(f"ffmpeg conversion failed: {e}\n{getattr(e, 'stderr', b'').decode(errors='ignore')}")
+        raise RuntimeError(f"Failed to convert {audio_file} to mono 16kHz mp3: {e}")
+
+
+def diarize_audio(audio_file: str, hf_token: Optional[str] = None) -> List[Dict[str, Any]]:
+    """
+    Perform speaker diarization on the given audio file using Hugging Face pyannote-audio v3.1 pipeline.
+    Returns a list of speaker segments: [{"start": float, "end": float, "speaker": str}]
+    """
+    try:
+        from pyannote.audio import Pipeline
+    except ImportError:
+        raise ImportError("pyannote.audio is not installed. Please install it with 'pip install pyannote-audio==3.1.*'")
+
+    # Get Hugging Face token from argument, env, or prompt
+    if hf_token is None:
+        hf_token = os.environ.get("HUGGINGFACE_TOKEN")
+    if not hf_token:
+        print("Warning: No Hugging Face token found. Set HUGGINGFACE_TOKEN env variable or pass as argument.")
+
+    # Use the default pyannote/speaker-diarization pipeline (v3.1)
+    try:
+        pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization-3.1", use_auth_token=hf_token)
+    except Exception as e:
+        raise RuntimeError(f"Failed to load pyannote-audio pipeline: {e}")
+
+    try:
+        diarization = pipeline(audio_file)
+    except Exception as e:
+        raise RuntimeError(f"Diarization failed: {e}")
+
+    # Convert pyannote output to list of dicts
+    speaker_segments: List[Dict[str, Any]] = []
+    for turn, _, speaker in diarization.itertracks(yield_label=True):
+        segment = {
+            "start": float(turn.start),
+            "end": float(turn.end),
+            "speaker": str(speaker)
+        }
+        speaker_segments.append(segment)
+    return speaker_segments
 
 
 
@@ -1861,4 +1925,3 @@ if __name__ == "__main__":
         output_dir=args.output_dir,
         rssfeed=None  # Optionally add CLI support for RSS feed if needed
     )
-
