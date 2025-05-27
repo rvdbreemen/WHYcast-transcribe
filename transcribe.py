@@ -24,6 +24,7 @@ import markdown  # New import for markdown to HTML conversion
 import torch
 import hashlib
 import uuid
+import feedparser
 
 # Initialize availability flags as module-level variables
 openai_available = False
@@ -1390,7 +1391,7 @@ def transcribe_audio(model: WhisperModel, audio_file: str, speaker_segments: Opt
                 speaker_info = "[SPEAKER_UNKNOWN] "
         
         # Toon de tekst direct in de console
-        print(f"{format_timestamp(segment.start, segment.end)} {speaker_info}{text}")
+        print(f"{format_timestamp(segment.start} {speaker_info}{text}")
         
         # Pas de tekst toe in het segment
         segment.text = text
@@ -1491,7 +1492,7 @@ def write_transcript_files(segments: List, output_file: str, output_file_timesta
             segment_duration = end - start
             
             # Format timestamp for the timestamped version
-            timestamp = format_timestamp(start, end)
+            timestamp = format_timestamp(start)
             
             # Get speaker info if available
             speaker_info = ""
@@ -1731,6 +1732,53 @@ def process_speaker_assignment_workflow(transcript: str, base_path: str) -> str:
     with open(wiki_path, "w", encoding="utf-8") as f:
         f.write(convert_markdown_to_wiki(full_result))
     return txt_path
+
+
+
+def podcast_fetching_workflow(rssfeed, output_dir):
+    """
+    Fetch the latest episode from the RSS feed and download the audio file.
+    Returns the path to the downloaded audio file, or None if not found.
+    """
+    feed = feedparser.parse(rssfeed)
+    if not feed.entries:
+        print("No episodes found in RSS feed.")
+        return None
+
+    latest = feed.entries[0]
+    # Try to find the audio link
+    audio_url = None
+    for link in latest.get('links', []):
+        if isinstance(link, dict) and str(link.get('type', '')).startswith('audio'):
+            audio_url = link.get('href')
+            break
+    if not audio_url or not isinstance(audio_url, str):
+        print("No audio file found for the latest episode.")
+        return None
+
+    # Create output directory if needed
+    os.makedirs(output_dir, exist_ok=True)
+    # Use episode title as filename, sanitized
+    safe_title = "".join(c if c.isalnum() or c in "._-" else "_" for c in latest.get('title', 'episode'))
+    audio_ext = os.path.splitext(audio_url)[-1].split('?')[0] if '.' in os.path.basename(audio_url) else '.mp3'
+    audio_file = os.path.join(output_dir, f"{safe_title}{audio_ext}")
+
+    if not os.path.exists(audio_file):
+        print(f"Downloading latest episode to {audio_file} ...")
+        try:
+            with requests.get(audio_url, stream=True) as r:
+                r.raise_for_status()
+                with open(audio_file, 'wb') as f:
+                    for chunk in r.iter_content(chunk_size=8192):
+                        f.write(chunk)
+            print(f"Downloaded: {audio_file}")
+        except Exception as e:
+            print(f"Failed to download episode: {e}")
+            return None
+    else:
+        print(f"Audio file already exists: {audio_file}")
+    return audio_file
+
 
 
 def full_workflow(audio_file=None, output_dir=None, rssfeed=None):
