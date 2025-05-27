@@ -24,9 +24,6 @@ from config import (
     USE_CUSTOM_VOCABULARY, VOCABULARY_FILE
 )
 
-# Import from check_cuda for diagnostics
-from utils.check_cuda import show_cuda_diagnostics
-
 
 def get_audio_duration(audio_file: str) -> float:
     """
@@ -112,9 +109,6 @@ def setup_model(model_size: str = MODEL_SIZE) -> "WhisperModel":
             num_workers = 8  # More workers for CPU
             compute_type = "int8"
             logging.warning("CUDA is not available - using CPU which may be significantly slower")
-        
-        # Show CUDA diagnostics
-        show_cuda_diagnostics()
         
         # Create model with optimized parameters
         models_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models", "whisper")

@@ -741,7 +741,6 @@ def process_large_text_in_chunks(text: str, prompt: str, model_name: str, client
     call_id = str(uuid.uuid4())
     logging.info(f"[OpenAI Chunked Call {call_id}] Parent: {parent_call_id} | Model: {model_name} | Chunks incoming")
     print(f"[OpenAI Chunked Call {call_id}] Parent: {parent_call_id} | Prompt: {prompt.strip().splitlines()[0] if prompt.strip().splitlines() else prompt.strip()}")
-    # ...existing code...
     is_o_series_model = model_name.startswith("o") and not model_name.startswith("gpt")
     token_param = "max_completion_tokens" if is_o_series_model else "max_tokens"
     token_limit = MAX_TOKENS * 2
@@ -910,165 +909,6 @@ def history_step(cleaned: str) -> Optional[str]:
     logging.info("Step 6: Generating history extraction...")
     return process_with_openai(cleaned, prompt, OPENAI_HISTORY_MODEL, max_tokens=MAX_TOKENS * 2)
 
-def write_workflow_outputs(results: Dict[str, str], output_base: str) -> None:
-    """
-    Write the outputs from the workflow to files.
-    
-    Args:
-        results: Dictionary with cleaned_transcript, summary, blog, and history_extract
-        output_base: Base path for output files
-    """
-    # Write cleaned transcript
-    if 'cleaned_transcript' in results and results['cleaned_transcript']:
-        cleaned_path = f"{output_base}_cleaned.txt"
-        with open(cleaned_path, "w", encoding="utf-8") as f:
-            f.write(results['cleaned_transcript'])
-        logging.info(f"Cleaned transcript saved to: {cleaned_path}")
-    
-    # Write summary
-    if 'summary' in results and results['summary']:
-        summary_path = f"{output_base}_summary.txt"
-        with open(summary_path, "w", encoding="utf-8") as f:
-            f.write(results['summary'])
-        logging.info(f"Summary saved to: {summary_path}")
-    
-    # Write blog post
-    if 'blog' in results and results['blog']:
-        # Get base filename without any special suffixes
-        base_filename = os.path.basename(output_base)
-        output_dir = os.path.dirname(output_base)
-        blog_path = os.path.join(output_dir, f"{base_filename}_blog.txt")
-        
-        with open(blog_path, "w", encoding="utf-8") as f:
-            f.write(results['blog'])
-        logging.info(f"Blog post saved to: {blog_path}")
-        
-        # Generate and write HTML version
-        html_content = convert_markdown_to_html(results['blog'])
-        html_path = os.path.join(output_dir, f"{base_filename}_blog.html")
-        with open(html_path, "w", encoding="utf-8") as f:
-            f.write(html_content)
-        logging.info(f"HTML blog post saved to: {html_path}")
-        
-        # Generate and write Wiki version
-        wiki_content = convert_markdown_to_wiki(results['blog'])
-        wiki_path = os.path.join(output_dir, f"{base_filename}_blog.wiki")
-        with open(wiki_path, "w", encoding="utf-8") as f:
-            f.write(wiki_content)
-        logging.info(f"Wiki blog post saved to: {wiki_path}")
-        
-    # Write blog post
-    if 'blog_alt1' in results and results['blog_alt1']:
-        # Get base filename without any special suffixes
-        base_filename = os.path.basename(output_base)
-        output_dir = os.path.dirname(output_base)
-        blog_alt1_path = os.path.join(output_dir, f"{base_filename}_blog_alt1.txt")
-        
-        with open(blog_alt1_path, "w", encoding="utf-8") as f:
-            f.write(results['blog_alt1'])
-        logging.info(f"Blog alt1 post saved to: {blog_alt1_path}")
-        
-        # Generate and write HTML version
-        html_content = convert_markdown_to_html(results['blog_alt1'])
-        html_path = os.path.join(output_dir, f"{base_filename}_blog_alt1.html")
-        with open(html_path, "w", encoding="utf-8") as f:
-            f.write(html_content)
-        logging.info(f"HTML blog alt 1post saved to: {html_path}")
-        
-        # Generate and write Wiki version
-        wiki_content = convert_markdown_to_wiki(results['blog_alt1'])
-        wiki_path = os.path.join(output_dir, f"{base_filename}_blog_alt1.wiki")
-        with open(wiki_path, "w", encoding="utf-8") as f:
-            f.write(wiki_content)
-        logging.info(f"Wiki blog alt1 post saved to: {wiki_path}")
-    
-    # Write history extraction
-    if 'history_extract' in results and results['history_extract']:
-        base_filename = os.path.basename(output_base)
-        output_dir = os.path.dirname(output_base)
-        history_path = os.path.join(output_dir, f"{base_filename}_history.txt")
-        with open(history_path, "w", encoding="utf-8") as f:
-            f.write(results['history_extract'])
-        logging.info(f"History extraction saved to: {history_path}")
-        
-        # Generate and write HTML version
-        html_content = convert_markdown_to_html(results['history_extract'])
-        html_path = os.path.join(output_dir, f"{base_filename}_history.html")
-        with open(html_path, "w", encoding="utf-8") as f:
-            f.write(html_content)
-        logging.info(f"HTML history extraction saved to: {html_path}")
-        
-        # Generate and write Wiki version
-        wiki_content = convert_markdown_to_wiki(results['history_extract'])
-        wiki_path = os.path.join(output_dir, f"{base_filename}_history.wiki")
-        with open(wiki_path, "w", encoding="utf-8") as f:
-            f.write(wiki_content)
-        logging.info(f"Wiki history extraction saved to: {wiki_path}")
-    
-    # Step 6: Speaker assignment
-    speaker_prompt = read_prompt_file(PROMPT_SPEAKER_ASSIGN_FILE)
-    if USE_SPEAKER_DIARIZATION and speaker_prompt:
-        logging.info("Step 6: Assigning speaker names...")
-        try:
-            ts_path = f"{output_base}_ts.txt"
-            with open(ts_path, 'r', encoding='utf-8') as f:
-                ts_text = f.read()
-            assignment = process_with_openai(ts_text, speaker_prompt, OPENAI_SPEAKER_MODEL)
-            if assignment:
-                assign_path = f"{output_base}_speaker_assignment.txt"
-                with open(assign_path, 'w', encoding='utf-8') as af:
-                    af.write(assignment)
-                logging.info(f"Speaker assignment saved to: {assign_path}")
-                results['speaker_assignment'] = assignment
-                # Generate HTML version of speaker assignment
-                html_content = convert_markdown_to_html(assignment)
-                html_path = f"{output_base}_speaker_assignment.html"
-                with open(html_path, "w", encoding="utf-8") as hf:
-                    hf.write(html_content)
-                logging.info(f"HTML speaker assignment saved to: {html_path}")
-                # Generate Wiki version of speaker assignment
-                wiki_content = convert_markdown_to_wiki(assignment)
-                wiki_path = f"{output_base}_speaker_assignment.wiki"
-                with open(wiki_path, "w", encoding="utf-8") as wf:
-                    wf.write(wiki_content)
-                logging.info(f"Wiki speaker assignment saved to: {wiki_path}")
-            else:
-                results['speaker_assignment'] = None
-                logging.warning("Speaker assignment returned no result.")
-        except Exception as e:
-            results['speaker_assignment'] = None
-            logging.error(f"Error during speaker assignment: {str(e)}")
-
-def generate_summary_and_blog(transcript: str, prompt: str) -> Optional[str]:
-    """
-    Generate summary and blog post using OpenAI API.
-    
-    Args:
-        transcript: The transcript text to summarize
-        prompt: Instructions for the AI
-        
-    Returns:
-        The generated summary and blog or None if there was an error
-    """
-    try:
-        estimated_tokens = estimate_token_count(transcript)
-        logging.info(f"Estimated transcript length: ~{estimated_tokens} tokens")
-        
-        # For very large transcripts, use recursive summarization
-        if USE_RECURSIVE_SUMMARIZATION and estimated_tokens > MAX_INPUT_TOKENS:
-            logging.info(f"Transcript is very large ({estimated_tokens} tokens), using recursive summarization")
-            return summarize_large_transcript(transcript, prompt)
-        
-        # Choose appropriate model based on length
-        model_to_use = choose_appropriate_model(transcript)
-        
-        # Use process_with_openai instead of direct API call for consistent handling
-        logging.info(f"Generating summary and blog using {model_to_use}...")
-        return process_with_openai(transcript, prompt, model_to_use, max_tokens=MAX_TOKENS)
-    
-    except Exception as e:
-        logging.error(f"Error generating summary: {str(e)}")
-        return None
 
 # ==================== VOCABULARY PROCESSING FUNCTIONS ====================
 # Dictionary to cache vocabulary mappings
@@ -2147,3 +1987,63 @@ if __name__ == "__main__":
             force=args.force, skip_vocabulary=args.skip_vocabulary,
             use_diarization=args.diarize if args.diarize else None if not args.no_diarize else False,
             min_speakers=args.min_speakers, max_speakers=args.max_speakers,            diarization_model=args.diarization_model)
+
+def full_workflow(audio_file=None, output_dir=None, rssfeed=None):
+    """
+    Complete workflow:
+    1. If no audio_file, fetch latest episode from RSS feed.
+    2. Prepare audio (normalize, etc).
+    3. Transcribe audio (with diarization if available).
+    4. Process transcript (summary, blog, etc).
+    Args:
+        audio_file: Path to audio file or None
+        output_dir: Output directory (default: './podcasts' or from env)
+        rssfeed: RSS feed URL (default: from env or fallback)
+    """
+    import os
+    # Step 1: Fetch latest episode if needed
+    if not audio_file:
+        if not rssfeed:
+            rssfeed = os.environ.get("WHYCAST_RSSFEED", "https://whycast.podcast.audio/@whycast/feed.xml")
+        if not output_dir:
+            output_dir = os.environ.get("WHYCAST_OUTPUT_DIR", "./podcasts")
+        print(f"No audio file provided. Fetching latest episode from {rssfeed} ...")
+        audio_file = podcast_fetching_workflow(rssfeed, output_dir)
+        if not audio_file:
+            print("No episode could be fetched from the feed.")
+            return
+    else:
+        if not output_dir:
+            output_dir = os.environ.get("WHYCAST_OUTPUT_DIR", "./podcasts")
+    base_name = os.path.splitext(os.path.basename(str(audio_file)))[0]
+    base_path = os.path.join(output_dir, base_name)
+    # Step 2: Prepare audio
+    print("[1/4] Preparing audio ...")
+    prepared_audio, is_temp = prepare_audio_for_diarization(str(audio_file))
+    print(f"Prepared audio: {prepared_audio}")
+    # Step 3: Transcribe audio (with diarization)
+    print("[2/4] Running speaker diarization ...")
+    try:
+        speaker_segments = diarize_audio(prepared_audio)
+        print(f"Diarization complete. Found {len(speaker_segments)} speaker segments.")
+    except Exception as e:
+        print(f"Diarization failed: {e}")
+        speaker_segments = None
+    print("[3/4] Transcribing audio ...")
+    model = setup_model()
+    segments, _ = transcribe_audio(model, prepared_audio, speaker_segments=speaker_segments)
+    transcript_text = write_transcript_files(segments, f"{base_path}_transcript.txt", f"{base_path}_ts.txt", speaker_segments=speaker_segments)
+    print(f"Transcription complete. Transcript saved to {base_path}_transcript.txt")
+    # Step 4: Process transcript
+    print("[4/4] Processing transcript workflow (summary, blog, history, etc.) ...")
+    if transcript_text:
+        process_transcript_workflow(transcript_text)
+    else:
+        print("Transcript text is empty, skipping transcript workflow.")
+    # Clean up temp audio if needed
+    if is_temp:
+        try:
+            from utils.audio_processor import cleanup_temp_audio
+            cleanup_temp_audio(prepared_audio)
+        except Exception as e:
+            print(f"Could not clean up temp audio: {e}")
