@@ -1348,6 +1348,18 @@ def transcribe_audio(model: WhisperModel, audio_file: str, speaker_segments: Opt
     # Bijhouden van huidige spreker om herhalingen te vermijden
     current_speaker = None
     
+    # Definieer functie om de spreker te bepalen op basis van diarization segments
+    def find_speaker_for_segment(segment_middle, speaker_segments):
+        if not speaker_segments:
+            return None
+        # speaker_segments is expected to be a pyannote Annotation
+        # Find the segment that contains segment_middle
+        for speech_turn in speaker_segments.itertracks(yield_label=True):
+            segment, _, label = speech_turn
+            if segment.start <= segment_middle <= segment.end:
+                return label
+        return None
+
     # Definieer functie voor live output
     def process_segment(segment):
         text = segment.text
@@ -1366,9 +1378,7 @@ def transcribe_audio(model: WhisperModel, audio_file: str, speaker_segments: Opt
         if speaker_segments:
             # Gebruik middelpunt van het segment om spreker te bepalen
             segment_middle = (segment.start + segment.end) / 2
-            # Import get_speaker_for_segment from utils.diarize
-            from utils.diarize import get_speaker_for_segment
-            speaker = get_speaker_for_segment(segment_middle, speaker_segments)
+            speaker = find_speaker_for_segment(segment_middle, speaker_segments)
             
             # Altijd speaker tonen, niet alleen bij wisseling
             if speaker:
@@ -1454,96 +1464,67 @@ def write_transcript_files(segments: List, output_file: str, output_file_timesta
     Returns:
         Full transcript text
     """
+    # Local function to find speaker for a segment midpoint
+    def find_speaker_for_segment(segment_middle, speaker_segments):
+        if not speaker_segments:
+            return None
+        for speech_turn in speaker_segments.itertracks(yield_label=True):
+            segment, _, label = speech_turn
+            if segment.start <= segment_middle <= segment.end:
+                return label
+        return None
+
     try:
         # Prepare for writing the transcripts
         full_transcript = []
         timestamped_transcript = []
-        
         # Track current speaker to avoid repeating speaker tags for consecutive segments
         current_speaker = None
-        
         print(f"\nTranscriptie bestanden aanmaken...")
         print(f"- Schoon transcript: {os.path.basename(output_file)}")
         print(f"- Tijdgemarkeerd transcript: {os.path.basename(output_file_timestamped)}")
-        
         # Process each segment from Whisper
         for i, segment in enumerate(tqdm(segments, desc="Transcriptie verwerken", unit="segment")):
             start = segment.start
             end = segment.end
             text = segment.text.strip()
-            
             if not text:  # Skip empty segments
                 continue
-            
             # Calculate segment duration for better speaker detection of short segments
             segment_duration = end - start
-            
             # Format timestamp for the timestamped version
             timestamp = format_timestamp(start)
-            
             # Get speaker info if available
             speaker_info = ""
             speaker_prefix = ""
             if speaker_segments:
-                # Use middle of segment to determine speaker with improved context-awareness
+                # Use middle of segment to determine speaker
                 middle_time = (start + end) / 2
-                # Pass segment duration to the improved function
-                speaker = get_speaker_for_segment(middle_time, speaker_segments, segment_duration=segment_duration)
-                
+                speaker = find_speaker_for_segment(middle_time, speaker_segments)
                 if speaker:
-                    # Check if this is a short utterance that should inherit speaker from context
                     is_short_utterance = segment_duration < 1.0 and len(text.split()) <= 5
-                    
                     # For very short utterances with no clear speaker, try to maintain speaker continuity
                     if is_short_utterance and not speaker and current_speaker:
-                        # Check if there's another segment right after this one
-                        if i < len(segments) - 1:
-                            next_segment = segments[i + 1]
-                            if next_segment.start - end < 1.0:  # If next segment starts within 1 second
-                                next_middle = (next_segment.start + next_segment.end) / 2
-                                next_speaker = get_speaker_for_segment(next_middle, speaker_segments)
-                                # If next segment has same speaker as current, keep it for continuity
-                                if next_speaker == current_speaker:
-                                    speaker = current_speaker
-                    
+                        speaker = current_speaker
                     if speaker:
                         speaker_info = f"[{speaker}] "
                         speaker_prefix = f"[{speaker}] "
                         current_speaker = speaker
                     else:
-                        # More aggressive search for a speaker with a wider context window
-                        speaker = get_speaker_for_segment(middle_time, speaker_segments, 
-                                                         segment_duration=segment_duration, 
-                                                         context_window=2.0)
-                        if speaker:
-                            speaker_info = f"[{speaker}] "
-                            speaker_prefix = f"[{speaker}] "
-                            current_speaker = speaker
-                        else:
-                            # Only mark as unknown if we are sure it's not part of previous speaker's utterance
-                            if current_speaker and segment_duration < 1.5 and start - prev_end < 1.0:
-                                # This is likely a continuation from previous speaker
-                                speaker_info = f"[{current_speaker}] "
-                                speaker_prefix = f"[{current_speaker}] "
-                            else:
-                                speaker_info = "[SPEAKER_UNKNOWN] "
-                                speaker_prefix = "[SPEAKER_UNKNOWN] "
-                                current_speaker = None
+                        speaker_info = "[SPEAKER_UNKNOWN] "
+                        speaker_prefix = "[SPEAKER_UNKNOWN] "
+                        current_speaker = None
                 else:
                     speaker_info = "[SPEAKER_UNKNOWN] "
                     speaker_prefix = "[SPEAKER_UNKNOWN] "
                     current_speaker = None
-            
             # Add to transcript collections
             clean_line = f"{speaker_prefix}{text}"
             timestamped_line = f"{timestamp} {speaker_info}{text}"
-            
             full_transcript.append(clean_line)
             timestamped_transcript.append(timestamped_line)
-            
             # Store the end time for checking continuity in the next iteration
             prev_end = end
-        
         # Join all lines
         full_text = "\n".join(full_transcript)
         timestamped_text = "\n".join(timestamped_transcript)
@@ -1833,7 +1814,7 @@ def prepare_audio_for_diarization(audio_file: str, output_dir: Optional[str] = N
     Ensures the audio file is in a compatible mono 16kHz mp3 format for diarization/transcription.
     Always creates a new file for diarization, never overwrites the original.
     Returns the path to the prepared mp3 file.
-    """
+       """
     import hashlib
     if output_dir is None:
         output_dir = os.path.dirname(audio_file)
