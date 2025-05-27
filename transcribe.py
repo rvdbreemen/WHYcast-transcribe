@@ -1378,6 +1378,8 @@ def transcribe_audio(model: WhisperModel, audio_file: str, speaker_segments: Opt
         if speaker_segments:
             # Gebruik middelpunt van het segment om spreker te bepalen
             segment_middle = (segment.start + segment.end) / 2
+            # Import get_speaker_for_segment from utils.diarize
+            from utils.diarize import get_speaker_for_segment
             speaker = get_speaker_for_segment(segment_middle, speaker_segments)
             
             # Altijd speaker tonen, niet alleen bij wisseling
@@ -1730,263 +1732,6 @@ def process_speaker_assignment_workflow(transcript: str, base_path: str) -> str:
         f.write(convert_markdown_to_wiki(full_result))
     return txt_path
 
-# ==================== ENTRY POINT ====================
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description=f'WHYcast Transcribe v{VERSION} - Transcribe audio files and generate summaries')
-    parser.add_argument('input', nargs='?', help='Path to the input audio file, directory, or glob pattern (default: current directory for regeneration options)')
-    parser.add_argument('--batch', '-b', action='store_true', help='Process multiple files matching pattern')
-    parser.add_argument('--all-mp3s', '-a', action='store_true', help='Process all MP3 files in directory')
-    parser.add_argument('--model', '-m', help='Model size (e.g., "large-v3", "medium", "small")')
-    parser.add_argument('--output-dir', '-o', help='Directory to save output files')
-    parser.add_argument('--skip-summary', '-s', action='store_true', help='Skip summary generation')
-    parser.add_argument('--force', '-f', action='store_true', help='Force regeneration of transcriptions even if they exist')
-    parser.add_argument('--verbose', '-v', action='store_true', help='Enable verbose logging')
-    parser.add_argument('--version', action='version', version=f'WHYcast Transcribe v{VERSION}')
-    parser.add_argument('--regenerate-summary', '-r', action='store_true', help='Regenerate summary and blog from existing transcript')
-    parser.add_argument('--regenerate-all-summaries', '-R', action='store_true', 
-                         help='Regenerate summaries for all transcripts in directory (uses current dir if no input)')
-    parser.add_argument('--regenerate-all-blogs', '-B', action='store_true', 
-                         help='Regenerate only blog posts for all transcripts in directory (uses current dir if no input)')
-    parser.add_argument('--regenerate-cleaned', '-rc', action='store_true', 
-                         help='Regenerate cleaned version from existing transcript')
-    parser.add_argument('--skip-vocabulary', action='store_true', help='Skip custom vocabulary corrections')
-    parser.add_argument('--regenerate-all-cleaned', action='store_true',
-                        help='Regenerate cleaned transcripts for all transcript files in directory (uses input dir or download-dir if not provided)')
-    parser.add_argument('--regenerate-full-workflow', action='store_true',
-                        help='Run a single workflow to generate cleaned, summary, blog, and blog_alt1 from existing transcript')
-    parser.add_argument('--regenerate-blogs-from-cleaned', action='store_true',
-                       help='Regenerate blog posts using only cleaned transcripts')
-    parser.add_argument('--regenerate-all-history', action='store_true',
-                       help='Generate history extractions for all transcript files in directory')
-    parser.add_argument('--generate-history', '-H', action='store_true',
-                       help='Generate history lesson extraction from an existing transcript file')
-    parser.add_argument('--regenerate-speaker-assignment', action='store_true',
-                       help='Regenerate speaker assignment from an existing transcript file')
-    
-    # Add podcast feed arguments
-    parser.add_argument('--feed', '-F', default="https://whycast.podcast.audio/@whycast/feed.xml", 
-                       help='RSS feed URL to download latest episode (default: WHYcast feed)')
-    parser.add_argument('--download-dir', '-D', default='podcasts', 
-                       help='Directory to save downloaded episodes (default: podcasts)')
-    parser.add_argument('--no-download', '-N', action='store_true', 
-                       help='Disable automatic podcast download')
-    
-    # Add new argument for processing all episodes
-    parser.add_argument('--all-episodes', '-A', action='store_true', 
-                       help='Process all episodes from the podcast feed instead of just the latest')
-    
-    # Add new argument for converting existing blogs to HTML and Wiki formats
-    parser.add_argument('--convert-blogs', '-C', action='store_true',
-                       help='Convert existing blog text files to HTML and Wiki formats')
-    
-    # Add speaker diarization arguments
-    parser.add_argument('--diarize', action='store_true',
-                       help='Enable speaker diarization (override config setting)')
-    parser.add_argument('--no-diarize', action='store_true',
-                       help='Disable speaker diarization (override config setting)')
-    parser.add_argument('--min-speakers', type=int,
-                       help=f'Minimum number of speakers for diarization (default: {DIARIZATION_MIN_SPEAKERS})')
-    parser.add_argument('--max-speakers', type=int,
-                       help=f'Maximum number of speakers for diarization (default: {DIARIZATION_MAX_SPEAKERS})')
-    parser.add_argument('--diarization-model', 
-                       help=f'Diarization model to use (default: {DIARIZATION_MODEL}, alt: {DIARIZATION_ALTERNATIVE_MODEL})')
-    parser.add_argument('--huggingface-token', type=str,
-                       help='Set HuggingFace API token for speaker diarization')
-    
-    args = parser.parse_args()
-    
-    logging.info(f"WHYcast Transcribe {VERSION} starting up")
-    
-    # Set logging level based on verbosity
-    if args.verbose:
-        # Alleen het hoofdprogramma logger op debug level zetten,
-        # niet alle externe modules
-        logging.getLogger('__main__').setLevel(logging.DEBUG)
-        logging.info("Verbose modus ingeschakeld: Extra logging voor hoofdprogramma")
-    else:
-        # Zorg dat alle loggers op INFO of hoger staan
-        for name in logging.root.manager.loggerDict:
-            if name.startswith('matplotlib') or name.startswith('PIL') or \
-               name.startswith('urllib3') or name.startswith('httpx') or \
-               name.startswith('huggingface_hub'):
-                logging.getLogger(name).setLevel(logging.WARNING)
-            else:
-                logging.getLogger(name).setLevel(logging.INFO)
-    
-    # Set HuggingFace token if provided
-    if args.huggingface_token:
-        set_huggingface_token(args.huggingface_token)
-        logging.info("HuggingFace token set from command line argument")
-    
-    # Check if we should convert blogs
-    if args.convert_blogs:
-        directory = args.input if args.input else args.download_dir
-        logging.info(f"Converting all blog files in directory: {directory}")
-        convert_existing_blogs(directory)
-        sys.exit(0)
-    
-    # Check if we should process all episodes
-    should_process_all_episodes = (args.all_episodes and 
-                                not args.no_download and
-                                not args.input and 
-                                not args.regenerate_all_summaries and
-                                not args.regenerate_all_blogs and
-                                not args.regenerate_blogs_from_cleaned and
-                                not args.regenerate_summary)
-    
-    if should_process_all_episodes:
-        feed_url = args.feed
-        download_dir = args.download_dir
-        
-        logging.info(f"Processing all episodes from {feed_url}")
-        process_all_episodes(feed_url, download_dir, model_size=args.model, 
-                           output_dir=args.output_dir, skip_summary=args.skip_summary, 
-                           force=args.force, use_diarization=args.diarize if args.diarize else None if not args.no_diarize else False,
-                           min_speakers=args.min_speakers, max_speakers=args.max_speakers,
-                           diarization_model=args.diarization_model)
-        sys.exit(0)
-    
-    # Determine if we should check the podcast feed for latest episode (original behavior)
-    should_check_feed = (not args.no_download and 
-                         not args.all_episodes and
-                         not args.input and 
-                         not args.regenerate_all_summaries and
-                         not args.regenerate_all_blogs and
-                         not args.regenerate_blogs_from_cleaned and
-                         not args.regenerate_summary)
-    
-    if should_check_feed:
-        feed_url = args.feed
-        download_dir = args.download_dir
-        
-        logging.info(f"Checking for the latest episode from {feed_url}")
-        episode_file = download_latest_episode(feed_url, download_dir, force=args.force)
-        
-        if (episode_file):
-            logging.info(f"Processing newly downloaded episode: {episode_file}")
-            main(episode_file, model_size=args.model, output_dir=args.output_dir, 
-                 skip_summary=args.skip_summary, force=args.force,
-                 use_diarization=args.diarize if args.diarize else None if not args.no_diarize else False,
-                 min_speakers=args.min_speakers, max_speakers=args.max_speakers,
-                 diarization_model=args.diarization_model)
-            sys.exit(0)
-        else:
-            logging.info("No new episode to download or process")
-            sys.exit(0)
-    
-    # Continue with existing functionality if input is provided or special mode is requested
-    if args.regenerate_blogs_from_cleaned:
-        directory = args.input if args.input else args.download_dir
-        logging.info(f"Regenerating blogs from cleaned transcripts in directory: {directory}")
-        regenerate_blogs_from_cleaned(directory)
-    elif args.regenerate_all_blogs:
-        # Allow regenerate_all_blogs without an input by using podcasts directory
-        directory = args.input if args.input else args.download_dir
-        logging.info(f"Regenerating all blogs in directory: {directory}")
-        regenerate_all_blogs(directory)
-    elif args.regenerate_all_summaries:
-        # Allow regenerate_all_summaries without an input by using podcasts directory
-        directory = args.input if args.input else args.download_dir
-        logging.info(f"Regenerating all summaries in directory: {directory}")
-        regenerate_all_summaries(directory)
-    elif args.regenerate_all_cleaned:
-        directory = args.input if args.input else args.download_dir
-        logging.info(f"Regenerating all cleaned transcripts in directory: {directory}")
-        regenerate_all_cleaned(directory)
-    elif not args.input:
-        parser.print_help()
-        sys.exit(1)
-    elif args.regenerate_cleaned:
-        if os.path.isdir(args.input):
-            logging.error("Please specify a transcript file when using --regenerate-cleaned, not a directory")
-            sys.exit(1)
-        elif not os.path.isfile(args.input):
-            logging.error(f"Input file does not exist: {args.input}")
-            sys.exit(1)
-        else:
-            success = regenerate_cleaned_transcript(args.input)
-            if not success:
-                sys.exit(1)
-    elif args.regenerate_summary:
-        if os.path.isdir(args.input):
-            logging.error("Please specify a transcript file when using --regenerate-summary, not a directory")
-            sys.exit(1)
-        elif not os.path.isfile(args.input):
-            logging.error(f"Input file does not exist: {args.input}")
-            sys.exit(1)
-        else:
-            main(args.input, regenerate_summary_only=True, skip_vocabulary=args.skip_vocabulary,
-                use_diarization=args.diarize if args.diarize else None if not args.no_diarize else False,
-                min_speakers=args.min_speakers, max_speakers=args.max_speakers,
-                diarization_model=args.diarization_model)
-    elif args.regenerate_full_workflow:
-        if not args.input:
-            logging.error("You must specify an input file or directory with --regenerate-full-workflow.")
-            sys.exit(1)
-        
-        if os.path.isdir(args.input):
-            # Process all transcripts in directory
-            logging.info(f"Running full workflow for all transcripts in directory: {args.input}")
-            regenerate_all_full_workflow(args.input)
-        else:
-            # Process single file
-            regenerate_full_workflow(args.input)
-        sys.exit(0)
-    elif args.all_mp3s:
-        process_all_mp3s(args.input, model_size=args.model, output_dir=args.output_dir, skip_summary=args.skip_summary,
-                        force=args.force, skip_vocabulary=args.skip_vocabulary,
-                        use_diarization=args.diarize if args.diarize else None if not args.no_diarize else False,
-                        min_speakers=args.min_speakers, max_speakers=args.max_speakers,
-                        diarization_model=args.diarization_model)
-    elif args.batch:
-        process_batch(args.input, model_size=args.model, output_dir=args.output_dir, skip_summary=args.skip_summary,
-                    force=args.force, skip_vocabulary=args.skip_vocabulary,
-                    use_diarization=args.diarize if args.diarize else None if not args.no_diarize else False,
-                    min_speakers=args.min_speakers, max_speakers=args.max_speakers,
-                    diarization_model=args.diarization_model)
-    elif args.regenerate_all_history:
-        directory = args.input if args.input else args.download_dir
-        logging.info(f"Generating history extractions for all transcripts in directory: {directory}")
-        regenerate_all_history_extractions(directory, force=args.force)
-    elif args.generate_history:
-        if os.path.isdir(args.input):
-            logging.error("Please specify a transcript file when using --generate-history, not a directory")
-            sys.exit(1)
-        elif not os.path.isfile(args.input):
-            logging.error(f"Input file does not exist: {args.input}")
-            sys.exit(1)
-        else:
-            success = generate_history_extraction(args.input, force=args.force)
-            if not success:
-                sys.exit(1)
-    elif args.regenerate_speaker_assignment:
-        if os.path.isdir(args.input):
-            logging.error("Please specify a transcript file when using --regenerate-speaker-assignment, not a directory")
-            sys.exit(1)
-        elif not os.path.isfile(args.input):
-            logging.error(f"Input file does not exist: {args.input}")
-            sys.exit(1)
-        else:
-            # Read transcript
-            with open(args.input, 'r', encoding='utf-8') as f:
-                transcript = f.read()
-            base = os.path.splitext(args.input)[0]
-            # Set output base for workflow
-            os.environ["WORKFLOW_OUTPUT_BASE"] = base
-            try:
-                txt_path = process_speaker_assignment_workflow(transcript, base)
-                logging.info(f"Speaker assignment generated: {txt_path}")
-                print(f"Speaker assignment generated: {txt_path}")
-            except Exception as e:
-                logging.error(f"Speaker assignment failed: {e}")
-                print(f"Speaker assignment failed: {e}")
-                sys.exit(1)
-            sys.exit(0)
-    else:
-        main(args.input, model_size=args.model, output_dir=args.output_dir, skip_summary=args.skip_summary,
-            force=args.force, skip_vocabulary=args.skip_vocabulary,
-            use_diarization=args.diarize if args.diarize else None if not args.no_diarize else False,
-            min_speakers=args.min_speakers, max_speakers=args.max_speakers,            diarization_model=args.diarization_model)
 
 def full_workflow(audio_file=None, output_dir=None, rssfeed=None):
     """
@@ -2047,3 +1792,25 @@ def full_workflow(audio_file=None, output_dir=None, rssfeed=None):
             cleanup_temp_audio(prepared_audio)
         except Exception as e:
             print(f"Could not clean up temp audio: {e}")
+
+
+
+# ==================== ENTRY POINT ====================
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=f'WHYcast Transcribe v{VERSION} - Transcribe audio files and generate summaries')
+    parser.add_argument('input', nargs='?', help='Path to the input audio file, directory, or glob pattern')
+    parser.add_argument('--output-dir', '-o', help='Directory to save output files', default='./podcasts')
+    parser.add_argument('--rssfeed', '-r', help='RSS feed URL to fetch latest episodes from', default=os.environ.get('WHYCAST_RSSFEED', 'https://whycast.podcast.audio/@whycast/feed.xml'))
+    parser.add_argument('--version', action='version', version=f'WHYcast Transcribe v{VERSION}')
+   
+
+    args = parser.parse_args()
+    logging.info(f"WHYcast Transcribe {VERSION} starting up")
+
+    # Always call the main workflow with parsed arguments
+    full_workflow(
+        audio_file=args.input,
+        output_dir=args.output_dir,
+        rssfeed=None  # Optionally add CLI support for RSS feed if needed
+    )
+

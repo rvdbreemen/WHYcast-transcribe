@@ -8,8 +8,6 @@ WHYcast Transcribe is a tool for transcribing audio files and generating summari
 - Generate summaries and blog posts from transcripts using OpenAI GPT models
 - Download the latest episode from a podcast RSS feed
 - Apply custom vocabulary corrections to transcripts
-- Batch processing of multiple audio files
-- Regenerate summaries from existing transcripts
 - Speaker diarization to identify different speakers
 - Timestamped transcripts for easy reference
 - Generate speaker assignment files (text, HTML, and Wiki)
@@ -42,98 +40,16 @@ WHYcast Transcribe is a tool for transcribing audio files and generating summari
 
 ## Usage
 
-### Transcribe an Audio File
-
 To transcribe an audio file and generate all outputs (cleaned transcript, summary, blog, and history extraction):
 ```sh
 python transcribe.py path/to/audio/file.mp3
 ```
-
-### Download and Transcribe the Latest Podcast Episode
 
 To download the latest episode from the default podcast feed and transcribe it:
 ```sh
 python transcribe.py
 ```
 
-### Batch Processing
-
-To process multiple files matching a pattern:
-```sh
-python transcribe.py --batch "path/to/files/*.mp3"
-```
-
-### Process All MP3 Files in a Directory
-
-To process all MP3 files in a directory:
-```sh
-python transcribe.py --all-mp3s path/to/directory
-```
-
-### Regenerate Specific Outputs
-
-To regenerate specific outputs from existing transcripts:
-
-```sh
-# Regenerate summary and blog from transcript
-python transcribe.py --regenerate-summary path/to/transcript.txt
-
-# Regenerate cleaned transcript
-python transcribe.py --regenerate-cleaned path/to/transcript.txt
-
-# Regenerate history extraction
-python transcribe.py --generate-history path/to/transcript.txt
-
-# Regenerate blog only
-python transcribe.py --regenerate-blog path/to/transcript.txt path/to/summary.txt
-```
-
-### Batch Regeneration Options
-
-To regenerate outputs for all transcripts in a directory:
-
-```sh
-# Regenerate summaries for all transcripts
-python transcribe.py --regenerate-all-summaries path/to/directory
-
-# Regenerate all cleaned transcripts
-python transcribe.py --regenerate-all-cleaned path/to/directory
-
-# Regenerate all blogs
-python transcribe.py --regenerate-all-blogs path/to/directory
-
-# Regenerate all history extractions
-python transcribe.py --regenerate-all-history path/to/directory
-
-# Force regeneration of history extractions even if they exist
-python transcribe.py --regenerate-all-history --force path/to/directory
-
-# Run full workflow on all transcripts
-python transcribe.py --regenerate-full-workflow path/to/directory
-```
-
-### Podcast Feed Options
-
-```sh
-# Download and process all episodes from feed
-python transcribe.py --all-episodes
-
-# Use specific RSS feed URL
-python transcribe.py --feed "https://your-podcast-feed.xml"
-
-# Download episodes to specific directory
-python transcribe.py --download-dir "path/to/save/episodes"
-
-# Skip automatic podcast download
-python transcribe.py --no-download
-```
-
-### Format Conversion
-
-```sh
-# Convert existing blog posts to HTML and Wiki formats
-python transcribe.py --convert-blogs path/to/directory
-```
 
 ## Output Files
 
@@ -151,40 +67,10 @@ For each processed audio file, the following outputs are generated:
 
 ## Command-Line Options
 
-- `--batch, -b`: Process multiple files matching pattern
-- `--all-mp3s, -a`: Process all MP3 files in directory
-- `--model, -m`: Model size (e.g., "large-v3", "medium", "small")
 - `--output-dir, -o`: Directory to save output files
-- `--skip-summary, -s`: Skip summary generation
-- `--force, -f`: Force regeneration of outputs even if they exist
-- `--verbose, -v`: Enable verbose logging
 - `--version`: Show the version of WHYcast Transcribe
-- `--regenerate-summary, -r`: Regenerate summary and blog from existing transcript
-- `--regenerate-cleaned, -rc`: Regenerate cleaned transcript from existing transcript
-- `--generate-history, -H`: Generate history extraction from transcript
-- `--regenerate-all-summaries, -R`: Regenerate summaries for all transcripts in directory
-- `--regenerate-all-blogs, -B`: Regenerate blogs for all transcripts in directory
-- `--regenerate-all-cleaned`: Regenerate cleaned transcripts for all files in directory
-- `--regenerate-all-history`: Generate history extractions for all transcripts in directory
-- `--regenerate-full-workflow`: Run full workflow on existing transcript files
-- `--regenerate-blogs-from-cleaned`: Regenerate blog posts using cleaned transcripts
-- `--feed, -F`: RSS feed URL to download episodes from
-- `--download-dir, -D`: Directory to save downloaded episodes
-- `--no-download, -N`: Disable automatic podcast download
-- `--all-episodes, -A`: Process all episodes from the podcast feed
 - `--convert-blogs, -C`: Convert existing blog files to HTML and Wiki formats
-- `--skip-vocabulary`: Skip custom vocabulary corrections
 
-## Speaker Diarization
-
-WHYcast Transcribe now supports speaker diarization which identifies and labels different speakers in the audio. This feature adds speaker labels like `[SPEAKER_00]` to the transcript, making it easier to follow conversations in podcasts or interviews.
-
-### Speaker Diarization Options
-
-- `--diarize`: Enable speaker diarization (override config setting)
-- `--no-diarize`: Disable speaker diarization (override config setting)
-- `--min-speakers`: Minimum number of speakers to identify (default: 1)
-- `--max-speakers`: Maximum number of speakers to identify (default: 10)
 
 ### Requirements for Speaker Diarization
 
