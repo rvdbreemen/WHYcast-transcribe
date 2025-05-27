@@ -1231,7 +1231,7 @@ def is_cuda_available() -> bool:
 def setup_model(model_size: str = MODEL_SIZE) -> WhisperModel:
     """
     Initialize and return the Whisper model.
-    Automatically uses CUDA if available with optimized settings.
+    Always uses CUDA (GPU) and float16 if available, otherwise falls back to CPU.
     
     Args:
         model_size: The model size to use
@@ -1240,65 +1240,52 @@ def setup_model(model_size: str = MODEL_SIZE) -> WhisperModel:
         The initialized WhisperModel
     """
     try:
-        import torch
-        
-        # Log system information
         logging.info("=== System Information ===")
         logging.info(f"Python version: {sys.version}")
         logging.info(f"PyTorch version: {torch.__version__}")
-        logging.info(f"CUDA available: {torch.cuda.is_available()}")
-        
-        if torch.cuda.is_available():
-            logging.info(f"CUDA version: {torch.version.cuda}")
+        cuda_available = torch.cuda.is_available()
+        logging.info(f"CUDA available: {cuda_available}")
+        if cuda_available:
+            cuda_version = getattr(torch.version, 'cuda', None)
+            if cuda_version:
+                logging.info(f"CUDA version: {cuda_version}")
+            else:
+                logging.info("CUDA version: unknown (torch.version.cuda not found)")
             logging.info(f"cuDNN version: {torch.backends.cudnn.version()}")
-            logging.info(f"GPU device count: {torch.cuda.device_count()}")
-            
-            for i in range(torch.cuda.device_count()):
-                props = torch.cuda.get_device_properties(i)
-                logging.info(f"GPU {i}: {props.name}")
-                logging.info(f"  Total memory: {props.total_memory / (1024**3):.2f} GB")
-                logging.info(f"  CUDA capability: {props.major}.{props.minor}")
-                logging.info(f"  Multi-processor count: {props.multi_processor_count}")
-            
-            # Optimize CUDA settings
+            device_count = torch.cuda.device_count()
+            logging.info(f"GPU device count: {device_count}")
+            for i in range(device_count):
+                logging.info(f"GPU {i}: {torch.cuda.get_device_name(i)}")
             torch.cuda.empty_cache()
             torch.backends.cudnn.benchmark = True
             torch.backends.cudnn.deterministic = False
-            
-            # Set number of workers based on GPU memory
-            gpu_mem = torch.cuda.get_device_properties(0).total_memory / (1024 ** 3)  # Convert to GB
-            if gpu_mem >= 16:  # High-end GPU
+            gpu_mem = torch.cuda.get_device_properties(0).total_memory / (1024 ** 3)  # GB
+            if gpu_mem >= 16:
+                num_workers = 8
+            elif gpu_mem >= 8:
                 num_workers = 4
-            elif gpu_mem >= 8:  # Mid-range GPU
+            else:
                 num_workers = 2
-            else:  # Lower-end GPU
-                num_workers = 1
-                
-            logging.info(f"Using {num_workers} workers for data loading")
             device = "cuda"
             compute_type = "float16"
+            logging.info(f"Whisper will use CUDA (GPU) with float16. num_workers={num_workers}")
         else:
             device = "cpu"
-            num_workers = 8  # More workers for CPU
+            num_workers = 8
             compute_type = "int8"
-            logging.warning("CUDA is not available - using CPU which may be significantly slower")
-        
-        # Create model with optimized parameters
+            logging.warning("CUDA is NOT available. Whisper will use CPU (slow). Consider installing a compatible GPU and CUDA drivers.")
         model = WhisperModel(
-            model_size, 
-            device=device, 
+            model_size,
+            device=device,
             compute_type=compute_type,
             cpu_threads=8 if device == "cpu" else 0,
             num_workers=num_workers
         )
-        
         logging.info(f"Initialized {model_size} model on {device} with compute type {compute_type}")
         return model
-        
     except Exception as e:
-        logging.error(f"Error setting up model: {str(e)}")
-        # Fallback to CPU if CUDA setup fails
-        logging.warning("Falling back to CPU model")
+        logging.error(f"Error setting up Whisper model: {str(e)}")
+        logging.warning("Falling back to CPU model (int8)")
         return WhisperModel(
             model_size,
             device="cpu",
@@ -1875,59 +1862,35 @@ def prepare_audio_for_diarization(audio_file: str, output_dir: Optional[str] = N
 
 def diarize_audio(waveform=None, sample_rate=None, audio_file_path=None, hf_token=None):
     """
-    Perform speaker diarization using pyannote-audio v3.1 in-memory workflow.
-    Accepts either a waveform/sample_rate (preferred) or a file path (legacy).
-    Returns the diarization Annotation object or None on failure.
+    Run speaker diarization using pyannote.audio 3.1 pipeline on GPU if available, using in-memory audio.
+    Args:
+        waveform: torch.Tensor of shape (channels, samples), optional
+        sample_rate: int, optional
+        audio_file_path: str, optional, used if waveform/sample_rate not provided
+        hf_token: str, Hugging Face access token
+    Returns:
+        diarization result (pyannote Annotation) or None on failure
     """
     try:
-        # Import dependencies here for robust error handling
         import torch
-        from pyannote.audio import Pipeline
         import torchaudio
-    except ImportError as e:
-        logging.error(f"Required dependency missing for diarization: {e}")
-        return None
-
-    # Load Hugging Face token if not provided
-    if not hf_token:
-        hf_token = get_huggingface_token(ask_if_missing=True)
-    if not hf_token:
-        logging.error("No Hugging Face token available for diarization.")
-        return None
-
-    # If waveform/sample_rate not provided, load from file
-    if waveform is None or sample_rate is None:
-        if not audio_file_path:
-            logging.error("No audio input provided for diarization.")
-            return None
-        try:
+        from pyannote.audio import Pipeline
+        if hf_token is None:
+            hf_token = os.environ.get('HUGGINGFACE_TOKEN')
+        pipeline = Pipeline.from_pretrained('pyannote/speaker-diarization-3.1', use_auth_token=hf_token)
+        if torch.cuda.is_available():
+            pipeline.to(torch.device('cuda'))
+            logging.info('pyannote pipeline using CUDA')
+        else:
+            logging.info('pyannote pipeline using CPU')
+        if waveform is None or sample_rate is None:
+            if audio_file_path is None:
+                raise ValueError('No audio data or file path provided for diarization.')
             waveform, sample_rate = torchaudio.load(audio_file_path)
-        except Exception as e:
-            logging.error(f"Failed to load audio file for diarization: {e}")
-            return None
-
-    # Ensure mono and 16kHz
-    if waveform.shape[0] > 1:
-        waveform = torch.mean(waveform, dim=0, keepdim=True)
-    if sample_rate != 16000:
-        try:
-            import torchaudio.transforms as T
-            resampler = T.Resample(orig_freq=sample_rate, new_freq=16000)
-            waveform = resampler(waveform)
-            sample_rate = 16000
-        except Exception as e:
-            logging.error(f"Failed to resample audio for diarization: {e}")
-            return None
-
-    try:
-        pipeline = Pipeline.from_pretrained(
-            "pyannote/speaker-diarization-3.1",
-            use_auth_token=hf_token
-        )
-        diarization = pipeline({"waveform": waveform, "sample_rate": sample_rate})
+        diarization = pipeline({'waveform': waveform, 'sample_rate': sample_rate})
         return diarization
     except Exception as e:
-        logging.error(f"Diarization failed: {e}")
+        logging.error(f'Diarization failed: {e}')
         return None
 
 
