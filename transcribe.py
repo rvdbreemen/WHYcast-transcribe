@@ -1817,10 +1817,16 @@ def full_workflow(audio_file=None, output_dir=None, rssfeed=None):
     # Step 3: Transcribe audio (with diarization)
     print("[2/4] Running speaker diarization ...")
     try:
-        speaker_segments = diarize_audio(prepared_audio)
-        print(f"Diarization complete. Found {len(speaker_segments)} speaker segments.")
+        import torchaudio
+        waveform, sample_rate = torchaudio.load(prepared_audio)
+        speaker_segments = diarize_audio(waveform=waveform, sample_rate=sample_rate)
+        if speaker_segments is not None:
+            print(f"Diarization complete. Found {len(speaker_segments)} speaker segments.")
+        else:
+            print("Diarization failed or returned no segments.")
     except Exception as e:
         print(f"Diarization failed: {e}")
+
         speaker_segments = None
     print("[3/4] Transcribing audio ...")
     model = setup_model()
@@ -1867,43 +1873,62 @@ def prepare_audio_for_diarization(audio_file: str, output_dir: Optional[str] = N
         raise RuntimeError(f"Failed to convert {audio_file} to mono 16kHz mp3: {e}")
 
 
-def diarize_audio(audio_file: str, hf_token: Optional[str] = None) -> List[Dict[str, Any]]:
+def diarize_audio(waveform=None, sample_rate=None, audio_file_path=None, hf_token=None):
     """
-    Perform speaker diarization on the given audio file using Hugging Face pyannote-audio v3.1 pipeline.
-    Returns a list of speaker segments: [{"start": float, "end": float, "speaker": str}]
+    Perform speaker diarization using pyannote-audio v3.1 in-memory workflow.
+    Accepts either a waveform/sample_rate (preferred) or a file path (legacy).
+    Returns the diarization Annotation object or None on failure.
     """
     try:
+        # Import dependencies here for robust error handling
+        import torch
         from pyannote.audio import Pipeline
-    except ImportError:
-        raise ImportError("pyannote.audio is not installed. Please install it with 'pip install pyannote-audio==3.1.*'")
+        import torchaudio
+    except ImportError as e:
+        logging.error(f"Required dependency missing for diarization: {e}")
+        return None
 
-    # Get Hugging Face token from argument, env, or prompt
-    if hf_token is None:
-        hf_token = os.environ.get("HUGGINGFACE_TOKEN")
+    # Load Hugging Face token if not provided
     if not hf_token:
-        print("Warning: No Hugging Face token found. Set HUGGINGFACE_TOKEN env variable or pass as argument.")
+        hf_token = get_huggingface_token(ask_if_missing=True)
+    if not hf_token:
+        logging.error("No Hugging Face token available for diarization.")
+        return None
 
-    # Use the default pyannote/speaker-diarization pipeline (v3.1)
+    # If waveform/sample_rate not provided, load from file
+    if waveform is None or sample_rate is None:
+        if not audio_file_path:
+            logging.error("No audio input provided for diarization.")
+            return None
+        try:
+            waveform, sample_rate = torchaudio.load(audio_file_path)
+        except Exception as e:
+            logging.error(f"Failed to load audio file for diarization: {e}")
+            return None
+
+    # Ensure mono and 16kHz
+    if waveform.shape[0] > 1:
+        waveform = torch.mean(waveform, dim=0, keepdim=True)
+    if sample_rate != 16000:
+        try:
+            import torchaudio.transforms as T
+            resampler = T.Resample(orig_freq=sample_rate, new_freq=16000)
+            waveform = resampler(waveform)
+            sample_rate = 16000
+        except Exception as e:
+            logging.error(f"Failed to resample audio for diarization: {e}")
+            return None
+
     try:
-        pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization-3.1", use_auth_token=hf_token)
+        pipeline = Pipeline.from_pretrained(
+            "pyannote/speaker-diarization-3.1",
+            use_auth_token=hf_token
+        )
+        diarization = pipeline({"waveform": waveform, "sample_rate": sample_rate})
+        return diarization
     except Exception as e:
-        raise RuntimeError(f"Failed to load pyannote-audio pipeline: {e}")
-
-    try:
-        diarization = pipeline(audio_file)
-    except Exception as e:
-        raise RuntimeError(f"Diarization failed: {e}")
-
-    # Convert pyannote output to list of dicts
-    speaker_segments: List[Dict[str, Any]] = []
-    for turn, _, speaker in diarization.itertracks(yield_label=True):
-        segment = {
-            "start": float(turn.start),
-            "end": float(turn.end),
-            "speaker": str(speaker)
-        }
-        speaker_segments.append(segment)
-    return speaker_segments
+        logging.error(f"Diarization failed: {e}")
+        return None
 
 
 
