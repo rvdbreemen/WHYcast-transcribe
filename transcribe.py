@@ -25,7 +25,7 @@ import torch
 import hashlib
 import uuid
 import feedparser
-import subprocess  # New import for subprocess
+import subprocess  # Ensure this is always imported at the top
 
 # Initialize availability flags as module-level variables
 openai_available = False
@@ -1088,9 +1088,8 @@ def convert_markdown_to_html(markdown_text: str) -> str:
 """
         return html_document
     except Exception as e:
-        logging.error(f"Error converting markdown to HTML: {str(e)}")
-        # Return basic HTML with the original text if conversion fails
-        return f"<!DOCTYPE html><html><body><pre>{markdown_text}</pre></body></html>"
+        logging.error(f"Error converting markdown to HTML: {e}")
+        return ""
 
 def convert_markdown_to_wiki(markdown_text: str) -> str:
     """
@@ -1147,8 +1146,8 @@ def convert_markdown_to_wiki(markdown_text: str) -> str:
         
         return wiki_text
     except Exception as e:
-        logging.error(f"Error converting markdown to Wiki markup: {str(e)}")
-        return markdown_text  # Return original text if conversion fails
+        logging.error(f"Error converting markdown to Wiki markup: {e}")
+        return ""  # Return original text if conversion fails
 
 def convert_existing_blogs(directory: str) -> None:
     """
@@ -1188,6 +1187,7 @@ def convert_existing_blogs(directory: str) -> None:
         
         try:
             # Read the blog content
+            with open(blog_file, "r", encoding="utf-8") as f:
                 blog_content = f.read()
             
             # Convert to HTML and save
