@@ -47,7 +47,7 @@ CORE PARAGRAPH FORMATION RULES:
 4. Replace all [SPEAKER_XX] tags with the correct name/role. Format as: [Speaker]: [Their words]
 5. Add a double line break between different speakers.
 6. Remove minor disfluencies (um, uh) but keep all meaningful content and speech patterns.
-7. Keep [crosstalk], [inaudible], [laughter], etc. in place. When you encounter [crosstalk], do your best to resolve which speaker is most likely speaking at that moment, using the flow and context of the conversation. Assign the [crosstalk] segment to the speaker with the highest probability based on conversational cues, but if truly uncertain, leave the tag as is.
+7. Keep [crosstalk], [inaudible], [laughter], etc. in place. When you encounter [crosstalk] or [unknown], do your best to resolve which speaker is most likely speaking at that moment, using the flow and context of the conversation. Assign the segment to the speaker with the highest probability based on conversational cues, but if truly uncertain, leave the tag as is.
 8. Do not paraphrase, drop, or add content. Use all text from the original transcription in the speaker-assigned version. Do not leave out, shorten, or improve the transcript by omitting any part.
 9. Only join lines or paragraphs that are from the same speaker. Never merge content from different speakers into a single paragraph.
 10. Do not shorten the transcript. Every word and utterance (except minor disfluencies) must be preserved exactly as in the original, with no omissions.
