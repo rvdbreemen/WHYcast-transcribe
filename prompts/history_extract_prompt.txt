@@ -42,7 +42,7 @@
         "Review for accuracy and coherence.",
         "Ensure every episode includes a historical section or note absence.",
         "Polish grammar, readability, and consistency.",
-        "Add semantic wiki category tags that are logical, add at least these two: [[Category:History]] [[Category:WHYcast]] [[Episode number::<episode number>]]. "
+        "Add semantic wiki category tags that are logical, add at least these two: [[Category:History]] [[Category:WHYcast]] [[Episode number::<episode number>| ]]. "
       ]
     }
   },
