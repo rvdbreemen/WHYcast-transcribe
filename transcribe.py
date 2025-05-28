@@ -795,7 +795,7 @@ def process_large_text_in_chunks(text: str, prompt: str, model_name: str, client
             return combined_text
     return combined_text
 
-def process_transcript_workflow(transcript: str) -> Dict[str, Optional[str]]:
+def process_transcript_workflow(transcript: str, output_basename: str = None, output_dir: str = None) -> Dict[str, Optional[str]]:
     """
     Orchestrate the full transcript processing workflow:
     1. Speaker assignment
@@ -807,7 +807,7 @@ def process_transcript_workflow(transcript: str) -> Dict[str, Optional[str]]:
     Returns a dictionary of all results.
     """
     results = {}
-    speaker_assigned_transcript = speaker_assignment_step(transcript)
+    speaker_assigned_transcript = speaker_assignment_step(transcript, output_basename, output_dir)
     results['speaker_assignment'] = speaker_assigned_transcript
     
     # Use speaker-assigned transcript for cleanup if available, otherwise use original
@@ -815,26 +815,36 @@ def process_transcript_workflow(transcript: str) -> Dict[str, Optional[str]]:
     cleaned = cleanup_step(transcript_for_cleanup)
     
     results['cleaned_transcript'] = cleaned
-    results['summary'] = summary_step(cleaned)
-    results['blog'] = blog_step(cleaned, results['summary'])
-    results['blog_alt1'] = alt_blog_step(cleaned, results['summary'])
-    results['history_extract'] = history_step(cleaned)
+    results['summary'] = summary_step(cleaned, output_basename, output_dir)
+    results['blog'] = blog_step(cleaned, results['summary'], output_basename, output_dir)
+    results['blog_alt1'] = alt_blog_step(cleaned, results['summary'], output_basename, output_dir)
+    results['history_extract'] = history_step(cleaned, output_basename, output_dir)
     return results
 
-def speaker_assignment_step(transcript: str) -> Optional[str]:
+def speaker_assignment_step(transcript: str, output_basename: str = None, output_dir: str = None) -> Optional[str]:
     """
     Step 1: Run speaker assignment on the raw transcript.
     Checks for diarization tags and, if present, uses the speaker assignment workflow
     to generate a transcript with speaker names. Returns the speaker-assigned transcript as a string,
     or None if not applicable or failed.
+    If output_basename and output_dir are provided, writes all formats.
     """
     logging.info("Step 1: Speaker assignment")
     try:
         if any("SPEAKER_" in line for line in transcript.splitlines()):
-            base_path = os.environ.get("WORKFLOW_OUTPUT_BASE", "output")
-            # Expect process_speaker_assignment_workflow to return the transcript string directly
-            speaker_assigned_transcript = process_speaker_assignment_workflow(transcript, base_path)
-            return speaker_assigned_transcript
+            prompt = read_prompt_file(os.path.join("prompts", "speaker_assignment_prompt.txt"))
+            if not prompt:
+                logging.warning("Speaker assignment prompt missing")
+                return None
+            chunks = split_into_chunks(transcript, max_chunk_size=MAX_INPUT_TOKENS * 4)
+            results = []
+            for chunk in chunks:
+                result = process_with_openai(chunk, prompt, OPENAI_SPEAKER_MODEL, max_tokens=MAX_TOKENS)
+                results.append(result)
+            full_result = "\n\n".join(results)
+            if output_basename and output_dir:
+                write_all_format(full_result, f"{output_basename}_speaker_assignment", output_dir)
+            return full_result
     except Exception as e:
         logging.error(f"Speaker assignment failed: {e}")
     return None
@@ -857,7 +867,7 @@ def cleanup_step(transcript: str) -> str:
         return transcript
     return cleaned
 
-def summary_step(cleaned: str) -> Optional[str]:
+def summary_step(cleaned: str, output_basename: str = None, output_dir: str = None) -> Optional[str]:
     """
     Step 3: Generate summary from the cleaned transcript.
     Uses a prompt to summarize the cleaned transcript. Returns the summary as a string, or None if failed.
@@ -867,9 +877,12 @@ def summary_step(cleaned: str) -> Optional[str]:
         logging.warning("Summary prompt missing, skipping summary")
         return None
     logging.info("Step 3: Generating summary...")
-    return process_with_openai(cleaned, prompt, choose_appropriate_model(cleaned))
+    summary = process_with_openai(cleaned, prompt, choose_appropriate_model(cleaned))
+    if summary and output_basename and output_dir:
+        write_all_format(summary, f"{output_basename}_summary", output_dir)
+    return summary
 
-def blog_step(cleaned: str, summary: Optional[str]) -> Optional[str]:
+def blog_step(cleaned: str, summary: Optional[str], output_basename: str = None, output_dir: str = None) -> Optional[str]:
     """
     Step 4: Generate blog post from the cleaned transcript and summary.
     Uses a prompt to generate a blog post. Returns the blog post as a string, or None if failed.
@@ -882,9 +895,12 @@ def blog_step(cleaned: str, summary: Optional[str]) -> Optional[str]:
         return None
     logging.info("Step 4: Generating blog post...")
     input_text = f"CLEANED TRANSCRIPT:\n{cleaned}\n\nSUMMARY:\n{summary}"
-    return process_with_openai(input_text, prompt, choose_appropriate_model(input_text), max_tokens=MAX_TOKENS * 2)
+    blog = process_with_openai(input_text, prompt, choose_appropriate_model(input_text), max_tokens=MAX_TOKENS * 2)
+    if blog and output_basename and output_dir:
+        write_all_format(blog, f"{output_basename}_blog", output_dir)
+    return blog
 
-def alt_blog_step(cleaned: str, summary: Optional[str]) -> Optional[str]:
+def alt_blog_step(cleaned: str, summary: Optional[str], output_basename: str = None, output_dir: str = None) -> Optional[str]:
     """
     Step 5: Generate alternative blog post from the cleaned transcript and summary.
     Uses an alternative prompt to generate a different style of blog post. Returns the alt blog post as a string, or None if failed.
@@ -897,9 +913,12 @@ def alt_blog_step(cleaned: str, summary: Optional[str]) -> Optional[str]:
         return None
     logging.info("Step 5: Generating alternative blog post...")
     input_text = f"CLEANED TRANSCRIPT:\n{cleaned}\n\nSUMMARY:\n{summary}"
-    return process_with_openai(input_text, prompt, choose_appropriate_model(input_text), max_tokens=MAX_TOKENS * 2)
+    alt_blog = process_with_openai(input_text, prompt, choose_appropriate_model(input_text), max_tokens=MAX_TOKENS * 2)
+    if alt_blog and output_basename and output_dir:
+        write_all_format(alt_blog, f"{output_basename}_blog_alt1", output_dir)
+    return alt_blog
 
-def history_step(cleaned: str) -> Optional[str]:
+def history_step(cleaned: str, output_basename: str = None, output_dir: str = None) -> Optional[str]:
     """
     Step 6: Generate history extraction from the cleaned transcript.
     Uses a prompt to extract historical lessons or context from the transcript. Returns the history extraction as a string, or None if failed.
@@ -909,8 +928,34 @@ def history_step(cleaned: str) -> Optional[str]:
         logging.warning("History prompt missing, skipping history extraction")
         return None
     logging.info("Step 6: Generating history extraction...")
-    return process_with_openai(cleaned, prompt, OPENAI_HISTORY_MODEL, max_tokens=MAX_TOKENS * 2)
+    history = process_with_openai(cleaned, prompt, OPENAI_HISTORY_MODEL, max_tokens=MAX_TOKENS * 2)
+    if history and output_basename and output_dir:
+        write_all_format(history, f"{output_basename}_history", output_dir)
+    return history
 
+def write_all_format(markdown_text: str, output_basename: str, output_dir: str) -> None:
+    """
+    Write markdown text to .txt, .html, and .wiki files in the specified directory.
+    Args:
+        markdown_text: The markdown string to write
+        output_basename: The base filename (without extension)
+        output_dir: The directory to write files to
+    """
+    import os
+    os.makedirs(output_dir, exist_ok=True)
+    txt_path = os.path.join(output_dir, f"{output_basename}.txt")
+    html_path = os.path.join(output_dir, f"{output_basename}.html")
+    wiki_path = os.path.join(output_dir, f"{output_basename}.wiki")
+    try:
+        with open(txt_path, "w", encoding="utf-8") as f:
+            f.write(markdown_text)
+        with open(html_path, "w", encoding="utf-8") as f:
+            f.write(convert_markdown_to_html(markdown_text))
+        with open(wiki_path, "w", encoding="utf-8") as f:
+            f.write(convert_markdown_to_wiki(markdown_text))
+    except Exception as e:
+        import logging
+        logging.error(f"write_all_format failed: {e}")
 
 # ==================== VOCABULARY PROCESSING FUNCTIONS ====================
 # Dictionary to cache vocabulary mappings
@@ -1148,65 +1193,6 @@ def convert_markdown_to_wiki(markdown_text: str) -> str:
     except Exception as e:
         logging.error(f"Error converting markdown to Wiki markup: {e}")
         return ""  # Return original text if conversion fails
-
-def convert_existing_blogs(directory: str) -> None:
-    """
-    Convert all existing blog.txt files in the given directory to HTML and Wiki formats.
-    
-    Args:
-        directory: Directory containing blog text files
-    """
-    try:
-        # Create directory if it doesn't exist
-        os.makedirs(directory, exist_ok=True)
-    except Exception as e:
-        logging.error(f"Could not create or access directory {directory}: {str(e)}")
-        return
-    
-    if not os.path.isdir(directory):
-        logging.error(f"Invalid directory: {directory}")
-        return
-    
-    # Look for blog files (txt files that have "_blog" in their name)
-    blog_pattern = os.path.join(directory, "*_blog.txt")
-    blog_files = glob.glob(blog_pattern)
-    
-    if not blog_files:
-        logging.warning(f"No blog files found in directory: {directory}")
-        return
-    
-    logging.info(f"Found {len(blog_files)} blog files to convert")
-    converted_count = 0
-    
-    for blog_file in tqdm(blog_files, desc="Converting blogs"):
-        base_filename = os.path.splitext(blog_file)[0]  # Remove .txt extension
-        
-        # Define output paths
-        html_path = f"{base_filename}.html"
-        wiki_path = f"{base_filename}.wiki"
-        
-        try:
-            # Read the blog content
-            with open(blog_file, "r", encoding="utf-8") as f:
-                blog_content = f.read()
-            
-            # Convert to HTML and save
-            html_content = convert_markdown_to_html(blog_content)
-            with open(html_path, "w", encoding="utf-8") as f:
-                f.write(html_content)
-                
-            # Convert to Wiki and save
-            wiki_content = convert_markdown_to_wiki(blog_content)
-            with open(wiki_path, "w", encoding="utf-8") as f:
-                f.write(wiki_content)
-            
-            logging.info(f"Converted {os.path.basename(blog_file)} to HTML and Wiki formats")
-            converted_count += 1
-            
-        except Exception as e:
-            logging.error(f"Error converting {blog_file}: {str(e)}")
-    
-    logging.info(f"Successfully converted {converted_count} out of {len(blog_files)} blog files")
 
 # ==================== TRANSCRIPTION FUNCTIONS ====================
 def is_cuda_available() -> bool:
@@ -1567,141 +1553,6 @@ def format_timestamp(start: float, end: Optional[float] = None) -> str:
     else:
         return f"[{_format_single(start)} --> {_format_single(end)}]"
 
-def process_summary(transcript: str, output_summary_file: str, output_blog_file: str) -> bool:
-    """
-    Process the transcript to generate and save summary and blog.
-    
-    Args:
-        transcript: The complete transcript text
-        output_summary_file: Path to save the summary
-        output_blog_file: Path to save the blog
-        
-    Returns:
-        Success status (True/False)
-    """
-    try:
-        logging.info("Genereren van samenvatting...")
-        print(f"\nGenereren van samenvatting van de transcriptie...")
-        
-        # Read the summary prompt
-        summary_prompt = read_prompt_file(PROMPT_SUMMARY_FILE)
-        if not summary_prompt:
-            logging.error("Samenvatting prompt bestand niet gevonden of leeg")
-            return False
-        
-        # Choose model based on transcript length
-        model_to_use = choose_appropriate_model(transcript)
-        logging.info(f"Gekozen model voor samenvatting: {model_to_use}")
-        
-        # Generate summary using OpenAI
-        if USE_RECURSIVE_SUMMARIZATION and estimate_token_count(transcript) > MAX_INPUT_TOKENS:
-            logging.info("Gebruiken van recursieve samenvatting vanwege lengte van transcript")
-            print("Transcript is lang, recursieve samenvatting wordt gebruikt...")
-            summary = summarize_large_transcript(transcript, summary_prompt)
-        else:
-            print("Samenvatting genereren...")
-            summary = process_with_openai(transcript, summary_prompt, model_to_use)
-        
-        if not summary:
-            logging.error("Kon geen samenvatting genereren")
-            return False
-        
-        # Save summary
-        with open(output_summary_file, 'w', encoding='utf-8') as f:
-            f.write(summary)
-        logging.info(f"Samenvatting opgeslagen in: {output_summary_file}")
-        print(f"Samenvatting opgeslagen in: {os.path.basename(output_summary_file)}")
-        
-        # Generate blog post
-        logging.info("Genereren van blog post...")
-        print(f"Genereren van blog post...")
-        
-        # Read the blog prompt
-        blog_prompt = read_prompt_file(PROMPT_BLOG_FILE)
-        if not blog_prompt:
-            logging.warning("Blog prompt bestand niet gevonden of leeg, sla blog generatie over")
-            return True  # We still succeeded with the summary
-        
-        # Combine transcript and summary for better blog generation
-        input_text = f"TRANSCRIPT:\n{transcript}\n\nSUMMARY:\n{summary}"
-        
-        # Generate blog using OpenAI
-        blog = process_with_openai(input_text, blog_prompt, model_to_use)
-        
-        if not blog:
-            logging.error("Kon geen blog post genereren")
-            # We still return True since the summary was successful
-            return True
-        
-        # Save blog
-        with open(output_blog_file, 'w', encoding='utf-8') as f:
-            f.write(blog)
-        logging.info(f"Blog post opgeslagen in: {output_blog_file}")
-        print(f"Blog post opgeslagen in: {os.path.basename(output_blog_file)}")
-        
-        # Generate HTML and Wiki versions of the blog
-        try:
-            # HTML version
-            output_blog_html = output_blog_file.replace('.txt', '.html')
-            html_content = convert_markdown_to_html(blog)
-            with open(output_blog_html, 'w', encoding='utf-8') as f:
-                f.write(html_content)
-            logging.info(f"HTML blog opgeslagen in: {output_blog_html}")
-            
-            # Wiki version
-            output_blog_wiki = output_blog_file.replace('.txt', '.wiki')
-            wiki_content = convert_markdown_to_wiki(blog)
-            with open(output_blog_wiki, 'w', encoding='utf-8') as f:
-                f.write(wiki_content)
-            logging.info(f"Wiki blog opgeslagen in: {output_blog_wiki}")
-        except Exception as e:
-            logging.warning(f"Kon geen HTML/Wiki versies genereren: {str(e)}")
-        
-        return True
-        
-    except Exception as e:        
-        logging.error(f"Fout bij genereren van samenvatting/blog: {str(e)}")
-        return False
-
-def process_speaker_assignment_workflow(transcript: str, base_path: str) -> str:
-    """
-    Process transcript with speaker assignment prompt using o3-mini, chunking if needed.
-    Output: <base>_speaker_assignment.txt, .html, .wiki
-    Returns the path to the generated .txt file.
-    """
-    import os
-    
-    # Check for diarization tags in transcript
-    if not any(f"SPEAKER_" in line for line in transcript.splitlines()):
-        raise ValueError("Transcript does not contain diarization speaker tags. Speaker assignment prompt requires diarized transcript.")
-
-    prompt = read_prompt_file(os.path.join("prompts", "speaker_assignment_prompt.txt"))
-    if not prompt:
-        raise RuntimeError("Speaker assignment prompt file not found.")
-
-    # Chunk transcript if needed
-    chunks = split_into_chunks(transcript, max_chunk_size=MAX_INPUT_TOKENS * 4)  # 4 chars/token
-    results = []
-    for chunk in chunks:
-        result = process_with_openai(chunk, prompt, OPENAI_SPEAKER_MODEL, max_tokens=MAX_TOKENS)
-        results.append(result)
-    full_result = "\n\n".join(results)
-
-    # Write .txt (markdown)
-    txt_path = f"{base_path}_speaker_assignment.txt"
-    with open(txt_path, "w", encoding="utf-8") as f:
-        f.write(full_result)
-    # Write .html
-    html_path = f"{base_path}_speaker_assignment.html"
-    with open(html_path, "w", encoding="utf-8") as f:
-        f.write(convert_markdown_to_html(full_result))
-    # Write .wiki
-    wiki_path = f"{base_path}_speaker_assignment.wiki"
-    with open(wiki_path, "w", encoding="utf-8") as f:
-        f.write(convert_markdown_to_wiki(full_result))
-    return txt_path
-
-
 
 def podcast_fetching_workflow(rssfeed, output_dir):
     """
@@ -1758,7 +1609,7 @@ def full_workflow(audio_file=None, output_dir=None, rssfeed=None):
     4. Process transcript (summary, blog, etc).
     Args:
         audio_file: Path to audio file or None
-        output_dir: Output directory (default: './podcasts' or from env)
+        output_dir: Output directory (default: '.\podcasts' or from env)
         rssfeed: RSS feed URL (default: from env or fallback)
     """
     import os
@@ -1767,7 +1618,7 @@ def full_workflow(audio_file=None, output_dir=None, rssfeed=None):
         if not rssfeed:
             rssfeed = os.environ.get("WHYCAST_RSSFEED", "https://whycast.podcast.audio/@whycast/feed.xml")
         if not output_dir:
-            output_dir = os.environ.get("WHYCAST_OUTPUT_DIR", "./podcasts")
+            output_dir = os.environ.get("WHYCAST_OUTPUT_DIR", ".\podcasts")
         print(f"No audio file provided. Fetching latest episode from {rssfeed} ...")
         audio_file = podcast_fetching_workflow(rssfeed, output_dir)
         if not audio_file:
@@ -1775,7 +1626,7 @@ def full_workflow(audio_file=None, output_dir=None, rssfeed=None):
             return
     else:
         if not output_dir:
-            output_dir = os.environ.get("WHYCAST_OUTPUT_DIR", "./podcasts")
+            output_dir = os.environ.get("WHYCAST_OUTPUT_DIR", ".\podcasts")
     base_name = os.path.splitext(os.path.basename(str(audio_file)))[0]
     base_path = os.path.join(output_dir, base_name)
     # Step 2: Prepare audio
@@ -1804,7 +1655,7 @@ def full_workflow(audio_file=None, output_dir=None, rssfeed=None):
     # Step 4: Process transcript
     print("[4/4] Processing transcript workflow (summary, blog, history, etc.) ...")
     if transcript_text:
-        process_transcript_workflow(transcript_text)
+        process_transcript_workflow(transcript_text, base_name, output_dir)
     else:
         print("Transcript text is empty, skipping transcript workflow.")
     # No temp audio cleanup needed
@@ -1880,7 +1731,7 @@ def diarize_audio(waveform=None, sample_rate=None, audio_file_path=None, hf_toke
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=f'WHYcast Transcribe v{VERSION} - Transcribe audio files and generate summaries')
     parser.add_argument('input', nargs='?', help='Path to the input audio file, directory, or glob pattern')
-    parser.add_argument('--output-dir', '-o', help='Directory to save output files', default='./podcasts')
+    parser.add_argument('--output-dir', '-o', help='Directory to save output files', default='.\\podcasts')
     parser.add_argument('--rssfeed', '-r', help='RSS feed URL to fetch latest episodes from', default=os.environ.get('WHYCAST_RSSFEED', 'https://whycast.podcast.audio/@whycast/feed.xml'))
     parser.add_argument('--version', action='version', version=f'WHYcast Transcribe v{VERSION}')
    
