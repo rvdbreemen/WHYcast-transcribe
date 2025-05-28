@@ -61,4 +61,4 @@ This is the full transcript generated using AI tools and some human oversight. I
 == Transcript <<episode number>> ==
 
 Footer (after transcript):
-[[Category:WHYcast]] [[Category:transcription]]
+[[Category:WHYcast]] [[Category:transcription]] [[Episode number::<episode number>]]

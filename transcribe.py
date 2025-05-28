@@ -1553,16 +1553,37 @@ def format_timestamp(start: float, end: Optional[float] = None) -> str:
     else:
         return f"[{_format_single(start)} --> {_format_single(end)}]"
 
+def delete_episode_files(base_name: str, output_dir: str, exclude_files: Optional[List[str]] = None):
+    """
+    Delete all files related to a given episode base name in the output directory, except those in exclude_files and except .mp3 files.
+    """
+    patterns = [
+        f"{base_name}*.*",  # matches all files for this episode
+    ]
+    for pattern in patterns:
+        for file_path in glob.glob(os.path.join(output_dir, pattern)):
+            abs_file_path = os.path.abspath(file_path)
+            # Never delete the input file or any .mp3 file
+            if exclude_files and abs_file_path in [os.path.abspath(f) for f in exclude_files]:
+                continue
+            if abs_file_path.lower().endswith('.mp3'):
+                continue
+            try:
+                os.remove(abs_file_path)
+                logging.info(f"Deleted file: {abs_file_path}")
+            except Exception as e:
+                logging.error(f"Failed to delete file {abs_file_path}: {e}")
 
-def podcast_fetching_workflow(rssfeed, output_dir):
+def podcast_fetching_workflow(rssfeed, output_dir, return_base_name=False):
     """
     Fetch the latest episode from the RSS feed and download the audio file.
     Returns the path to the downloaded audio file, or None if not found.
+    If return_base_name is True, also returns the base name for the episode file.
     """
     feed = feedparser.parse(rssfeed)
     if not feed.entries:
         print("No episodes found in RSS feed.")
-        return None
+        return (None, None) if return_base_name else None
 
     latest = feed.entries[0]
     # Try to find the audio link
@@ -1573,14 +1594,13 @@ def podcast_fetching_workflow(rssfeed, output_dir):
             break
     if not audio_url or not isinstance(audio_url, str):
         print("No audio file found for the latest episode.")
-        return None
+        return (None, None) if return_base_name else None
 
-    # Create output directory if needed
     os.makedirs(output_dir, exist_ok=True)
-    # Use episode title as filename, sanitized
     safe_title = "".join(c if c.isalnum() or c in "._-" else "_" for c in latest.get('title', 'episode'))
     audio_ext = os.path.splitext(audio_url)[-1].split('?')[0] if '.' in os.path.basename(audio_url) else '.mp3'
     audio_file = os.path.join(output_dir, f"{safe_title}{audio_ext}")
+    base_name = os.path.splitext(os.path.basename(audio_file))[0]
 
     if not os.path.exists(audio_file):
         print(f"Downloading latest episode to {audio_file} ...")
@@ -1593,14 +1613,52 @@ def podcast_fetching_workflow(rssfeed, output_dir):
             print(f"Downloaded: {audio_file}")
         except Exception as e:
             print(f"Failed to download episode: {e}")
-            return None
+            return (None, None) if return_base_name else None
     else:
         print(f"Audio file already exists: {audio_file}")
-    return audio_file
+    return (audio_file, base_name) if return_base_name else audio_file
 
+def download_all_episodes_from_rssfeed(rssfeed: str, output_dir: str = './podcasts'):
+    """
+    Download all mp3 audio files from the RSS feed to the output directory.
+    Skips files that already exist. Shows a progress bar.
+    """
+    feed = feedparser.parse(rssfeed)
+    if not feed.entries:
+        print("No episodes found in RSS feed.")
+        return
 
+    os.makedirs(output_dir, exist_ok=True)
+    print(f"Found {len(feed.entries)} episodes in RSS feed.")
+    from tqdm import tqdm
+    for entry in tqdm(feed.entries, desc="Downloading episodes", unit="episode"):
+        audio_url = None
+        for link in entry.get('links', []):
+            if isinstance(link, dict) and str(link.get('type', '')).startswith('audio'):
+                audio_url = link.get('href')
+                break
+        if not audio_url or not isinstance(audio_url, str):
+            print(f"No audio file found for episode: {entry.get('title', 'unknown')}")
+            continue
+        safe_title = "".join(c if c.isalnum() or c in "._-" else "_" for c in entry.get('title', 'episode'))
+        audio_ext = os.path.splitext(audio_url)[-1].split('?')[0] if '.' in os.path.basename(audio_url) else '.mp3'
+        audio_file = os.path.join(output_dir, f"{safe_title}{audio_ext}")
+        if os.path.exists(audio_file):
+            tqdm.write(f"Already exists: {audio_file}")
+            continue
+        tqdm.write(f"Downloading: {audio_url}\n  -> {audio_file}")
+        try:
+            with requests.get(audio_url, stream=True) as r:
+                r.raise_for_status()
+                with open(audio_file, 'wb') as f:
+                    for chunk in r.iter_content(chunk_size=8192):
+                        f.write(chunk)
+            tqdm.write(f"Downloaded: {audio_file}")
+        except Exception as e:
+            tqdm.write(f"Failed to download {audio_url}: {e}")
+    print("All episodes processed.")
 
-def full_workflow(audio_file=None, output_dir=None, rssfeed=None):
+def full_workflow(audio_file=None, output_dir=None, rssfeed=None, force: bool = False):
     """
     Complete workflow:
     1. If no audio_file, fetch latest episode from RSS feed.
@@ -1609,25 +1667,32 @@ def full_workflow(audio_file=None, output_dir=None, rssfeed=None):
     4. Process transcript (summary, blog, etc).
     Args:
         audio_file: Path to audio file or None
-        output_dir: Output directory (default: '.\podcasts' or from env)
+        output_dir: Output directory (default: './podcasts' or from env)
         rssfeed: RSS feed URL (default: from env or fallback)
+        force: If True, delete all related files for this episode before processing
     """
-    import os
     # Step 1: Fetch latest episode if needed
     if not audio_file:
         if not rssfeed:
             rssfeed = os.environ.get("WHYCAST_RSSFEED", "https://whycast.podcast.audio/@whycast/feed.xml")
         if not output_dir:
-            output_dir = os.environ.get("WHYCAST_OUTPUT_DIR", ".\podcasts")
+            output_dir = os.environ.get("WHYCAST_OUTPUT_DIR", "./podcasts")
         print(f"No audio file provided. Fetching latest episode from {rssfeed} ...")
-        audio_file = podcast_fetching_workflow(rssfeed, output_dir)
-        if not audio_file:
+        result = podcast_fetching_workflow(rssfeed, output_dir, return_base_name=True)
+        if not result or not isinstance(result, tuple) or not result[0]:
             print("No episode could be fetched from the feed.")
             return
+        audio_file, base_name = result
     else:
         if not output_dir:
-            output_dir = os.environ.get("WHYCAST_OUTPUT_DIR", ".\podcasts")
-    base_name = os.path.splitext(os.path.basename(str(audio_file)))[0]
+            output_dir = os.environ.get("WHYCAST_OUTPUT_DIR", "./podcasts")
+        base_name = os.path.splitext(os.path.basename(str(audio_file)))[0] if audio_file else None
+        if force and base_name:
+            print(f"--force: Deleting all files for episode base name '{base_name}' in {output_dir}")
+            delete_episode_files(base_name, output_dir)
+    if not base_name:
+        print("Could not determine base name for episode. Exiting.")
+        return
     base_path = os.path.join(output_dir, base_name)
     # Step 2: Prepare audio
     print("[1/4] Preparing audio ...")
@@ -1645,7 +1710,6 @@ def full_workflow(audio_file=None, output_dir=None, rssfeed=None):
             print("Diarization failed or returned no segments.")
     except Exception as e:
         print(f"Diarization failed: {e}")
-
         speaker_segments = None
     print("[3/4] Transcribing audio ...")
     model = setup_model()
@@ -1658,14 +1722,20 @@ def full_workflow(audio_file=None, output_dir=None, rssfeed=None):
         process_transcript_workflow(transcript_text, base_name, output_dir)
     else:
         print("Transcript text is empty, skipping transcript workflow.")
-    # No temp audio cleanup needed
+    # Delete temp audio file if it was created (prepared_audio != audio_file)
+    try:
+        if os.path.abspath(prepared_audio) != os.path.abspath(str(audio_file)) and os.path.exists(prepared_audio):
+            os.remove(prepared_audio)
+            print(f"Temporary normalized audio file deleted: {prepared_audio}")
+    except Exception as e:
+        print(f"Error deleting temporary audio file: {e}")
 
 def prepare_audio_for_diarization(audio_file: str, output_dir: Optional[str] = None) -> str:
     """
     Ensures the audio file is in a compatible mono 16kHz mp3 format for diarization/transcription.
     Always creates a new file for diarization, never overwrites the original.
     Returns the path to the prepared mp3 file.
-       """
+    """
     import hashlib
     if output_dir is None:
         output_dir = os.path.dirname(audio_file)
@@ -1683,9 +1753,12 @@ def prepare_audio_for_diarization(audio_file: str, output_dir: Optional[str] = N
     ]
     try:
         logging.info(f"Converting {audio_file} to mono 16kHz mp3 using ffmpeg (output: {output_file})...")
+
         result = subprocess.run(ffmpeg_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
         logging.info(f"ffmpeg output: {result.stdout.decode(errors='ignore')}")
         logging.info(f"Audio converted to {output_file}")
+        
+
         return output_file
     except Exception as e:
         logging.error(f"ffmpeg conversion failed: {e}\n{getattr(e, 'stderr', b'').decode(errors='ignore')}")
@@ -1731,17 +1804,71 @@ def diarize_audio(waveform=None, sample_rate=None, audio_file_path=None, hf_toke
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=f'WHYcast Transcribe v{VERSION} - Transcribe audio files and generate summaries')
     parser.add_argument('input', nargs='?', help='Path to the input audio file, directory, or glob pattern')
-    parser.add_argument('--output-dir', '-o', help='Directory to save output files', default='.\\podcasts')
+    parser.add_argument('--output-dir', '-o', help='Directory to save output files', default='./podcasts')
     parser.add_argument('--rssfeed', '-r', help='RSS feed URL to fetch latest episodes from', default=os.environ.get('WHYCAST_RSSFEED', 'https://whycast.podcast.audio/@whycast/feed.xml'))
+    parser.add_argument('--force', action='store_true', help='Force re-download and re-transcribe the latest episode, deleting all related files first')
     parser.add_argument('--version', action='version', version=f'WHYcast Transcribe v{VERSION}')
-   
+    parser.add_argument('--fetch-all', action='store_true', help='Download all mp3 episodes from the RSS feed to the output directory and exit')
 
     args = parser.parse_args()
     logging.info(f"WHYcast Transcribe {VERSION} starting up")
 
-    # Always call the main workflow with parsed arguments
+    # Handle --fetch-all: download all mp3s and exit before any other logic
+    if args.fetch_all:
+        rssfeed = args.rssfeed or os.environ.get("WHYCAST_RSSFEED", "https://whycast.podcast.audio/@whycast/feed.xml")
+        output_dir = args.output_dir or os.environ.get("WHYCAST_OUTPUT_DIR", "./podcasts")
+        download_all_episodes_from_rssfeed(rssfeed, output_dir)
+        exit(0)
+
+    # Handle --force: fetch latest, delete all related files, then run workflow
+    if args.force:
+        rssfeed = args.rssfeed or os.environ.get("WHYCAST_RSSFEED", "https://whycast.podcast.audio/@whycast/feed.xml")
+        output_dir = args.output_dir or os.environ.get("WHYCAST_OUTPUT_DIR", "./podcasts")
+        if args.input:
+            base_name = os.path.splitext(os.path.basename(str(args.input)))[0] if args.input else None
+            input_path = os.path.abspath(str(args.input))
+            if base_name:
+                print(f"--force: Deleting all files for episode base name '{base_name}' in {output_dir} (excluding input file)")
+                delete_episode_files(base_name, output_dir, exclude_files=[input_path])
+            full_workflow(audio_file=args.input, output_dir=output_dir, rssfeed=rssfeed, force=False)
+            exit(0)
+        else:
+            result = podcast_fetching_workflow(rssfeed, output_dir, return_base_name=True)
+            if not result or not isinstance(result, tuple) or not result[0] or not result[1]:
+                print("No episode could be fetched from the feed.")
+                exit(1)
+            audio_file, base_name = result
+            input_path = os.path.abspath(audio_file) if audio_file else None
+            if base_name:
+                print(f"--force: Deleting all files for episode base name '{base_name}' in {output_dir} (excluding input file)")
+                delete_episode_files(base_name, output_dir, exclude_files=[input_path] if input_path else None)
+            # Re-fetch after deletion to ensure mp3 is present
+            result = podcast_fetching_workflow(rssfeed, output_dir, return_base_name=True)
+            if not result or not isinstance(result, tuple) or not result[0]:
+                print("Failed to download episode after deletion.")
+                exit(1)
+            audio_file, base_name = result
+            full_workflow(audio_file=audio_file, output_dir=output_dir, rssfeed=rssfeed, force=False)
+            exit(0)
+    # If no parameters, check if latest mp3 is already downloaded and transcribed
+    if not args.input:
+        rssfeed = args.rssfeed or os.environ.get("WHYCAST_RSSFEED", "https://whycast.podcast.audio/@whycast/feed.xml")
+        output_dir = args.output_dir or os.environ.get("WHYCAST_OUTPUT_DIR", "./podcasts")
+        result = podcast_fetching_workflow(rssfeed, output_dir, return_base_name=True)
+        if result and isinstance(result, tuple) and result[0] and result[1]:
+            audio_file, base_name = result
+            transcript_path = os.path.join(output_dir, f"{base_name}_transcript.txt")
+            if os.path.exists(transcript_path):
+                print(f"Transcript for latest episode '{base_name}' already exists at {transcript_path}. Exiting.")
+                exit(0)
+        # If not found, proceed as normal
+        audio_file = result[0] if result and isinstance(result, tuple) else result
+        full_workflow(audio_file=audio_file, output_dir=output_dir, rssfeed=rssfeed, force=False)
+        exit(0)
+    # Always call the main workflow with parsed arguments if input is provided
     full_workflow(
         audio_file=args.input,
         output_dir=args.output_dir,
-        rssfeed=None  # Optionally add CLI support for RSS feed if needed
+        rssfeed=args.rssfeed,
+        force=False
     )
