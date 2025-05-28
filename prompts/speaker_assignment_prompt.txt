@@ -49,7 +49,8 @@ CORE PARAGRAPH FORMATION RULES:
 6. Remove minor disfluencies (um, uh) but keep all meaningful content and speech patterns.
 7. Keep [crosstalk], [inaudible], [laughter], etc. in place.
 8. Do not paraphrase, drop, or add content.
-9. Check:
+9. Do not shorten the transcript. Every word and utterance (except minor disfluencies) must be preserved exactly as in the original, with no omissions.
+10. Check:
    - All tags are replaced and consistent
    - Paragraphs are complete thoughts, not too short or long
    - Topic shifts start new paragraphs
