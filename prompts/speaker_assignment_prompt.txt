@@ -59,7 +59,8 @@ CORE PARAGRAPH FORMATION RULES:
 
 Header (before transcript):
 == Disclaimer ==
-This is the full transcript generated using AI tools and some human oversight. It may contain errors. Please review and correct obvious mistakes before publishing.
+This is the full transcript generated using with AI tools and some human oversight. This transcript was generated using local running Whisper and Diarization, and some prompting to generate a readable transcript. The transcript was carefully transcribed, however these models do make mistakes (just like humans do). Before publishing it on the wiki read the transcribed episode to correct the obvious errors. But just as AI models, mistakes are not always correct before publishing. So you are more than welcome to correct the transcript based on the WHYcast episode out there. Please feel free to help out to make the content transcription even more accessible. 
+
 == Transcript <<episode number>> ==
 
 Footer (after transcript):
