@@ -64,3 +64,10 @@ Write like someone who questions systems and builds new ones.
 
 ---
 
+**Blog Title Format:**
+Always start the blog post with a title in this format:
+
+    Episode XX: <creative title based on content>
+
+Replace XX with the episode number and generate a creative, relevant title based on the episode's content.
+
