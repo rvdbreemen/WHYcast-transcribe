@@ -32,17 +32,17 @@ openai_available = False
 feedparser_available = False
 tqdm_available = False
 
-# Onderdruk specifieke waarschuwingen
+# Suppress specific warnings
 warnings.filterwarnings("ignore", message="The MPEG_LAYER_III subtype is unknown to TorchAudio")
 warnings.filterwarnings("ignore", message="The bits_per_sample of .mp3 is set to 0 by default")
 warnings.filterwarnings("ignore", message="PySoundFile failed")
 
-# Schakel TensorFloat-32 in voor betere prestaties op NVIDIA Ampere GPU's
+# Enable TensorFloat-32 for improved performance on NVIDIA Ampere GPUs
 if torch.cuda.is_available():
-    # Controleer of we een Ampere of nieuwere GPU hebben
+    # Check if we have an Ampere or newer GPU
     compute_capability = torch.cuda.get_device_capability(0)
-    if compute_capability[0] >= 8:  # Ampere heeft compute capability 8.0+
-        logging.info("TensorFloat-32 inschakelen voor betere prestaties op Ampere GPU")
+    if compute_capability[0] >= 8:  # Ampere GPUs have compute capability 8.0+
+        logging.info("Enabling TensorFloat-32 for improved performance on Ampere GPU")
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32 = True
 
@@ -136,7 +136,7 @@ def setup_logging():
     # Enhanced log format with line numbers and function names
     log_format = '%(asctime)s - %(levelname)s - [%(filename)s:%(lineno)d:%(funcName)s] - %(message)s'
     logger = logging.getLogger()
-    logger.setLevel(logging.INFO)  # Standaard niveau op INFO
+    logger.setLevel(logging.INFO)  # Default level set to INFO
     
     # Remove any existing handlers
     for handler in logger.handlers[:]:
@@ -1306,22 +1306,22 @@ def transcribe_audio(model: WhisperModel, audio_file: str, speaker_segments: Opt
             with open(VOCABULARY_FILE, 'r', encoding='utf-8') as f:
                 vocabulary = json.load(f)
             
-            # Maak een lijst van woorden voor word_list parameter
+            # Create a list of words for the word_list parameter
             word_list = []
             
-            # Lees vervangingen voor post-processing
+            # Read replacements for post-processing
             for original, replacement in vocabulary.items():
                 word_replacements[original.lower()] = replacement
-                # Voeg ook de vervanging toe aan de word_list
+                # Also add the replacement to the word_list
                 word_list.append(replacement)
             
             if word_list:
                 logging.info(f"Loaded {len(word_list)} custom vocabulary words")
-                print(f"Aangepaste woordenlijst geladen met {len(word_list)} woorden")
+                print(f"Custom vocabulary loaded with {len(word_list)} words")
         except Exception as e:
             logging.error(f"Error loading vocabulary: {str(e)}")
     
-    # Maak basic transcriptie parameters
+    # Create basic transcription parameters
     transcription_params = {
         'beam_size': BEAM_SIZE,
         'word_timestamps': True,  # Enable word timestamps for better alignment with diarization
@@ -1331,10 +1331,10 @@ def transcribe_audio(model: WhisperModel, audio_file: str, speaker_segments: Opt
         'condition_on_previous_text': True,
     }
     
-    # Bijhouden van huidige spreker om herhalingen te vermijden
+    # Track the current speaker to avoid repeating speaker tags
     current_speaker = None
-    
-    # Definieer functie om de spreker te bepalen op basis van diarization segments
+
+    # Define a function to determine the speaker based on diarization segments
     def find_speaker_for_segment(segment_middle, speaker_segments):
         if not speaker_segments:
             return None
@@ -1346,58 +1346,58 @@ def transcribe_audio(model: WhisperModel, audio_file: str, speaker_segments: Opt
                 return label
         return None
 
-    # Definieer functie voor live output
+    # Define a function for live output
     def process_segment(segment):
         text = segment.text
         
-        # Pas woordenboek toe op elke segment
+        # Apply word replacements to each segment
         if word_replacements:
             for original, replacement in word_replacements.items():
-                # Vervang hele woorden met case-insensitive match
+                # Replace whole words with a case-insensitive match
                 pattern = r'\b' + re.escape(original) + r'\b'
                 text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
         
-        # Voeg sprekerinfo toe als beschikbaar
+        # Add speaker info if available
         speaker_info = ""
         nonlocal current_speaker
         
         if speaker_segments:
-            # Gebruik middelpunt van het segment om spreker te bepalen
+            # Use the middle of the segment to determine the speaker
             segment_middle = (segment.start + segment.end) / 2
             speaker = find_speaker_for_segment(segment_middle, speaker_segments)
             
-            # Altijd speaker tonen, niet alleen bij wisseling
+            # Always show the speaker, not only when switching
             if speaker:
                 speaker_info = f"[{speaker}] "
                 current_speaker = speaker
             else:
                 speaker_info = "[SPEAKER_UNKNOWN] "
         
-        # Toon de tekst direct in de console
+        # Display the text directly in the console
         print(f"{format_timestamp(segment.start)} {speaker_info}{text}")
 
-        # Pas de tekst toe in het segment
+        # Apply the text to the segment
         segment.text = text
         return segment
     
     # Function to collect segments with real-time processing
     def collect_with_live_output(segments_generator):
-        print("\n--- Live Transcriptie Output ---")
+        print("\n--- Live Transcription Output ---")
         result = []
         for segment in segments_generator:
             # Process each segment for replacements and logging
             segment = process_segment(segment)
             result.append(segment)
-        print("--- Einde Live Transcriptie ---\n")
+        print("--- End Live Transcription ---\n")
         return result
     
     # Execute transcription with appropriate parameters
     try:
-        # Voeg word_list alleen toe als deze is gedefinieerd en niet leeg is
+        # Add word_list only if it is defined and not empty
         if word_list:
             try:
-                # Probeer met word_list
-                print("Transcriptie uitvoeren met aangepaste woordenlijst...")
+                # Try with word_list
+                print("Running transcription with custom vocabulary...")
                 segments_generator, info = model.transcribe(
                     audio_file,
                     **transcription_params,
@@ -1405,18 +1405,18 @@ def transcribe_audio(model: WhisperModel, audio_file: str, speaker_segments: Opt
                 )
                 segments_list = collect_with_live_output(segments_generator)
             except TypeError as e:
-                # Als word_list niet wordt ondersteund, probeer zonder
-                logging.warning(f"word_list parameter niet ondersteund in deze versie van faster_whisper: {e}")
-                logging.info("Transcriptie uitvoeren zonder aangepaste woordenlijst")
-                print("word_list niet ondersteund, transcriptie uitvoeren zonder aangepaste woordenlijst...")
+                # If word_list is not supported, try without it
+                logging.warning(f"word_list parameter not supported in this version of faster_whisper: {e}")
+                logging.info("Running transcription without custom vocabulary")
+                print("word_list not supported, running transcription without custom vocabulary...")
                 segments_generator, info = model.transcribe(
                     audio_file, 
                     **transcription_params
                 )
                 segments_list = collect_with_live_output(segments_generator)
         else:
-            # Als er geen word_list is, gebruik de standaard parameters
-            print("Transcriptie uitvoeren...")
+            # If there is no word_list, use the default parameters
+            print("Running transcription...")
             segments_generator, info = model.transcribe(
                 audio_file,
                 **transcription_params
@@ -1424,14 +1424,14 @@ def transcribe_audio(model: WhisperModel, audio_file: str, speaker_segments: Opt
             segments_list = collect_with_live_output(segments_generator)
             
     except Exception as e:
-        logging.error(f"Error tijdens transcriptie: {str(e)}")
+        logging.error(f"Error during transcription: {str(e)}")
         raise
     
-    # Bereken en toon verwerkingstijd
+    # Calculate and display processing time
     elapsed_time = time.time() - start_time
-    print(f"\nTranscriptie voltooid in {elapsed_time:.1f} seconden.")
-    print(f"Taal gedetecteerd: {info.language} (waarschijnlijkheid: {info.language_probability:.2f})")
-    print(f"Aantal segmenten: {len(segments_list)}")
+    print(f"\nTranscription completed in {elapsed_time:.1f} seconds.")
+    print(f"Detected language: {info.language} (probability: {info.language_probability:.2f})")
+    print(f"Segment count: {len(segments_list)}")
     
     logging.info(f"Transcription complete: {len(segments_list)} segments")
     return segments_list, info
@@ -1466,11 +1466,11 @@ def write_transcript_files(segments: List, output_file: str, output_file_timesta
         timestamped_transcript = []
         # Track current speaker to avoid repeating speaker tags for consecutive segments
         current_speaker = None
-        print(f"\nTranscriptie bestanden aanmaken...")
-        print(f"- Schoon transcript: {os.path.basename(output_file)}")
-        print(f"- Tijdgemarkeerd transcript: {os.path.basename(output_file_timestamped)}")
+        print(f"\nCreating transcript files...")
+        print(f"- Clean transcript: {os.path.basename(output_file)}")
+        print(f"- Timestamped transcript: {os.path.basename(output_file_timestamped)}")
         # Process each segment from Whisper
-        for i, segment in enumerate(tqdm(segments, desc="Transcriptie verwerken", unit="segment")):
+        for i, segment in enumerate(tqdm(segments, desc="Processing transcript", unit="segment")):
             start = segment.start
             end = segment.end
             text = segment.text.strip()
@@ -1522,7 +1522,7 @@ def write_transcript_files(segments: List, output_file: str, output_file_timesta
         with open(output_file_timestamped, 'w', encoding='utf-8') as f:
             f.write(timestamped_text)
             
-        print(f"Transcriptie bestanden succesvol aangemaakt:")
+        print(f"Transcript files successfully created:")
         print(f"- {output_file}")
         print(f"- {output_file_timestamped}")
         
