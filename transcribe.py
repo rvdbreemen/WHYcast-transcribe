@@ -832,7 +832,8 @@ def speaker_assignment_step(transcript: str, output_basename: str = None, output
     logging.info("Step 1: Speaker assignment")
     try:
         if any("SPEAKER_" in line for line in transcript.splitlines()):
-            prompt = read_prompt_file(os.path.join("prompts", "speaker_assignment_prompt.txt"))
+            # Use absolute path from config to avoid issues with working directory
+            prompt = read_prompt_file(PROMPT_SPEAKER_ASSIGN_FILE)
             if not prompt:
                 logging.warning("Speaker assignment prompt missing")
                 return None
