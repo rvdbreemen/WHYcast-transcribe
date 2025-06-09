@@ -1,0 +1,10 @@
+faster-whisper
+openai
+python-dotenv
+requests
+markdown
+torch
+torchaudio
+feedparser
+tqdm
+pyannote.audio
