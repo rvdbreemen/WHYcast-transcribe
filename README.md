@@ -16,6 +16,18 @@ WHYcast Transcribe is a tool for transcribing audio files and generating summari
 - CUDA enabled GPU (e.g. NVIDIA GeForce RTX 3060) recommended for faster processing
 - Python 3.7+
 - Required Python packages (listed in `requirements.txt`)
+
+The main dependencies include:
+- faster-whisper
+- openai
+- python-dotenv
+- requests
+- markdown
+- torch
+- torchaudio
+- feedparser
+- tqdm
+- pyannote.audio
 - OpenAI API key
 
 ## Installation 
