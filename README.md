@@ -130,6 +130,20 @@ To specify the expected number of speakers:
 python transcribe.py path/to/audio/file.mp3 --diarize --min-speakers 2 --max-speakers 4
 ```
 
+### Environment Variables for Whisper
+
+The Whisper model defaults to using CUDA when available. You can override this behaviour with the following variables in your `.env` file:
+
+```
+# Force GPU or CPU usage (set to "auto" to choose automatically)
+WHISPER_DEVICE=cuda
+
+# Precision used by the model when running on CUDA
+WHISPER_COMPUTE_TYPE=float16
+```
+
+Set `WHISPER_DEVICE=cpu` if you only want to run on the CPU. When `WHISPER_DEVICE` is `auto` the script will select CUDA if it's available.
+
 ## License
 
 This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
