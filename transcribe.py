@@ -1215,6 +1215,10 @@ def is_cuda_available() -> bool:
     except ImportError:
         return False
 
+def get_default_device() -> str:
+    """Return 'cuda' if CUDA is available else 'cpu'."""
+    return "cuda" if is_cuda_available() else "cpu"
+
 def setup_model(
     model_size: str = MODEL_SIZE,
     device: Optional[str] = None,
@@ -1235,6 +1239,7 @@ def setup_model(
         logging.info(f"Python version: {sys.version}")
         logging.info(f"PyTorch version: {torch.__version__}")
 
+
         cuda_available = torch.cuda.is_available()
         logging.info(f"CUDA available: {cuda_available}")
 
@@ -1244,7 +1249,9 @@ def setup_model(
             compute_type = COMPUTE_TYPE
 
         if device == "auto":
-            device = "cuda" if cuda_available else "cpu"
+            device = get_default_device()
+        if device is None:
+            device = get_default_device()
         if device.startswith("cuda") and not cuda_available:
             logging.warning("CUDA requested but not available. Falling back to CPU")
             device = "cpu"
@@ -1804,11 +1811,9 @@ def diarize_audio(waveform=None, sample_rate=None, audio_file_path=None, hf_toke
         if hf_token is None:
             hf_token = os.environ.get('HUGGINGFACE_TOKEN')
         pipeline = Pipeline.from_pretrained('pyannote/speaker-diarization-3.1', use_auth_token=hf_token)
-        if torch.cuda.is_available():
-            pipeline.to(torch.device('cuda'))
-            logging.info('pyannote pipeline using CUDA')
-        else:
-            logging.info('pyannote pipeline using CPU')
+        device = get_default_device()
+        pipeline.to(torch.device(device))
+        logging.info(f'pyannote pipeline using {device.upper()}')
         if waveform is None or sample_rate is None:
             if audio_file_path is None:
                 raise ValueError('No audio data or file path provided for diarization.')

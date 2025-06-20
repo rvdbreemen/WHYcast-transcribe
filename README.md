@@ -118,6 +118,9 @@ DIARIZATION_MIN_SPEAKERS=1
 DIARIZATION_MAX_SPEAKERS=10
 ```
 
+The diarization pipeline automatically uses your GPU if CUDA is available,
+falling back to the CPU otherwise.
+
 ### Example Usage
 
 To transcribe an audio file with speaker diarization:
