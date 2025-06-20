@@ -118,6 +118,9 @@ DIARIZATION_MIN_SPEAKERS=1
 DIARIZATION_MAX_SPEAKERS=10
 ```
 
+The diarization pipeline automatically uses your GPU if CUDA is available,
+falling back to the CPU otherwise.
+
 ### Example Usage
 
 To transcribe an audio file with speaker diarization:
@@ -129,6 +132,20 @@ To specify the expected number of speakers:
 ```sh
 python transcribe.py path/to/audio/file.mp3 --diarize --min-speakers 2 --max-speakers 4
 ```
+
+### Environment Variables for Whisper
+
+The Whisper model defaults to using CUDA when available. You can override this behaviour with the following variables in your `.env` file:
+
+```
+# Force GPU or CPU usage (set to "auto" to choose automatically)
+WHISPER_DEVICE=cuda
+
+# Precision used by the model when running on CUDA
+WHISPER_COMPUTE_TYPE=float16
+```
+
+Set `WHISPER_DEVICE=cpu` if you only want to run on the CPU. When `WHISPER_DEVICE` is `auto` the script will select CUDA if it's available.
 
 ## License
 

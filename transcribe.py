@@ -1215,7 +1215,15 @@ def is_cuda_available() -> bool:
     except ImportError:
         return False
 
-def setup_model(model_size: str = MODEL_SIZE) -> WhisperModel:
+def get_default_device() -> str:
+    """Return 'cuda' if CUDA is available else 'cpu'."""
+    return "cuda" if is_cuda_available() else "cpu"
+
+def setup_model(
+    model_size: str = MODEL_SIZE,
+    device: Optional[str] = None,
+    compute_type: Optional[str] = None,
+) -> WhisperModel:
     """
     Initialize and return the Whisper model.
     Always uses CUDA (GPU) and float16 if available, otherwise falls back to CPU.
@@ -1230,37 +1238,55 @@ def setup_model(model_size: str = MODEL_SIZE) -> WhisperModel:
         logging.info("=== System Information ===")
         logging.info(f"Python version: {sys.version}")
         logging.info(f"PyTorch version: {torch.__version__}")
+
         cuda_available = torch.cuda.is_available()
         logging.info(f"CUDA available: {cuda_available}")
-        if cuda_available:
-            cuda_version = getattr(torch.version, 'cuda', None)
-            if cuda_version:
-                logging.info(f"CUDA version: {cuda_version}")
-            else:
-                logging.info("CUDA version: unknown (torch.version.cuda not found)")
-            logging.info(f"cuDNN version: {torch.backends.cudnn.version()}")
-            device_count = torch.cuda.device_count()
-            logging.info(f"GPU device count: {device_count}")
-            for i in range(device_count):
-                logging.info(f"GPU {i}: {torch.cuda.get_device_name(i)}")
-            torch.cuda.empty_cache()
-            torch.backends.cudnn.benchmark = True
-            torch.backends.cudnn.deterministic = False
-            gpu_mem = torch.cuda.get_device_properties(0).total_memory / (1024 ** 3)  # GB
-            if gpu_mem >= 16:
-                num_workers = 8
-            elif gpu_mem >= 8:
-                num_workers = 4
-            else:
-                num_workers = 2
-            device = "cuda"
-            compute_type = "float16"
-            logging.info(f"Whisper will use CUDA (GPU) with float16. num_workers={num_workers}")
-        else:
+
+        if device is None:
+            device = DEVICE
+        if compute_type is None:
+            compute_type = COMPUTE_TYPE
+
+        if device == "auto":
+            device = get_default_device()
+        if device is None:
+            device = get_default_device()
+        if device.startswith("cuda") and not cuda_available:
+            logging.warning("CUDA requested but not available. Falling back to CPU")
             device = "cpu"
+        if device.startswith("cuda"):
+            if cuda_available:
+                cuda_version = getattr(torch.version, 'cuda', None)
+                if cuda_version:
+                    logging.info(f"CUDA version: {cuda_version}")
+                else:
+                    logging.info("CUDA version: unknown (torch.version.cuda not found)")
+                logging.info(f"cuDNN version: {torch.backends.cudnn.version()}")
+                device_count = torch.cuda.device_count()
+                logging.info(f"GPU device count: {device_count}")
+                for i in range(device_count):
+                    logging.info(f"GPU {i}: {torch.cuda.get_device_name(i)}")
+                torch.cuda.empty_cache()
+                torch.backends.cudnn.benchmark = True
+                torch.backends.cudnn.deterministic = False
+                gpu_mem = torch.cuda.get_device_properties(0).total_memory / (1024 ** 3)  # GB
+                if gpu_mem >= 16:
+                    num_workers = 8
+                elif gpu_mem >= 8:
+                    num_workers = 4
+                else:
+                    num_workers = 2
+                if compute_type is None:
+                    compute_type = "float16"
+                logging.info(f"Whisper will use CUDA (GPU). num_workers={num_workers}, compute_type={compute_type}")
+            else:
+                logging.warning("CUDA requested but not available. Falling back to CPU")
+                device = "cpu"
+
+        if not device.startswith("cuda"):
             num_workers = 8
             compute_type = "int8"
-            logging.warning("CUDA is NOT available. Whisper will use CPU (slow). Consider installing a compatible GPU and CUDA drivers.")
+            logging.warning("Whisper will use CPU (slow). Consider installing a compatible GPU and CUDA drivers.")
         model = WhisperModel(
             model_size,
             device=device,
@@ -1784,11 +1810,9 @@ def diarize_audio(waveform=None, sample_rate=None, audio_file_path=None, hf_toke
         if hf_token is None:
             hf_token = os.environ.get('HUGGINGFACE_TOKEN')
         pipeline = Pipeline.from_pretrained('pyannote/speaker-diarization-3.1', use_auth_token=hf_token)
-        if torch.cuda.is_available():
-            pipeline.to(torch.device('cuda'))
-            logging.info('pyannote pipeline using CUDA')
-        else:
-            logging.info('pyannote pipeline using CPU')
+        device = get_default_device()
+        pipeline.to(torch.device(device))
+        logging.info(f'pyannote pipeline using {device.upper()}')
         if waveform is None or sample_rate is None:
             if audio_file_path is None:
                 raise ValueError('No audio data or file path provided for diarization.')
