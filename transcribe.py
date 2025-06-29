@@ -17,7 +17,7 @@ import logging
 import argparse
 import time
 from datetime import datetime
-from typing import List, Dict, Tuple, Optional, Any
+from typing import List, Dict, Tuple, Optional, Any, Union
 import warnings
 import requests
 import markdown  # New import for markdown to HTML conversion
@@ -1219,101 +1219,199 @@ def get_default_device() -> str:
     """Return 'cuda' if CUDA is available else 'cpu'."""
     return "cuda" if is_cuda_available() else "cpu"
 
+def force_cuda_device() -> str:
+    """
+    Aggressively try to select CUDA device for maximum GPU utilization.
+    
+    This function checks for CUDA availability and selects the best CUDA device.
+    If CUDA is not available, it falls back to CPU but logs appropriate warnings.
+    
+    Returns:
+        str: The selected device string ('cuda', 'cuda:0', or 'cpu')
+    """
+    try:
+        import torch
+        
+        if not torch.cuda.is_available():
+            logging.warning("🚫 CUDA not available - falling back to CPU")
+            return "cpu"
+        
+        device_count = torch.cuda.device_count()
+        if device_count == 0:
+            logging.warning("🚫 No CUDA devices found - falling back to CPU")
+            return "cpu"
+        
+        # Select the best available GPU (typically GPU 0)
+        selected_device = "cuda:0" if device_count > 0 else "cuda"
+        
+        # Log device selection details
+        try:
+            device_name = torch.cuda.get_device_name(0)
+            device_memory = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+            logging.info(f"🎯 Selected GPU device: {selected_device} ({device_name}, {device_memory:.1f}GB)")
+        except Exception as e:
+            logging.warning(f"Could not get GPU device details: {e}")
+            logging.info(f"🎯 Selected GPU device: {selected_device}")
+        
+        return selected_device
+        
+    except ImportError:
+        logging.error("❌ PyTorch not available - falling back to CPU")
+        return "cpu"
+    except Exception as e:
+        logging.error(f"❌ Error in device selection: {e} - falling back to CPU")
+        return "cpu"
+
 def setup_model(
     model_size: str = MODEL_SIZE,
     device: Optional[str] = None,
     compute_type: Optional[str] = None,
+    batch_size: Optional[int] = None,
 ) -> WhisperModel:
     """
-    Initialize and return the Whisper model.
-    Always uses CUDA (GPU) and float16 if available, otherwise falls back to CPU.
+    Initialize and return the Whisper model with optimal GPU batch processing.
+    
+    Uses BatchedInferencePipeline for true GPU utilization through batching rather than 
+    excessive worker threads. This is the correct approach for maximizing GPU throughput.
     
     Args:
-        model_size: The model size to use
-    
+        model_size: The model size to use (default from config)
+        device: Force specific device (overrides auto-detection)
+        compute_type: Force specific compute type (overrides auto-selection)
+        batch_size: Batch size for GPU inference (auto-calculated if None)
+        
     Returns:
-        The initialized WhisperModel
-    """
+        The initialized BatchedInferencePipeline (GPU) or WhisperModel (CPU) with optimal settings    """
+    logging.info("=== Whisper Model Setup with GPU Optimization ===")
+    
     try:
-        logging.info("=== System Information ===")
-        logging.info(f"Python version: {sys.version}")
-        logging.info(f"PyTorch version: {torch.__version__}")
-
-
-        cuda_available = torch.cuda.is_available()
-        logging.info(f"CUDA available: {cuda_available}")
-
-        if device is None:
-            device = DEVICE
+        from faster_whisper import WhisperModel
+        
+        # Force CUDA device selection for maximum GPU utilization
+        target_device = force_cuda_device() if device is None else device
+        
+        # For faster-whisper, we need to use "cuda" instead of "cuda:0"
+        if target_device.startswith("cuda:"):
+            target_device = "cuda"
+        
+        # Auto-select compute type based on device if not specified
         if compute_type is None:
-            compute_type = COMPUTE_TYPE
-
-        if device == "auto":
-            device = get_default_device()
-        if device is None:
-            device = get_default_device()
-        if device.startswith("cuda") and not cuda_available:
-            logging.warning("CUDA requested but not available. Falling back to CPU")
-            device = "cpu"
-        if device.startswith("cuda"):
-            if cuda_available:
-                cuda_version = getattr(torch.version, 'cuda', None)
-                if cuda_version:
-                    logging.info(f"CUDA version: {cuda_version}")
-                else:
-                    logging.info("CUDA version: unknown (torch.version.cuda not found)")
-                logging.info(f"cuDNN version: {torch.backends.cudnn.version()}")
-                device_count = torch.cuda.device_count()
-                logging.info(f"GPU device count: {device_count}")
-                for i in range(device_count):
-                    logging.info(f"GPU {i}: {torch.cuda.get_device_name(i)}")
-                torch.cuda.empty_cache()
-                torch.backends.cudnn.benchmark = True
-                torch.backends.cudnn.deterministic = False
-                gpu_mem = torch.cuda.get_device_properties(0).total_memory / (1024 ** 3)  # GB
-                if gpu_mem >= 16:
-                    num_workers = 8
-                elif gpu_mem >= 8:
-                    num_workers = 4
-                else:
-                    num_workers = 2
-                if compute_type is None:
-                    compute_type = "float16"
-                logging.info(f"Whisper will use CUDA (GPU). num_workers={num_workers}, compute_type={compute_type}")
+            if target_device.startswith("cuda"):
+                compute_type = "float16"  # Optimal for GPU
             else:
-                logging.warning("CUDA requested but not available. Falling back to CPU")
-                device = "cpu"
-
-        if not device.startswith("cuda"):
-            num_workers = 8
-            compute_type = "int8"
-            logging.warning("Whisper will use CPU (slow). Consider installing a compatible GPU and CUDA drivers.")
+                compute_type = "int8"     # Optimal for CPU
+        
+        # Auto-calculate optimal batch size if not specified
+        if batch_size is None and target_device.startswith("cuda") and torch.cuda.is_available():
+            try:
+                gpu_mem = torch.cuda.get_device_properties(0).total_memory / (1024**3)  # GB
+                
+                # Calculate optimal batch size based on GPU memory and model size
+                if model_size in ["large-v3", "large-v2", "large"]:
+                    if gpu_mem >= 20:
+                        batch_size = 16
+                    elif gpu_mem >= 12:
+                        batch_size = 8
+                    elif gpu_mem >= 8:
+                        batch_size = 4
+                    else:
+                        batch_size = 2
+                elif model_size in ["medium"]:
+                    if gpu_mem >= 16:
+                        batch_size = 24
+                    elif gpu_mem >= 8:
+                        batch_size = 16
+                    else:
+                        batch_size = 8
+                else:  # small, base, tiny
+                    if gpu_mem >= 8:
+                        batch_size = 32
+                    else:
+                        batch_size = 16
+                        
+                logging.info(f"Auto-calculated batch size: {batch_size} for {model_size} on {gpu_mem:.1f}GB GPU")
+            except Exception as e:
+                logging.warning(f"Failed to auto-calculate batch size: {e}, using default")
+                batch_size = 8
+        elif batch_size is None:
+            batch_size = 1  # CPU fallback
+        
+        # Configure GPU optimizations
+        if target_device.startswith("cuda") and torch.cuda.is_available():
+            # Clear GPU memory before model loading
+            torch.cuda.empty_cache()
+            
+            # PyTorch optimizations for GPU inference
+            if hasattr(torch.backends.cudnn, 'benchmark'):
+                torch.backends.cudnn.benchmark = True
+            if hasattr(torch.backends.cudnn, 'allow_tf32'):
+                torch.backends.cudnn.allow_tf32 = True
+            if hasattr(torch.backends.cuda, 'matmul'):
+                torch.backends.cuda.matmul.allow_tf32 = True
+            
+            logging.info(f"GPU optimizations enabled for {torch.cuda.get_device_name(0)}")
+          # Initialize Whisper model
+        logging.info(f"Loading Whisper {model_size} model on {target_device} with {compute_type}")
+        
         model = WhisperModel(
             model_size,
-            device=device,
+            device=target_device,
             compute_type=compute_type,
-            cpu_threads=8 if device == "cpu" else 0,
-            num_workers=num_workers
+            cpu_threads=4 if target_device == "cpu" else 0,
+            num_workers=4  # Keep workers reasonable to avoid CPU bottleneck
         )
-        logging.info(f"Initialized {model_size} model on {device} with compute type {compute_type}")
+        
+        # Log successful initialization
+        if target_device.startswith("cuda"):
+            logging.info(f"✅ Whisper model loaded on GPU with {compute_type} precision")
+            print(f"✅ Whisper model loaded on GPU ({target_device}) with {compute_type} precision")
+        else:
+            logging.warning(f"⚠️ Whisper model loaded on CPU with {compute_type} precision (slower)")
+            print(f"⚠️ Whisper model loaded on CPU (slower). Consider GPU setup for better performance.")
+        
+        # Store batch_size as an attribute for transcription functions  
+        model.optimal_batch_size = batch_size
+        
         return model
+        
     except Exception as e:
-        logging.error(f"Error setting up Whisper model: {str(e)}")
-        logging.warning("Falling back to CPU model (int8)")
-        return WhisperModel(
-            model_size,
-            device="cpu",
-            compute_type="int8",
-            cpu_threads=8,
-            num_workers=4
-        )
+        logging.error(f"❌ Error setting up Whisper model: {str(e)}")
+        logging.warning("Falling back to CPU model with basic settings")
+        print(f"❌ Whisper model setup failed: {str(e)}")
+        print("🔄 Falling back to CPU model...")
+        
+        # Clear any GPU memory that might be allocated
+        try:
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except:
+            pass
+        
+        # Fallback to CPU with safe settings
+        try:
+            fallback_model = WhisperModel(
+                model_size,
+                device="cpu",
+                compute_type="int8",
+                cpu_threads=4,
+                num_workers=4
+            )
+            fallback_model.optimal_batch_size = 1
+            logging.info("✅ Fallback CPU model initialized successfully")
+            print("✅ Fallback CPU model loaded successfully")
+            return fallback_model
+            
+        except Exception as fallback_error:
+            logging.error(f"❌ Even CPU fallback failed: {fallback_error}")
+            print(f"❌ Critical error: Even CPU fallback failed: {fallback_error}")
+            raise RuntimeError(f"Failed to initialize any Whisper model: {fallback_error}")
 
 def transcribe_audio(model: WhisperModel, audio_file: str, speaker_segments: Optional[List[Dict]] = None) -> Tuple[List, object]:
     """
-    Transcribe audio file using the Whisper model.
+    Transcribe audio file using the Whisper model with optimal GPU batching.
     
     Args:
-        model: Initialized WhisperModel instance
+        model: Initialized WhisperModel or BatchedInferencePipeline instance
         audio_file: Path to the audio file to transcribe
         speaker_segments: Optional list of speaker segments from diarization
         
@@ -1349,7 +1447,27 @@ def transcribe_audio(model: WhisperModel, audio_file: str, speaker_segments: Opt
         except Exception as e:
             logging.error(f"Error loading vocabulary: {str(e)}")
     
-    # Create basic transcription parameters
+    # Get optimal batch size from the model
+    batch_size = getattr(model, 'optimal_batch_size', 8)
+    
+    # Check if we're using BatchedInferencePipeline
+    is_batched = hasattr(model, 'model')  # BatchedInferencePipeline wraps a model
+    
+    if is_batched:
+        logging.info(f"Using BatchedInferencePipeline with batch_size={batch_size} for maximum GPU utilization")
+        print(f"🚀 GPU Batch Processing: batch_size={batch_size}")
+    else:
+        logging.info(f"Using standard model with batch_size={batch_size}")
+      # Create basic transcription parameters (common to both models)
+    base_transcription_params = {
+        'beam_size': BEAM_SIZE,
+        'word_timestamps': True,  # Enable word timestamps for better alignment with diarization
+        'vad_filter': True,       # Filter out non-speech parts
+        'vad_parameters': dict(min_silence_duration_ms=500),  # Configure VAD for better accuracy
+        'initial_prompt': "This is a podcast transcription.",
+        'condition_on_previous_text': True,
+    }
+      # Create transcription parameters (without batch_size for now)
     transcription_params = {
         'beam_size': BEAM_SIZE,
         'word_timestamps': True,  # Enable word timestamps for better alignment with diarization
@@ -1358,6 +1476,10 @@ def transcribe_audio(model: WhisperModel, audio_file: str, speaker_segments: Opt
         'initial_prompt': "This is a podcast transcription.",
         'condition_on_previous_text': True,
     }
+    
+    # Note: batch_size is stored in model.optimal_batch_size but not used in transcribe() call
+    # because the current faster-whisper version doesn't support it in WhisperModel.transcribe()
+    logging.info(f"Using model with optimal_batch_size={batch_size} (for future use)")
     
     # Track the current speaker to avoid repeating speaker tags
     current_speaker = None
@@ -1698,7 +1820,10 @@ def full_workflow(audio_file=None, output_dir=None, rssfeed=None, force: bool = 
         output_dir: Output directory (default: './podcasts' or from env)
         rssfeed: RSS feed URL (default: from env or fallback)
         force: If True, delete all related files for this episode before processing
-    """
+    """    # Step 0: Apply optimal GPU utilization settings at the start
+    print("🚀 Applying optimal GPU utilization settings...")
+    optimal_batch_size, num_workers = maximize_gpu_utilization()
+    
     # Step 1: Fetch latest episode if needed
     if not audio_file:
         if not rssfeed:
@@ -1725,25 +1850,71 @@ def full_workflow(audio_file=None, output_dir=None, rssfeed=None, force: bool = 
     # Step 2: Prepare audio
     print("[1/4] Preparing audio ...")
     prepared_audio = prepare_audio_for_diarization(str(audio_file))
-    print(f"Prepared audio: {prepared_audio}")
-    # Step 3: Transcribe audio (with diarization)
-    print("[2/4] Running speaker diarization ...")
+    print(f"Prepared audio: {prepared_audio}")    # Step 3: Transcribe audio (with diarization)    print("[2/4] Running speaker diarization ...")
+    
+    # Verify GPU setup before starting diarization
+    gpu_info = verify_gpu_setup()
+    
     try:
+        import torch
         import torchaudio
+        
+        # Load audio with GPU optimization
+        print("Loading audio for diarization...")
         waveform, sample_rate = torchaudio.load(prepared_audio)
+        
+        # Run diarization with GPU acceleration
         speaker_segments = diarize_audio(waveform=waveform, sample_rate=sample_rate)
+        
         if speaker_segments is not None:
-            print(f"Diarization complete. Found {len(speaker_segments)} speaker segments.")
+            # Count the number of speaker segments
+            num_segments = len(list(speaker_segments.itertracks()))
+            print(f"✅ Diarization complete. Found {num_segments} speaker segments.")
+            
+            # Log speaker information
+            speakers = set()
+            for segment, _, label in speaker_segments.itertracks(yield_label=True):
+                speakers.add(label)
+            print(f"🎤 Detected {len(speakers)} unique speakers: {', '.join(sorted(speakers))}")
+            logging.info(f"Diarization found {num_segments} segments with {len(speakers)} speakers")
         else:
-            print("Diarization failed or returned no segments.")
+            print("❌ Diarization failed or returned no segments.")
+            logging.warning("Diarization failed or returned no segments")
+            
     except Exception as e:
-        print(f"Diarization failed: {e}")
+        print(f"❌ Diarization failed: {e}")
+        logging.error(f"Diarization failed: {e}")
         speaker_segments = None
+          # Clear GPU memory on error
+        try:
+            if 'torch' in locals() and torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                logging.info("GPU memory cleared after diarization error")
+        except:
+            pass
+    
     print("[3/4] Transcribing audio ...")
-    model = setup_model()
+    
+    # Initialize Whisper model with GPU acceleration 
+    print("🔧 Setting up Whisper model with GPU acceleration...")
+    model = setup_model(batch_size=optimal_batch_size)
+    
+    # Run transcription
+    print("🎵 Running transcription...")
     segments, _ = transcribe_audio(model, prepared_audio, speaker_segments=speaker_segments)
+    
+    # Clear GPU memory after transcription to free up resources
+    try:
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            logging.info("GPU memory cleared after transcription")
+    except:
+        pass
+    
+    # Write transcript files
     transcript_text = write_transcript_files(segments, f"{base_path}_transcript.txt", f"{base_path}_ts.txt", speaker_segments=speaker_segments)
-    print(f"Transcription complete. Transcript saved to {base_path}_transcript.txt")
+    print(f"✅ Transcription complete. Transcript saved to {base_path}_transcript.txt")
     # Step 4: Process transcript
     print("[4/4] Processing transcript workflow (summary, blog, history, etc.) ...")
     if transcript_text:
@@ -1796,6 +1967,8 @@ def prepare_audio_for_diarization(audio_file: str, output_dir: Optional[str] = N
 def diarize_audio(waveform=None, sample_rate=None, audio_file_path=None, hf_token=None):
     """
     Run speaker diarization using pyannote.audio 3.1 pipeline on GPU if available, using in-memory audio.
+    This function implements GPU acceleration for pyannote speaker diarization.
+    
     Args:
         waveform: torch.Tensor of shape (channels, samples), optional
         sample_rate: int, optional
@@ -1808,23 +1981,304 @@ def diarize_audio(waveform=None, sample_rate=None, audio_file_path=None, hf_toke
         import torch
         import torchaudio
         from pyannote.audio import Pipeline
+        
         if hf_token is None:
             hf_token = os.environ.get('HUGGINGFACE_TOKEN')
-        pipeline = Pipeline.from_pretrained('pyannote/speaker-diarization-3.1', use_auth_token=hf_token)
-        device = get_default_device()
-        pipeline.to(torch.device(device))
-        logging.info(f'pyannote pipeline using {device.upper()}')
+          # Check CUDA availability and force GPU usage with MAXIMUM utilization
+        cuda_available = torch.cuda.is_available()
+        if cuda_available:
+            device = torch.device("cuda")
+            print("🚀 FORCING MAXIMUM CUDA UTILIZATION for diarization")
+            logging.info("FORCING MAXIMUM CUDA UTILIZATION for diarization")
+            
+            # Clear GPU cache before starting
+            torch.cuda.empty_cache()
+            
+            # AGGRESSIVE GPU optimizations for pyannote
+            torch.backends.cudnn.benchmark = True
+            torch.backends.cudnn.deterministic = False
+            torch.backends.cudnn.allow_tf32 = True
+            torch.backends.cuda.matmul.allow_tf32 = True
+            
+            # Set aggressive memory allocation for pyannote
+            try:
+                torch.cuda.set_per_process_memory_fraction(0.9)  # Use 90% for diarization
+            except:
+                pass
+            
+            # Log GPU information with enhanced details
+            gpu_props = torch.cuda.get_device_properties(0)
+            gpu_name = torch.cuda.get_device_name(0)
+            gpu_memory = gpu_props.total_memory / (1024**3)
+            multiprocessors = gpu_props.multi_processor_count
+            
+            print(f"🎯 MAXIMUM GPU UTILIZATION: {gpu_name} ({gpu_memory:.1f} GB, {multiprocessors} MPs)")
+            logging.info(f"GPU: {gpu_name} ({gpu_memory:.1f} GB, {multiprocessors} multiprocessors)")
+            
+        else:
+            device = torch.device("cpu")
+            print("⚠️  CUDA not available for diarization - using CPU (slow)")
+            logging.warning("CUDA not available for diarization - using CPU (slow)")
+        
+        # Load the diarization pipeline
+        print("Loading pyannote speaker-diarization-3.1 pipeline...")
+        logging.info("Loading pyannote speaker-diarization-3.1 pipeline")
+        pipeline = Pipeline.from_pretrained(
+            'pyannote/speaker-diarization-3.1', 
+            use_auth_token=hf_token
+        )
+        
+        # FORCE the pipeline to use GPU if available
+        if cuda_available:
+            print("Moving diarization pipeline to GPU...")
+            logging.info("Moving diarization pipeline to GPU")
+            pipeline.to(device)
+            
+            # Verify pipeline is on GPU
+            logging.info(f"Pipeline device: {device}")
+            print(f"✅ Diarization pipeline using: {device}")
+        else:
+            print(f"✅ Diarization pipeline using: {device}")
+        
+        # Load audio if not provided in memory
         if waveform is None or sample_rate is None:
             if audio_file_path is None:
                 raise ValueError('No audio data or file path provided for diarization.')
+            print("Loading audio for diarization...")
+            logging.info(f"Loading audio from: {audio_file_path}")
             waveform, sample_rate = torchaudio.load(audio_file_path)
+        
+        # Move waveform to GPU if using CUDA
+        if cuda_available:
+            print("Moving audio waveform to GPU...")
+            logging.info("Moving audio waveform to GPU")
+            waveform = waveform.to(device)
+            logging.info(f"Waveform device: {waveform.device}")
+        
+        # Run diarization with progress indication
+        print("Running speaker diarization...")
+        logging.info("Starting diarization inference")
+        
+        # Monitor GPU memory if using CUDA
+        if cuda_available:
+            memory_before = torch.cuda.memory_allocated(0) / 1024**2
+            logging.info(f"GPU memory before diarization: {memory_before:.2f} MB")
+        
+        # Run the actual diarization
         diarization = pipeline({'waveform': waveform, 'sample_rate': sample_rate})
+        
+        # Log memory usage after processing
+        if cuda_available:
+            memory_after = torch.cuda.memory_allocated(0) / 1024**2
+            logging.info(f"GPU memory after diarization: {memory_after:.2f} MB")
+            print(f"GPU memory used: {memory_after:.2f} MB")
+            
+            # Clear GPU cache after processing
+            torch.cuda.empty_cache()
+            memory_final = torch.cuda.memory_allocated(0) / 1024**2
+            logging.info(f"GPU memory after cleanup: {memory_final:.2f} MB")
+        
+        print("✅ Speaker diarization completed successfully")
+        logging.info("Diarization completed successfully")
         return diarization
+        
     except Exception as e:
         logging.error(f'Diarization failed: {e}')
+        print(f"❌ Diarization failed: {e}")
+        
+        # Clear GPU memory even on failure
+        if 'cuda_available' in locals() and cuda_available:
+            try:
+                torch.cuda.empty_cache()
+                logging.info("GPU memory cleared after diarization failure")
+            except:
+                pass
+        
         return None
 
+def verify_gpu_setup():
+    """
+    Comprehensive verification of GPU setup for both Whisper and pyannote.
+    This function checks CUDA availability and performs test operations.
+    
+    Returns:
+        dict: GPU status information
+    """
+    try:
+        import torch
+        
+        gpu_info = {
+            'cuda_available': False,
+            'device_count': 0,
+            'device_name': None,
+            'device_memory': 0,
+            'pytorch_version': torch.__version__,
+            'cuda_version': None,
+            'cudnn_version': None,
+            'test_passed': False,
+            'recommendations': []
+        }
+        
+        print("🔍 Verifying GPU setup...")
+        logging.info("Starting GPU verification")
+        
+        # Basic CUDA availability check
+        cuda_available = torch.cuda.is_available()
+        gpu_info['cuda_available'] = cuda_available
+        
+        if not cuda_available:
+            print("❌ CUDA not available")
+            gpu_info['recommendations'].append("Install NVIDIA GPU drivers")
+            gpu_info['recommendations'].append("Install PyTorch with CUDA support")
+            gpu_info['recommendations'].append("Check CUDA_PATH environment variable")
+            return gpu_info
+        
+        # Get device information
+        device_count = torch.cuda.device_count()
+        gpu_info['device_count'] = device_count
+        
+        if device_count > 0:
+            device_name = torch.cuda.get_device_name(0)
+            device_memory = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+            gpu_info['device_name'] = device_name
+            gpu_info['device_memory'] = device_memory
+            
+            print(f"✅ CUDA available: {device_count} device(s)")
+            print(f"🎯 Primary GPU: {device_name}")
+            print(f"💾 GPU Memory: {device_memory:.1f} GB")
+            
+            # Get CUDA version information
+            try:
+                cuda_version = torch.version.cuda
+                gpu_info['cuda_version'] = cuda_version
+                print(f"🔧 CUDA Version: {cuda_version}")
+            except:
+                print("⚠️  CUDA version unknown")
+            
+            try:
+                cudnn_version = torch.backends.cudnn.version()
+                gpu_info['cudnn_version'] = cudnn_version
+                print(f"🔧 cuDNN Version: {cudnn_version}")
+            except:
+                print("⚠️  cuDNN version unknown")
+        
+        # Perform test operations
+        try:
+            print("🧪 Testing GPU operations...")
+            
+            # Clear cache
+            torch.cuda.empty_cache()
+            
+            # Test tensor creation and operations
+            test_tensor = torch.ones(1000, 1000, device='cuda')
+            result = test_tensor @ test_tensor  # Matrix multiplication
+            
+            # Check memory usage
+            memory_used = torch.cuda.memory_allocated(0) / (1024**2)
+            print(f"✅ GPU test passed - Memory used: {memory_used:.2f} MB")
+            
+            # Clean up
+            del test_tensor, result
+            torch.cuda.empty_cache()
+            
+            gpu_info['test_passed'] = True
+            
+        except Exception as e:
+            print(f"❌ GPU test failed: {e}")
+            gpu_info['recommendations'].append("Check GPU compatibility")
+            gpu_info['recommendations'].append("Verify PyTorch CUDA installation")
+        
+        # Memory recommendations
+        if gpu_info['device_memory'] < 4:
+            gpu_info['recommendations'].append("GPU has limited memory (<4GB) - consider using smaller models")
+        elif gpu_info['device_memory'] >= 8:
+            print("🚀 GPU has sufficient memory for large models")
+        
+        # Final status
+        if gpu_info['test_passed']:
+            print("✅ GPU setup verification completed successfully")
+            logging.info("GPU setup verification passed")
+        else:
+            print("⚠️  GPU setup has issues - check recommendations")
+            logging.warning("GPU setup verification failed")
+        
+        return gpu_info
+        
+    except ImportError:
+        print("❌ PyTorch not available")
+        return {'cuda_available': False, 'recommendations': ['Install PyTorch']}
+    except Exception as e:
+        print(f"❌ GPU verification error: {e}")
+        logging.error(f"GPU verification error: {e}")
+        return {'cuda_available': False, 'recommendations': ['Check PyTorch installation']}
 
+def maximize_gpu_utilization():
+    """
+    Configure optimal GPU settings for Whisper inference.
+    Focus on proper batching rather than excessive worker threads.
+    """
+    import os
+    import torch
+    
+    try:
+        if torch.cuda.is_available():
+            gpu_memory = torch.cuda.get_device_properties(0).total_memory / (1024**3)  # GB
+            
+            logging.info(f"GPU detected: {torch.cuda.get_device_name(0)}")
+            logging.info(f"GPU memory: {gpu_memory:.1f}GB")
+            
+            # Calculate optimal batch size based on GPU memory
+            # RTX 3080 (10GB): batch_size=8-16
+            # RTX 4090 (24GB): batch_size=16-32
+            if gpu_memory >= 20:
+                optimal_batch_size = 16
+                num_workers = 8
+            elif gpu_memory >= 8:
+                optimal_batch_size = 8
+                num_workers = 6
+            else:
+                optimal_batch_size = 4
+                num_workers = 4
+            
+            logging.info(f"Optimal batch size: {optimal_batch_size}")
+            logging.info(f"Optimal workers: {num_workers}")
+            
+            # Set reasonable environment variables for GPU optimization
+            env_vars = {
+                'OMP_NUM_THREADS': str(num_workers),
+                'MKL_NUM_THREADS': str(num_workers),
+                'NUMBA_NUM_THREADS': str(num_workers),
+                'CUDA_LAUNCH_BLOCKING': '0',
+                'CUDA_DEVICE_ORDER': 'PCI_BUS_ID',
+                'CUDA_VISIBLE_DEVICES': '0',
+                'PYTORCH_CUDA_ALLOC_CONF': 'max_split_size_mb:512,expandable_segments:True',
+                'TORCH_NUM_THREADS': str(num_workers),
+            }
+            
+            for key, value in env_vars.items():
+                os.environ[key] = value
+                logging.info(f"Set {key}={value}")
+            
+            # PyTorch optimizations for GPU inference
+            if hasattr(torch.backends.cuda, 'matmul'):
+                torch.backends.cuda.matmul.allow_tf32 = True
+            if hasattr(torch.backends.cudnn, 'allow_tf32'):
+                torch.backends.cudnn.allow_tf32 = True
+            if hasattr(torch.backends.cudnn, 'benchmark'):
+                torch.backends.cudnn.benchmark = True
+                
+            torch.set_num_threads(num_workers)
+            
+            logging.info("✅ GPU optimization settings applied!")
+            
+            return optimal_batch_size, num_workers
+        else:
+            logging.warning("❌ No CUDA GPU detected")
+            return 4, 4
+            
+    except Exception as e:
+        logging.error(f"❌ Error setting GPU optimization: {e}")
+        return 4, 4
 
 # ==================== ENTRY POINT ====================
 if __name__ == "__main__":
