@@ -877,8 +877,20 @@ def summary_step(cleaned: str, output_basename: str = None, output_dir: str = No
     if not prompt:
         logging.warning("Summary prompt missing, skipping summary")
         return None
+
     logging.info("Step 3: Generating summary...")
-    summary = process_with_openai(cleaned, prompt, choose_appropriate_model(cleaned))
+
+    estimated_tokens = estimate_token_count(cleaned)
+    logging.info(f"Estimated token count for summary: {estimated_tokens}")
+
+    if USE_RECURSIVE_SUMMARIZATION and estimated_tokens > MAX_INPUT_TOKENS:
+        summary = summarize_large_transcript(cleaned, prompt)
+    else:
+        summary = process_with_openai(
+            cleaned,
+            prompt,
+            choose_appropriate_model(cleaned),
+        )
     if summary and output_basename and output_dir:
         write_all_format(summary, f"{output_basename}_summary", output_dir)
     return summary
