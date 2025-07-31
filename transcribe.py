@@ -2,10 +2,16 @@
 # -*- coding: utf-8 -*-
 
 """
-WHYcast Transcribe - v0.2.0
+WHYcast Transcribe - v0.3.0
 
 A tool for transcribing podcast episodes with optional speaker diarization,
 summarization, and blog post generation.
+
+Recent improvements:
+- Enhanced speaker assignment with content preservation monitoring
+- Conservative speaker identification prompt to prevent content loss
+- Automatic fallback for over-aggressive processing
+- Detailed processing statistics and warnings
 """
 
 import os
@@ -22,6 +28,9 @@ import warnings
 import requests
 import markdown  # New import for markdown to HTML conversion
 import torch
+
+# Import the transcript formatter
+from transcript_formatter import format_transcript_with_headers
 import hashlib
 import uuid
 import feedparser
@@ -242,6 +251,115 @@ def setup_logging():
     return logger
 
 logger = setup_logging()
+
+# ==================== SPEAKER MERGING FUNCTIONS ====================
+def merge_speaker_lines(transcript_text: str) -> str:
+    """
+    Merge consecutive lines that have the same speaker label into paragraphs.
+    Removes duplicate speaker labels, keeping only one at the beginning of each merged section.
+    
+    Args:
+        transcript_text: The original transcript text with speaker labels
+        
+    Returns:
+        Merged transcript text with speaker paragraphs
+    """
+    if not transcript_text.strip():
+        return transcript_text
+    
+    lines = transcript_text.strip().split('\n')
+    merged_lines = []
+    current_speaker = None
+    current_content = []
+    current_use_brackets = True  # Track the format being used
+    
+    # Pattern to match speaker labels - both bracketed [Speaker] and non-bracketed Speaker:
+    speaker_pattern_bracketed = re.compile(r'^\[([^\]]+)\]\s*(.*)$')
+    speaker_pattern_colon = re.compile(r'^([^:]+):\s*(.*)$')
+    
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+            
+        # Try bracketed format first [Speaker]
+        match = speaker_pattern_bracketed.match(line)
+        if match:
+            speaker_label = match.group(1)
+            content = match.group(2).strip()
+            use_brackets = True
+        else:
+            # Try colon format Speaker:
+            match = speaker_pattern_colon.match(line)
+            if match:
+                speaker_label = match.group(1).strip()
+                content = match.group(2).strip()
+                use_brackets = False
+            else:
+                match = None
+        
+        if match:
+            # If this is the same speaker as the previous line, accumulate content
+            if speaker_label == current_speaker and current_content:
+                if content:  # Only add non-empty content
+                    current_content.append(content)
+            else:
+                # Different speaker or first line - output previous speaker's content
+                if current_speaker and current_content:
+                    merged_content = ' '.join(current_content)
+                    if current_use_brackets:
+                        merged_lines.append(f"[{current_speaker}] {merged_content}")
+                    else:
+                        merged_lines.append(f"{current_speaker}: {merged_content}")
+                
+                # Start new speaker section
+                current_speaker = speaker_label
+                current_content = [content] if content else []
+                current_use_brackets = use_brackets
+        else:
+            # Line without speaker label - treat as continuation of current speaker
+            if current_speaker and line:
+                current_content.append(line)
+            elif line:
+                # Line without speaker and no current speaker - add as is
+                merged_lines.append(line)
+    
+    # Don't forget the last speaker's content
+    if current_speaker and current_content:
+        merged_content = ' '.join(current_content)
+        if current_use_brackets:
+            merged_lines.append(f"[{current_speaker}] {merged_content}")
+        else:
+            merged_lines.append(f"{current_speaker}: {merged_content}")
+    
+    return '\n\n'.join(merged_lines)
+
+def write_merged_transcript(transcript_text: str, base_path: str) -> str:
+    """
+    Create a merged transcript file where consecutive lines from the same speaker are combined.
+    
+    Args:
+        transcript_text: The original transcript text
+        base_path: Base path for output file (without extension)
+        
+    Returns:
+        Path to the merged transcript file
+    """
+    try:
+        merged_text = merge_speaker_lines(transcript_text)
+        merged_file = f"{base_path}_merged.txt"
+        
+        with open(merged_file, 'w', encoding='utf-8') as f:
+            f.write(merged_text)
+        
+        logging.info(f"Merged transcript written to: {merged_file}")
+        print(f"✅ Merged transcript saved: {os.path.basename(merged_file)}")
+        
+        return merged_file
+    except Exception as e:
+        logging.error(f"Error writing merged transcript: {str(e)}")
+        print(f"❌ Error creating merged transcript: {str(e)}")
+        return ""
 
 # ==================== HUGGINGFACE API FUNCTIONS ====================
 def set_huggingface_token(token: str) -> bool:
@@ -821,34 +939,466 @@ def process_transcript_workflow(transcript: str, output_basename: str = None, ou
     results['history_extract'] = history_step(cleaned, output_basename, output_dir)
     return results
 
+def analyze_speakers_with_o4(transcript: str, output_basename: str = None, output_dir: str = None) -> Optional[Dict[str, str]]:
+    """
+    Use o4 model to analyze transcript and create detailed speaker mapping.
+    
+    Args:
+        transcript: The original transcript text with SPEAKER_XX labels
+        output_basename: Base name for output files
+        output_dir: Directory for output files
+        
+    Returns:
+        Dictionary mapping SPEAKER_XX to final labels, or None if failed
+    """
+    if not openai_available:
+        logging.warning("OpenAI not available, skipping speaker analysis")
+        return None
+        
+    logging.info("Running detailed speaker analysis with o4 model")
+    print("🧠 Analyzing speakers with o4 reasoning model...")
+    
+    try:
+        # Read the speaker analysis prompt
+        analysis_prompt_file = os.path.join(os.path.dirname(PROMPT_SPEAKER_ASSIGN_FILE), "speaker_analysis_prompt.txt")
+        analysis_prompt = read_prompt_file(analysis_prompt_file)
+        
+        if not analysis_prompt:
+            logging.error("Speaker analysis prompt not found")
+            return None
+        
+        # Use o4 model for analysis (assuming it's configured in OPENAI_SPEAKER_MODEL)
+        analysis_result = process_with_openai(transcript, analysis_prompt, OPENAI_SPEAKER_MODEL, max_tokens=MAX_TOKENS * 2)
+        
+        if not analysis_result:
+            logging.error("Speaker analysis failed")
+            return None
+        
+        # Parse the mapping from the analysis result
+        speaker_mapping = parse_speaker_mapping_from_analysis(analysis_result)
+        
+        # Save detailed analysis to file
+        if output_basename and output_dir:
+            analysis_file = os.path.join(output_dir, f"{output_basename}_speaker_analysis.txt")
+            try:
+                with open(analysis_file, 'w', encoding='utf-8') as f:
+                    f.write("DETAILED SPEAKER ANALYSIS REPORT\n")
+                    f.write("=" * 50 + "\n\n")
+                    f.write(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+                    f.write(f"Model: {OPENAI_SPEAKER_MODEL}\n")
+                    f.write(f"Transcript: {output_basename}\n\n")
+                    f.write(analysis_result)
+                    f.write(f"\n\n{'='*50}\n")
+                    f.write("EXTRACTED MAPPING:\n")
+                    for original, mapped in speaker_mapping.items():
+                        f.write(f"{original} → {mapped}\n")
+                
+                logging.info(f"Speaker analysis saved to: {analysis_file}")
+                print(f"📄 Speaker analysis report saved: {os.path.basename(analysis_file)}")
+                
+            except Exception as e:
+                logging.error(f"Error saving speaker analysis: {str(e)}")
+        
+        # Log the mapping
+        logging.info(f"Speaker mapping extracted: {speaker_mapping}")
+        print(f"🎭 Speaker mapping created:")
+        for original, mapped in speaker_mapping.items():
+            print(f"   {original} → {mapped}")
+        
+        return speaker_mapping
+        
+    except Exception as e:
+        logging.error(f"Error in speaker analysis: {str(e)}")
+        print(f"❌ Speaker analysis failed: {str(e)}")
+        return None
+
+def parse_speaker_mapping_from_analysis(analysis_text: str) -> Dict[str, str]:
+    """
+    Parse speaker mapping from the o4 analysis result.
+    
+    Args:
+        analysis_text: The analysis result from o4 model
+        
+    Returns:
+        Dictionary mapping SPEAKER_XX to final labels
+    """
+    mapping = {}
+    
+    try:
+        # Look for the "FINAL MAPPING FOR TRANSCRIPT:" section
+        lines = analysis_text.split('\n')
+        in_mapping_section = False
+        
+        for line in lines:
+            line = line.strip()
+            
+            # Check if we've reached the mapping section
+            if "FINAL MAPPING FOR TRANSCRIPT:" in line or "SPEAKER MAPPING:" in line:
+                in_mapping_section = True
+                continue
+                
+            # Stop at next major section or examples
+            if in_mapping_section and (line.startswith(('##', '===', 'CONFIDENCE SUMMARY:', '**EXAMPLES'))) or line == '':
+                if line.startswith(('##', '===', 'CONFIDENCE SUMMARY:', '**EXAMPLES')):
+                    break
+                continue
+                
+            # Parse mapping lines like "SPEAKER_00 → Sarah" or "SPEAKER_00 → Host"
+            if in_mapping_section and ('→' in line or '->' in line):
+                # Split on either arrow type
+                if '→' in line:
+                    parts = line.split('→')
+                else:
+                    parts = line.split('->')
+                    
+                if len(parts) == 2:
+                    original = parts[0].strip()
+                    mapped = parts[1].strip()
+                    
+                    # Clean up the original speaker label
+                    if not original.startswith('SPEAKER_'):
+                        continue
+                    
+                    # Keep mapped label simple - it will be used as "Label:" without brackets
+                    # Store mapping as [SPEAKER_XX] → Label (no brackets in the mapped value)
+                    mapping[f"[{original}]"] = mapped
+        
+        # Fallback: look for individual speaker sections
+        if not mapping:
+            current_speaker = None
+            current_label = None
+            
+            for line in lines:
+                line = line.strip()
+                
+                # Look for speaker headers like "SPEAKER_00:"
+                if line.startswith('SPEAKER_') and line.endswith(':'):
+                    current_speaker = f"[{line[:-1]}]"  # Remove colon, add brackets
+                    current_label = None
+                
+                # Look for Final Label lines (now expecting simple labels)
+                elif current_speaker and line.startswith('- Final Label:'):
+                    label_part = line.replace('- Final Label:', '').strip()
+                    # Remove any brackets from the response if present
+                    if label_part.startswith('[') and label_part.endswith(']'):
+                        label_part = label_part[1:-1]
+                    current_label = label_part  # No brackets in the mapped value
+                    
+                    mapping[current_speaker] = current_label
+                    current_speaker = None
+                    current_label = None
+        
+        # If still no mapping found, try simple pattern matching
+        if not mapping:
+            import re
+            # Look for any SPEAKER_XX → Label patterns (without requiring brackets)
+            pattern = r'(SPEAKER_\d+)\s*[→\->\s]+\s*([^\n\[]+?)(?:\n|$)'
+            matches = re.findall(pattern, analysis_text)
+            for original, mapped in matches:
+                clean_mapped = mapped.strip()
+                # Remove any trailing punctuation or brackets
+                clean_mapped = re.sub(r'[\[\]]+$', '', clean_mapped).strip()
+                mapping[f"[{original}]"] = clean_mapped  # No brackets in the mapped value
+        
+        logging.info(f"Parsed speaker mapping: {mapping}")
+        return mapping
+        
+    except Exception as e:
+        logging.error(f"Error parsing speaker mapping: {str(e)}")
+        return {}
+
+def analyze_transcript_changes(original: str, processed: str) -> Dict[str, Any]:
+    """Analyze changes between original and processed transcript."""
+    
+    orig_stats = {
+        'words': len(original.split()),
+        'lines': original.count('\n'),
+        'chars': len(original),
+        'speakers': len(re.findall(r'\[SPEAKER_\d+\]', original))
+    }
+    
+    proc_stats = {
+        'words': len(processed.split()),
+        'lines': processed.count('\n'), 
+        'chars': len(processed),
+        'speakers': len(re.findall(r'\[[^\]]+\]', processed))
+    }
+    
+    return {
+        'word_retention': (proc_stats['words'] / orig_stats['words']) * 100 if orig_stats['words'] > 0 else 100,
+        'line_retention': (proc_stats['lines'] / orig_stats['lines']) * 100 if orig_stats['lines'] > 0 else 100,
+        'char_retention': (proc_stats['chars'] / orig_stats['chars']) * 100 if orig_stats['chars'] > 0 else 100,
+        'speaker_conversion': proc_stats['speakers'] / orig_stats['speakers'] if orig_stats['speakers'] > 0 else 0,
+        'orig_stats': orig_stats,
+        'proc_stats': proc_stats
+    }
+
+def apply_speaker_mapping_programmatically(transcript: str, speaker_mapping: Dict[str, str]) -> str:
+    """
+    Apply speaker mapping programmatically without using AI.
+    
+    Args:
+        transcript: Original transcript with [SPEAKER_XX] tags
+        speaker_mapping: Dictionary mapping [SPEAKER_XX] to clean labels
+        
+    Returns:
+        Transcript with speaker labels replaced
+    """
+    if not transcript or not speaker_mapping:
+        return transcript
+    
+    result = transcript
+    
+    # Sort mappings by key length (longest first) to avoid partial replacements
+    sorted_mappings = sorted(speaker_mapping.items(), key=lambda x: len(x[0]), reverse=True)
+    
+    for speaker_tag, clean_label in sorted_mappings:
+        # Ensure speaker_tag has brackets if not already present
+        if not speaker_tag.startswith('['):
+            speaker_tag = f"[{speaker_tag}]"
+        
+        # Create the replacement pattern
+        # Replace [SPEAKER_XX] with "CleanLabel:"
+        pattern = re.escape(speaker_tag)
+        replacement = f"{clean_label}:"
+        
+        # Replace all occurrences
+        result = re.sub(pattern, replacement, result)
+    
+    return result
+
+def handle_unknown_speakers(transcript: str) -> str:
+    """
+    Handle any remaining [SPEAKER_XX] or [SPEAKER_UNKNOWN] tags that weren't mapped.
+    
+    Args:
+        transcript: Transcript that may still have unmapped speaker tags
+        
+    Returns:
+        Transcript with unknown speakers replaced with generic labels
+    """
+    # Handle [SPEAKER_UNKNOWN] tags
+    transcript = re.sub(r'\[SPEAKER_UNKNOWN\]', 'Speaker:', transcript)
+    
+    # Handle any remaining [SPEAKER_XX] tags with numbers
+    def replace_numbered_speaker(match):
+        speaker_num = match.group(1)
+        return f"Speaker {speaker_num}:"
+    
+    transcript = re.sub(r'\[SPEAKER_(\d+)\]', replace_numbered_speaker, transcript)
+    
+    # Handle any other bracketed speaker tags
+    transcript = re.sub(r'\[SPEAKER_[^\]]*\]', 'Speaker:', transcript)
+    
+    return transcript
+
+def speaker_assignment_programmatic(
+    transcript: str, 
+    speaker_mapping: Dict[str, str], 
+    output_basename: str = None, 
+    output_dir: str = None
+) -> Optional[str]:
+    """
+    Apply speaker mapping programmatically (replaces the AI-based assignment).
+    
+    Args:
+        transcript: Original transcript with [SPEAKER_XX] tags
+        speaker_mapping: Dictionary mapping speaker tags to clean labels
+        output_basename: Base name for output files
+        output_dir: Directory for output files
+        
+    Returns:
+        Transcript with speaker labels replaced
+    """
+    try:
+        # Pre-processing statistics
+        input_lines = transcript.count('\n')
+        input_words = len(transcript.split())
+        input_chars = len(transcript)
+        
+        logging.info(f"Programmatic speaker assignment input: {input_lines} lines, {input_words} words, {input_chars} chars")
+        print(f"🔄 Applying speaker mapping programmatically...")
+        print(f"📊 Input: {input_words} words, {input_lines} lines")
+        
+        # Apply the speaker mapping
+        result = apply_speaker_mapping_programmatically(transcript, speaker_mapping)
+        
+        # Handle any unknown/unmapped speakers
+        result = handle_unknown_speakers(result)
+        
+        # Post-processing statistics
+        output_lines = result.count('\n')
+        output_words = len(result.split())
+        output_chars = len(result)
+        
+        # Calculate retention (should be nearly 100% for programmatic replacement)
+        word_retention = (output_words / input_words) * 100 if input_words > 0 else 100
+        line_retention = (output_lines / input_lines) * 100 if input_lines > 0 else 100
+        char_retention = (output_chars / input_chars) * 100 if input_chars > 0 else 100
+        
+        logging.info(f"Programmatic speaker assignment output: {output_lines} lines, {output_words} words, {output_chars} chars")
+        logging.info(f"Retention rates: {word_retention:.1f}% words, {line_retention:.1f}% lines, {char_retention:.1f}% chars")
+        
+        print(f"✅ Programmatic assignment complete!")
+        print(f"📈 Retention: {word_retention:.1f}% words, {line_retention:.1f}% lines")
+        
+        # Verify the replacement worked
+        remaining_speakers = re.findall(r'\[SPEAKER_[^\]]*\]', result)
+        if remaining_speakers:
+            logging.warning(f"Unmapped speakers found: {remaining_speakers}")
+            print(f"⚠️ Unmapped speakers: {remaining_speakers}")
+        else:
+            print(f"✅ All speaker tags successfully mapped")
+        
+        # Add header and footer formatting
+        if output_basename:
+            try:
+                formatted_result = format_transcript_with_headers(result, output_basename)
+                
+                # Save files if output directory provided
+                if output_dir:
+                    write_all_format(formatted_result, f"{output_basename}_speaker_assignment", output_dir)
+                    print(f"✅ Files saved: {output_basename}_speaker_assignment.*")
+                
+                return formatted_result
+            except Exception as e:
+                logging.error(f"Error in formatting: {str(e)}")
+                print(f"⚠️ Formatting error, returning unformatted result: {str(e)}")
+                return result
+        
+        return result
+        
+    except Exception as e:
+        logging.error(f"Error in programmatic speaker assignment: {str(e)}")
+        print(f"❌ Error in programmatic assignment: {str(e)}")
+        return None
+
 def speaker_assignment_step(transcript: str, output_basename: str = None, output_dir: str = None) -> Optional[str]:
     """
-    Step 1: Run speaker assignment on the raw transcript.
-    Checks for diarization tags and, if present, uses the speaker assignment workflow
-    to generate a transcript with speaker names. Returns the speaker-assigned transcript as a string,
-    or None if not applicable or failed.
-    If output_basename and output_dir are provided, writes all formats.
+    Two-phase speaker assignment: 
+    1. Detailed speaker analysis with o4 model
+    2. Apply the mapping using structured assignment prompt
     """
-    logging.info("Step 1: Speaker assignment")
+    if not openai_available:
+        logging.warning("OpenAI not available, skipping speaker assignment")
+        return None
+        
+    logging.info("Starting two-phase speaker assignment")
+    
     try:
         if any("SPEAKER_" in line for line in transcript.splitlines()):
-            # Use absolute path from config to avoid issues with working directory
-            prompt = read_prompt_file(PROMPT_SPEAKER_ASSIGN_FILE)
-            if not prompt:
-                logging.warning("Speaker assignment prompt missing")
-                return None
-            chunks = split_into_chunks(transcript, max_chunk_size=MAX_INPUT_TOKENS * 4)
-            results = []
-            for chunk in chunks:
-                result = process_with_openai(chunk, prompt, OPENAI_SPEAKER_MODEL, max_tokens=MAX_TOKENS)
-                results.append(result)
-            full_result = "\n\n".join(results)
-            if output_basename and output_dir:
-                write_all_format(full_result, f"{output_basename}_speaker_assignment", output_dir)
-            return full_result
+            # Store original for comparison
+            original_text = transcript
+            
+            # Phase 1: Detailed speaker analysis with o4 model
+            speaker_mapping = analyze_speakers_with_o4(transcript, output_basename, output_dir)
+            
+            if not speaker_mapping:
+                logging.warning("Speaker analysis failed, falling back to original method")
+                print("⚠️  Advanced speaker analysis failed, using fallback method")
+                
+                # Fallback to original method
+                return speaker_assignment_fallback(transcript, output_basename, output_dir)
+            
+            # Phase 2: Apply the mapping programmatically (NEW - replaces AI call)
+            logging.info("Applying speaker mapping programmatically")
+            print("🔄 Applying speaker assignments...")
+            
+            try:
+                assigned_text = speaker_assignment_programmatic(
+                    transcript, 
+                    speaker_mapping, 
+                    output_basename, 
+                    output_dir
+                )
+                
+                if not assigned_text:
+                    logging.warning("Programmatic assignment failed, trying fallback")
+                    print("⚠️ Programmatic assignment failed, using fallback method")
+                    return speaker_assignment_fallback(transcript, output_basename, output_dir)
+                
+            except Exception as e:
+                logging.error(f"Error in programmatic assignment: {str(e)}")
+                print(f"❌ Error in programmatic assignment: {str(e)}")
+                return speaker_assignment_fallback(transcript, output_basename, output_dir)
+            
+            # The programmatic assignment already includes content validation and header/footer formatting
+            # Return the result directly since it's already been processed completely
+            logging.info("Speaker assignment completed successfully")
+            print("✅ Speaker assignment completed with headers and footers")
+            
+            return assigned_text
+        
+        else:
+            logging.info("No speaker tags found, skipping speaker assignment")
+            return None
+            
     except Exception as e:
-        logging.error(f"Speaker assignment failed: {e}")
-    return None
+        logging.error(f"Error in speaker assignment: {str(e)}")
+        print(f"❌ Speaker assignment failed: {str(e)}")
+        return None
+
+def speaker_assignment_fallback(transcript: str, output_basename: str = None, output_dir: str = None) -> Optional[str]:
+    """Fallback to original speaker assignment method."""
+    logging.info("Using fallback speaker assignment method")
+    print("🔄 Using fallback speaker assignment...")
+    
+    try:
+        # Pre-processing: Count input characteristics
+        input_words = len(transcript.split())
+        input_lines = transcript.count('\n')
+        input_chars = len(transcript)
+        
+        logging.info(f"Fallback speaker assignment input: {input_lines} lines, {input_words} words, {input_chars} chars")
+        
+        # Read speaker assignment prompt
+        prompt = read_prompt_file(PROMPT_SPEAKER_ASSIGN_FILE)
+        if not prompt:
+            logging.error("Speaker assignment prompt not found")
+            return None
+        
+        # Add preservation instructions to prompt
+        enhanced_prompt = f"""INPUT STATISTICS (for preservation verification):
+- Lines: {input_lines}
+- Words: {input_words}
+- Characters: {input_chars}
+
+Your output should have similar statistics (±10% variance acceptable).
+
+{prompt}
+
+CRITICAL: The output length should be nearly identical to input length. Only change speaker labels, preserve everything else exactly."""
+        
+        # Process with OpenAI
+        assigned_text = process_with_openai(
+            transcript, 
+            enhanced_prompt, 
+            OPENAI_SPEAKER_MODEL, 
+            max_tokens=MAX_TOKENS * 2
+        )
+        
+        if not assigned_text:
+            logging.error("Fallback speaker assignment failed")
+            return None
+        
+        # Content preservation check
+        changes = analyze_transcript_changes(transcript, assigned_text)
+        
+        logging.info(f"Fallback content analysis: {changes['word_retention']:.1f}% retention")
+        print(f"📈 Fallback retention: {changes['word_retention']:.1f}%")
+        
+        # Check for significant content loss
+        if changes['word_retention'] < 90.0:
+            logging.warning(f"Fallback significant content loss: {changes['word_retention']:.1f}% retention")
+            if changes['word_retention'] < 70.0:
+                logging.error("Fallback excessive content loss - using original transcript")
+                assigned_text = transcript
+        
+        return assigned_text
+        
+    except Exception as e:
+        logging.error(f"Error in fallback speaker assignment: {str(e)}")
+        return None
 
 def cleanup_step(transcript: str) -> str:
     """
@@ -1742,6 +2292,7 @@ def podcast_fetching_workflow(rssfeed, output_dir, return_base_name=False):
     Returns the path to the downloaded audio file, or None if not found.
     If return_base_name is True, also returns the base name for the episode file.
     """
+    import glob
     feed = feedparser.parse(rssfeed)
     if not feed.entries:
         print("No episodes found in RSS feed.")
@@ -1764,21 +2315,49 @@ def podcast_fetching_workflow(rssfeed, output_dir, return_base_name=False):
     audio_file = os.path.join(output_dir, f"{safe_title}{audio_ext}")
     base_name = os.path.splitext(os.path.basename(audio_file))[0]
 
-    if not os.path.exists(audio_file):
-        print(f"Downloading latest episode to {audio_file} ...")
-        try:
-            with requests.get(audio_url, stream=True) as r:
-                r.raise_for_status()
-                with open(audio_file, 'wb') as f:
-                    for chunk in r.iter_content(chunk_size=8192):
-                        f.write(chunk)
-            print(f"Downloaded: {audio_file}")
-        except Exception as e:
-            print(f"Failed to download episode: {e}")
-            return (None, None) if return_base_name else None
-    else:
+    # First check if the expected file exists
+    if os.path.exists(audio_file):
         print(f"Audio file already exists: {audio_file}")
-    return (audio_file, base_name) if return_base_name else audio_file
+        return (audio_file, base_name) if return_base_name else audio_file
+    
+    # If not found, try to find similar files in the directory
+    # Look for files that might match the episode (with different naming conventions)
+    episode_title = latest.get('title', '').lower()
+    print(f"Looking for existing files matching episode: {episode_title}")
+    
+    # Try various patterns to find existing files
+    patterns_to_try = [
+        f"{safe_title}.*",  # exact match
+        f"*{safe_title.split('_')[-1]}*.*" if '_' in safe_title else f"*{safe_title}*.*",  # partial match
+        "*episode*44*.*",  # fallback pattern for episode 44
+        "*44*.*"  # very broad pattern
+    ]
+    
+    for pattern in patterns_to_try:
+        matching_files = glob.glob(os.path.join(output_dir, pattern))
+        audio_files = [f for f in matching_files if f.lower().endswith(('.mp3', '.m4a', '.wav', '.flac'))]
+        
+        if audio_files:
+            # Sort by modification time to get the most recent
+            audio_files.sort(key=os.path.getmtime, reverse=True)
+            found_file = audio_files[0]
+            found_base_name = os.path.splitext(os.path.basename(found_file))[0]
+            print(f"Found existing audio file: {found_file}")
+            return (found_file, found_base_name) if return_base_name else found_file
+
+    # If no existing file found, download the new one
+    print(f"No existing file found. Downloading latest episode to {audio_file} ...")
+    try:
+        with requests.get(audio_url, stream=True) as r:
+            r.raise_for_status()
+            with open(audio_file, 'wb') as f:
+                for chunk in r.iter_content(chunk_size=8192):
+                    f.write(chunk)
+        print(f"Downloaded: {audio_file}")
+        return (audio_file, base_name) if return_base_name else audio_file
+    except Exception as e:
+        print(f"Failed to download episode: {e}")
+        return (None, None) if return_base_name else None
 
 def download_all_episodes_from_rssfeed(rssfeed: str, output_dir: str = './podcasts'):
     """
@@ -1927,10 +2506,31 @@ def full_workflow(audio_file=None, output_dir=None, rssfeed=None, force: bool = 
     # Write transcript files
     transcript_text = write_transcript_files(segments, f"{base_path}_transcript.txt", f"{base_path}_ts.txt", speaker_segments=speaker_segments)
     print(f"✅ Transcription complete. Transcript saved to {base_path}_transcript.txt")
+    
+    # Create merged transcript if speaker labels are present
+    merged_transcript_text = None
+    if transcript_text and any('[SPEAKER_' in line or re.search(r'\[[^\]]+\]', line) for line in transcript_text.splitlines()):
+        print("🔄 Creating merged transcript (grouping consecutive speaker lines)...")
+        merged_file = write_merged_transcript(transcript_text, base_path)
+        if merged_file:
+            print(f"✅ Merged transcript created: {os.path.basename(merged_file)}")
+            # Read the merged transcript for processing
+            try:
+                with open(merged_file, 'r', encoding='utf-8') as f:
+                    merged_transcript_text = f.read()
+                print("📝 Using merged transcript for processing workflow (cleaner format)")
+            except Exception as e:
+                print(f"⚠️ Could not read merged transcript: {e}, using original transcript")
+                merged_transcript_text = None
+    
     # Step 4: Process transcript
     print("[4/4] Processing transcript workflow (summary, blog, history, etc.) ...")
-    if transcript_text:
-        process_transcript_workflow(transcript_text, base_name, output_dir)
+    # Use merged transcript if available, otherwise use original
+    text_for_processing = merged_transcript_text if merged_transcript_text else transcript_text
+    if text_for_processing:
+        if merged_transcript_text:
+            print("🔄 Processing with merged transcript (improved readability)")
+        process_transcript_workflow(text_for_processing, base_name, output_dir)
     else:
         print("Transcript text is empty, skipping transcript workflow.")
     # Delete temp audio file if it was created (prepared_audio != audio_file)
