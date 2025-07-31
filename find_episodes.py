@@ -183,31 +183,250 @@ def print_episode_analysis(episodes: List[Tuple[int, str, str, str]]):
         if missing_episodes:
             print(f"   Missing episodes: {missing_episodes}")
 
+def detect_rename_collisions(episodes: List[Tuple[int, str, str, str]]) -> Tuple[List, List, List]:
+    """
+    Detect potential rename collisions and categorize renames.
+    
+    Args:
+        episodes: List of episode tuples
+        
+    Returns:
+        Tuple of (safe_renames, collisions, duplicates)
+    """
+    renames_needed = [(episode_num, rel_path, filename, suggested) 
+                     for episode_num, rel_path, filename, suggested in episodes 
+                     if filename != suggested]
+    
+    if not renames_needed:
+        return [], [], []
+    
+    # Group by directory and analyze
+    by_directory = {}
+    for episode_num, rel_path, old_name, new_name in renames_needed:
+        directory = os.path.dirname(rel_path)
+        if directory not in by_directory:
+            by_directory[directory] = []
+        by_directory[directory].append((episode_num, rel_path, old_name, new_name))
+    
+    safe_renames = []
+    collisions = []
+    duplicates = []
+    
+    for directory, dir_renames in by_directory.items():
+        # Check for target filename collisions within this directory
+        target_names = {}
+        existing_files = set()
+        
+        # Get existing files in directory
+        if directory and os.path.exists(directory):
+            existing_files = {f.lower() for f in os.listdir(directory) if f.lower().endswith('.mp3')}
+        elif not directory:  # Current directory
+            existing_files = {f.lower() for f in os.listdir('.') if f.lower().endswith('.mp3')}
+        
+        for episode_num, rel_path, old_name, new_name in dir_renames:
+            new_name_lower = new_name.lower()
+            
+            # Check if multiple files want the same target name
+            if new_name_lower in target_names:
+                duplicates.append((episode_num, rel_path, old_name, new_name, target_names[new_name_lower]))
+            else:
+                target_names[new_name_lower] = (episode_num, rel_path, old_name, new_name)
+                
+                # Check if target already exists (and it's not the source file itself)
+                if new_name_lower in existing_files and old_name.lower() != new_name_lower:
+                    collisions.append((episode_num, rel_path, old_name, new_name))
+                else:
+                    safe_renames.append((episode_num, rel_path, old_name, new_name))
+    
+    return safe_renames, collisions, duplicates
+
+def print_collision_analysis(safe_renames, collisions, duplicates):
+    """Print detailed collision analysis."""
+    print("\n🔍 Collision Analysis Report")
+    print("=" * 50)
+    
+    print(f"✅ Safe renames: {len(safe_renames)}")
+    print(f"💥 Collisions: {len(collisions)}")
+    print(f"🔄 Duplicates: {len(duplicates)}")
+    
+    if collisions:
+        print(f"\n💥 COLLISIONS - Target files already exist:")
+        for episode_num, rel_path, old_name, new_name in collisions:
+            target_path = os.path.join(os.path.dirname(rel_path), new_name)
+            print(f"   Episode {episode_num:02d}: {old_name} → {new_name}")
+            print(f"   ⚠️  Target exists: {target_path}")
+    
+    if duplicates:
+        print(f"\n🔄 DUPLICATES - Multiple files want same target name:")
+        for episode_num, rel_path, old_name, new_name, other in duplicates:
+            print(f"   Episode {episode_num:02d}: {old_name} → {new_name}")
+            print(f"   Episode {other[0]:02d}: {other[2]} → {other[3]}")
+            print(f"   Both want: {new_name}")
+    
+    if collisions or duplicates:
+        print(f"\n💡 Recommendations:")
+        print(f"   1. Check if existing files are duplicates you can delete")
+        print(f"   2. Use --backup-conflicted to create backup strategy") 
+        print(f"   3. Manually resolve conflicts before running rename script")
+    else:
+        print(f"\n🎉 No conflicts detected! Safe to run rename script.")
+
+def generate_backup_strategy(episodes):
+    """Generate backup and manual resolution strategy for conflicted files."""
+    safe_renames, collisions, duplicates = detect_rename_collisions(episodes)
+    
+    if not collisions and not duplicates:
+        print("✅ No conflicts detected - no backup strategy needed!")
+        return
+    
+    backup_script = []
+    manual_steps = []
+    
+    backup_script.extend([
+        "@echo off",
+        "REM Backup strategy for conflicted episode files",
+        "REM WHYcast Transcribe v0.3.0",
+        "echo Creating backups for conflicted files...",
+        "echo.",
+        ""
+    ])
+    
+    if collisions:
+        manual_steps.append("COLLISION RESOLUTION:")
+        manual_steps.append("=" * 30)
+        
+        for episode_num, rel_path, old_name, new_name in collisions:
+            directory = os.path.dirname(rel_path) or "."
+            target_path = os.path.join(directory, new_name)
+            backup_name = f"{new_name}.backup.{episode_num:02d}"
+            
+            backup_script.extend([
+                f"echo Backing up existing {new_name}...",
+                f'copy "{target_path}" "{os.path.join(directory, backup_name)}"',
+                f"echo Created backup: {backup_name}",
+                "echo.",
+                ""
+            ])
+            
+            manual_steps.append(f"Episode {episode_num:02d}: {old_name}")
+            manual_steps.append(f"  Wants to become: {new_name}")
+            manual_steps.append(f"  But {new_name} already exists")
+            manual_steps.append(f"  Backup created: {backup_name}")
+            manual_steps.append(f"  ACTION: Compare files and decide which to keep")
+            manual_steps.append("")
+    
+    if duplicates:
+        manual_steps.append("DUPLICATE RESOLUTION:")
+        manual_steps.append("=" * 30)
+        
+        seen_conflicts = set()
+        for episode_num, rel_path, old_name, new_name, other in duplicates:
+            conflict_key = tuple(sorted([episode_num, other[0]]))
+            if conflict_key in seen_conflicts:
+                continue
+            seen_conflicts.add(conflict_key)
+            
+            manual_steps.append(f"Target filename: {new_name}")
+            manual_steps.append(f"  Episode {episode_num:02d}: {old_name}")
+            manual_steps.append(f"  Episode {other[0]:02d}: {other[2]}")
+            manual_steps.append(f"  ACTION: Decide which episode number is correct")
+            manual_steps.append("")
+    
+    # Write backup script
+    backup_script.extend([
+        "echo Backup complete!",
+        "echo Now manually resolve conflicts as described in manual_resolution.txt",
+        "pause"
+    ])
+    
+    with open("backup_conflicted.bat", 'w', encoding='utf-8') as f:
+        f.write('\n'.join(backup_script))
+    
+    # Write manual resolution guide
+    with open("manual_resolution.txt", 'w', encoding='utf-8') as f:
+        f.write('\n'.join(manual_steps))
+    
+    print(f"\n📋 Backup strategy created:")
+    print(f"   backup_conflicted.bat - Creates backups of existing target files")
+    print(f"   manual_resolution.txt - Step-by-step resolution guide")
+    print(f"\n🔧 Resolution Process:")
+    print(f"   1. Run: backup_conflicted.bat")
+    print(f"   2. Follow: manual_resolution.txt")
+    print(f"   3. Then run: python find_episodes.py --generate-script")
+
 def generate_rename_script(episodes: List[Tuple[int, str, str, str]], output_file: str = "rename_episodes.bat"):
     """
-    Generate a batch script to rename files to standard format.
+    Generate a batch script to rename files to standard format with collision detection.
     
     Args:
         episodes: List of episode tuples
         output_file: Output script filename
     """
-    renames_needed = [(rel_path, filename, suggested) 
-                     for _, rel_path, filename, suggested in episodes 
-                     if filename != suggested]
+    safe_renames, collisions, duplicates = detect_rename_collisions(episodes)
     
-    if not renames_needed:
+    if not safe_renames and not collisions and not duplicates:
         print("✅ All files already have standard names!")
         return
     
+    # Report issues first
+    if collisions:
+        print(f"\n⚠️  Found {len(collisions)} COLLISION(S) - target files already exist:")
+        for episode_num, rel_path, old_name, new_name in collisions:
+            target_path = os.path.join(os.path.dirname(rel_path), new_name)
+            print(f"   💥 {old_name} → {new_name} (target exists: {target_path})")
+    
+    if duplicates:
+        print(f"\n⚠️  Found {len(duplicates)} DUPLICATE target name(s):")
+        for episode_num, rel_path, old_name, new_name, other in duplicates:
+            print(f"   🔄 Episode {episode_num}: {old_name} → {new_name}")
+            print(f"      Conflicts with Episode {other[0]}: {other[2]} → {other[3]}")
+    
+    if not safe_renames:
+        print("\n❌ No safe renames possible due to collisions and duplicates!")
+        print("   Please resolve conflicts manually before running batch rename.")
+        return
+    
+    print(f"\n✅ {len(safe_renames)} safe renames identified")
+    
+    # Generate script with safety checks
     script_lines = [
         "@echo off",
-        "REM Auto-generated episode rename script",
+        "REM Auto-generated episode rename script with collision detection",
         "REM WHYcast Transcribe v0.3.0",
         "echo Renaming episodes to standard format...",
+        "echo ⚠️  This script includes collision detection",
+        "echo.",
         ""
     ]
     
-    for rel_path, old_name, new_name in renames_needed:
+    # Add collision warnings to script
+    if collisions or duplicates:
+        script_lines.extend([
+            "echo ⚠️  WARNING: Some files could not be renamed due to conflicts:",
+            ""
+        ])
+        
+        for episode_num, rel_path, old_name, new_name in collisions:
+            script_lines.append(f'echo    COLLISION: {old_name} -X-> {new_name} (target exists)')
+        
+        for episode_num, rel_path, old_name, new_name, other in duplicates:
+            script_lines.append(f'echo    DUPLICATE: {old_name} and {other[2]} both want {new_name}')
+        
+        script_lines.extend([
+            "echo.",
+            "echo Please resolve these conflicts manually.",
+            "echo.",
+            ""
+        ])
+    
+    # Add safe renames
+    script_lines.extend([
+        f"echo Proceeding with {len(safe_renames)} safe renames...",
+        "echo.",
+        ""
+    ])
+    
+    for episode_num, rel_path, old_name, new_name in safe_renames:
         directory = os.path.dirname(rel_path)
         if directory:
             old_path = f'"{directory}\\{old_name}"'
@@ -217,21 +436,37 @@ def generate_rename_script(episodes: List[Tuple[int, str, str, str]], output_fil
             new_path = f'"{new_name}"'
         
         script_lines.extend([
-            f"echo Renaming: {old_name} -> {new_name}",
-            f"rename {old_path} {new_path}",
+            f"echo Checking: {old_name} -> {new_name}",
+            f"if exist {new_path} (",
+            f"    echo ERROR: Target already exists: {new_name}",
+            f"    echo Skipping rename of {old_name}",
+            f") else (",
+            f"    echo Renaming: {old_name} -> {new_name}",
+            f"    rename {old_path} {new_name}",
+            f"    if errorlevel 1 (",
+            f"        echo ERROR: Failed to rename {old_name}",
+            f"    ) else (",
+            f"        echo ✅ Success: {old_name} -> {new_name}",
+            f"    )",
+            f")",
+            "echo.",
             ""
         ])
     
     script_lines.extend([
-        "echo Done!",
+        "echo.",
+        "echo Rename operation completed!",
+        "echo Check above output for any errors.",
         "pause"
     ])
     
     with open(output_file, 'w', encoding='utf-8') as f:
         f.write('\n'.join(script_lines))
     
-    print(f"\n📜 Rename script generated: {output_file}")
-    print(f"   Contains {len(renames_needed)} rename operations")
+    print(f"\n📜 Safe rename script generated: {output_file}")
+    print(f"   Contains {len(safe_renames)} safe rename operations")
+    if collisions or duplicates:
+        print(f"   ⚠️  {len(collisions + duplicates)} problematic renames excluded")
     print(f"   Run: {output_file}")
 
 def main():
@@ -254,6 +489,18 @@ Examples:
         '--dir', '-d', 
         action='append',
         help='Directory to search for MP3 files (can be used multiple times)'
+    )
+    
+    parser.add_argument(
+        '--check-collisions', '-c',
+        action='store_true',
+        help='Check for rename collisions without generating script'
+    )
+    
+    parser.add_argument(
+        '--backup-conflicted', '-b',
+        action='store_true',
+        help='Generate backup strategy for conflicted files'
     )
     
     parser.add_argument(
@@ -286,6 +533,12 @@ Examples:
     # Analyze episodes
     episodes = analyze_episodes(search_dirs)
     
+    if args.check_collisions:
+        # Just check for collisions
+        safe_renames, collisions, duplicates = detect_rename_collisions(episodes)
+        print_collision_analysis(safe_renames, collisions, duplicates)
+        return
+    
     if args.quiet:
         # Just print the episode list
         for episode_num, relative_path, filename, suggested_name in episodes:
@@ -297,6 +550,8 @@ Examples:
         # Generate rename script if requested
         if args.generate_script:
             generate_rename_script(episodes, args.output_script)
+        elif args.backup_conflicted:
+            generate_backup_strategy(episodes)
 
 if __name__ == "__main__":
     main()

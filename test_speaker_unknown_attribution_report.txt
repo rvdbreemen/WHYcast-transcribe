@@ -1,0 +1,71 @@
+
+SPEAKER_UNKNOWN ATTRIBUTION TEST REPORT
+======================================
+Generated: D:\Users\Robert\Documents\GitHub\RvdB\WHYcast-transcribe\test_speaker_unknown_attribution.py
+Episode: 45 (Test Data)
+
+DATA SUMMARY:
+- Total transcript length: 50657 characters
+- SPEAKER_UNKNOWN segments found: 78
+- Unique position patterns: 12
+
+TOP PATTERNS (by frequency):
+- [SPEAKER_04] → UNKNOWN → [SPEAKER_04]: 17 occurrences
+- [SPEAKER_00] → UNKNOWN → [SPEAKER_00]: 12 occurrences
+- [SPEAKER_05] → UNKNOWN → [SPEAKER_05]: 8 occurrences
+- [SPEAKER_05] → UNKNOWN → [SPEAKER_03]: 7 occurrences
+- [SPEAKER_03] → UNKNOWN → [SPEAKER_03]: 6 occurrences
+
+
+SAMPLE SEGMENTS FOR AI TESTING:
+
+Segment 1 (Line 5):
+Content: [SPEAKER_UNKNOWN] We have a vacancy of the week and we have listener questions. It sounds like a format.
+Previous: [SPEAKER_04] → Next: [SPEAKER_01]
+Context: 
+[SPEAKER_04] to 12. So Ad, what are we talking about today? Well, after 45 episodes, well actually 46 because we started counting at zero. We have th...
+
+
+Segment 2 (Line 13):
+Content: [SPEAKER_UNKNOWN] So, great
+Previous: [SPEAKER_01] → Next: [SPEAKER_01]
+Context: 
+[SPEAKER_01] so I don't know who those people are, but at MCH 2022, 500 angels signed up and that was all the angels that signed up also during camp ...
+
+
+Segment 3 (Line 17):
+Content: [SPEAKER_UNKNOWN] an angel, right? Yes.
+Previous: [SPEAKER_01] → Next: [SPEAKER_01]
+Context: 
+[SPEAKER_01] news, I think. And you also signed up as
+
+[SPEAKER_UNKNOWN] an angel, right? Yes.
+
+[SPEAKER_01] Of course you did. Of course. You are pr...
+
+
+Segment 4 (Line 23):
+Content: [SPEAKER_UNKNOWN] One
+Previous: [SPEAKER_04] → Next: [SPEAKER_04]
+Context: 
+[SPEAKER_04] Yes.
+
+[SPEAKER_UNKNOWN] One
+
+[SPEAKER_04] of my tasks will be to also facilitate angel shifts at the info desk and help the angels get s...
+
+
+Segment 5 (Line 27):
+Content: [SPEAKER_UNKNOWN] as well. Absolutely.
+Previous: [SPEAKER_04] → Next: [SPEAKER_04]
+Context: 
+[SPEAKER_04] of my tasks will be to also facilitate angel shifts at the info desk and help the angels get started. And, of course, together with the ...
+
+
+NEXT STEPS:
+1. Use the attribution prompt with AI (GPT-4o) on these segments
+2. Validate attribution accuracy against conversational flow
+3. Refine prompt based on results
+4. Integrate successful approach into transcribe.py
+
+PROMPT FILE: prompts/speaker_unknown_attribution_prompt.txt

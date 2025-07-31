@@ -54,10 +54,52 @@ If actual names cannot be determined with confidence, use simple descriptive lab
 - Researcher - academic or research guest
 - Founder - entrepreneurial guest
 
+## CONVERSATIONAL FLOW ANALYSIS
+When analyzing speakers, pay special attention to conversational patterns:
+
+**CONTEXT-BASED ATTRIBUTION:**
+- Track who responds to whom in conversations
+- Identify topic ownership and introduction patterns
+- Analyze sentence fragments and continuations between speakers
+- Look for conversational bridges where SPEAKER_UNKNOWN continues or responds to identified speakers
+
+**UNKNOWN SPEAKER ATTRIBUTION STRATEGY:**
+- When SPEAKER_UNKNOWN appears between identified speakers, analyze context clues
+- Consider if the unknown speaker is continuing a thought from a previous identified speaker
+- Look for response patterns that suggest which identified speaker is most likely speaking
+- Examine topic ownership - who introduced or owns the current discussion topic
+
+**WHYCAST-SPECIFIC GUIDANCE:**
+- WHYcast typically features Nancy and Ad as co-hosts plus occasional guests
+- When both Nancy and Ad are identified, avoid defaulting to generic "Host" labels
+- Use conversational flow to distinguish between Nancy and Ad for SPEAKER_UNKNOWN segments
+- Consider the typical show format: co-host discussions with expert guests
+
 **PRIORITY ORDER:**
 1. Use actual first name if clearly identified (e.g., "Sarah", "John", "Dr. Smith")
 2. Use simple role if name unclear but role is obvious (e.g., "Host", "Guest")
 3. Use descriptive role for specific expertise (e.g., "Expert", "CEO", "Researcher")
+4. **Analyze conversational flow for SPEAKER_UNKNOWN attribution to identified speakers**
+5. **Avoid generic "Host" when context suggests specific co-host identity**
+
+## UNKNOWN SPEAKER ANALYSIS GUIDELINES
+
+**BEFORE ASSIGNING GENERIC LABELS:**
+1. **Context Attribution Check**: Can this SPEAKER_UNKNOWN be attributed to a previously identified speaker based on conversational flow?
+2. **Response Pattern Analysis**: Is this speaker responding to or continuing from a specific identified person?
+3. **Topic Continuity**: Does this speaker own or continue a topic thread from an identified speaker?
+4. **Conversational Position**: Where does this unknown speaker appear in the conversation flow?
+
+**ATTRIBUTION CONFIDENCE LEVELS:**
+- **High Confidence**: Clear conversational context points to specific identified speaker
+- **Medium Confidence**: Contextual clues suggest likely speaker but not definitive
+- **Low Confidence**: Insufficient context, use appropriate fallback label
+
+**WHYCAST CO-HOST DISTINCTION:**
+When both Nancy and Ad are identified, use context to distinguish rather than defaulting to "Host":
+- Analyze who responds to whom
+- Consider topic ownership and introduction patterns
+- Look for conversational continuity between identified segments
 
 ## OUTPUT FORMAT
 Provide your analysis in this structured format:
@@ -80,6 +122,7 @@ SPEAKER_00:
 - Role: [Host/Guest/Co-host/Expert]
 - Confidence: [High/Medium/Low]
 - Evidence: "[Specific quotes that support identification]"
+- Context Analysis: "[For SPEAKER_UNKNOWN: conversational flow analysis and attribution reasoning]"
 - Characteristics: [Expertise area, company, background]
 - Reasoning: [Why this identification was chosen]
 
@@ -117,12 +160,14 @@ For example: [SPEAKER_00] → Sarah becomes "Sarah: ..." in the final transcript
 ## CRITICAL REQUIREMENTS:
 1. **Preserve all original content** - do not modify the transcript text
 2. **Use actual names only when clearly supported by evidence**
-3. **Use simple, clean labels** - avoid brackets and complex descriptions
-4. **Prefer names over roles** - use "Sarah" not "[Host Sarah]" or "[Sarah - Host]"
-5. **Keep labels short** - single words or simple names preferred
-6. **Provide clear reasoning for each decision**
-7. **Mark confidence levels honestly**
-8. **Use fallback strategies when names are unclear**
+3. **Analyze conversational flow for SPEAKER_UNKNOWN attribution before using generic labels**
+4. **Use simple, clean labels** - avoid brackets and complex descriptions
+5. **Prefer names over roles** - use "Sarah" not "[Host Sarah]" or "[Sarah - Host]"
+6. **For WHYcast: Distinguish Nancy vs Ad rather than defaulting to "Host" when context allows**
+7. **Keep labels short** - single words or simple names preferred
+8. **Provide clear reasoning for each decision, including context analysis for unknown speakers**
+9. **Mark confidence levels honestly**
+10. **Use fallback strategies only when conversational context is insufficient**
 
 **LABEL FORMAT EXAMPLES:**
 ✅ Good: "Sarah", "Host", "Expert", "Dr. Smith", "CEO"

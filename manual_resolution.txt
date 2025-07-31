@@ -1,0 +1,105 @@
+COLLISION RESOLUTION:
+==============================
+Episode 12: episode-12.mp3
+  Wants to become: episode_12.mp3
+  But episode_12.mp3 already exists
+  Backup created: episode_12.mp3.backup.12
+  ACTION: Compare files and decide which to keep
+
+Episode 13: whycast-episode-13.mp3
+  Wants to become: episode_13.mp3
+  But episode_13.mp3 already exists
+  Backup created: episode_13.mp3.backup.13
+  ACTION: Compare files and decide which to keep
+
+Episode 14: episode-14.mp3
+  Wants to become: episode_14.mp3
+  But episode_14.mp3 already exists
+  Backup created: episode_14.mp3.backup.14
+  ACTION: Compare files and decide which to keep
+
+Episode 15: episode-15.mp3
+  Wants to become: episode_15.mp3
+  But episode_15.mp3 already exists
+  Backup created: episode_15.mp3.backup.15
+  ACTION: Compare files and decide which to keep
+
+Episode 16: episode-16.mp3
+  Wants to become: episode_16.mp3
+  But episode_16.mp3 already exists
+  Backup created: episode_16.mp3.backup.16
+  ACTION: Compare files and decide which to keep
+
+Episode 22: episode-22.mp3
+  Wants to become: episode_22.mp3
+  But episode_22.mp3 already exists
+  Backup created: episode_22.mp3.backup.22
+  ACTION: Compare files and decide which to keep
+
+Episode 26: Episode26.mp3
+  Wants to become: episode_26.mp3
+  But episode_26.mp3 already exists
+  Backup created: episode_26.mp3.backup.26
+  ACTION: Compare files and decide which to keep
+
+Episode 28: Episode 28.mp3
+  Wants to become: episode_28.mp3
+  But episode_28.mp3 already exists
+  Backup created: episode_28.mp3.backup.28
+  ACTION: Compare files and decide which to keep
+
+Episode 30: episode-30.mp3
+  Wants to become: episode_30.mp3
+  But episode_30.mp3 already exists
+  Backup created: episode_30.mp3.backup.30
+  ACTION: Compare files and decide which to keep
+
+Episode 32: episode32.mp3
+  Wants to become: episode_32.mp3
+  But episode_32.mp3 already exists
+  Backup created: episode_32.mp3.backup.32
+  ACTION: Compare files and decide which to keep
+
+Episode 33: Whycast33.mp3
+  Wants to become: episode_33.mp3
+  But episode_33.mp3 already exists
+  Backup created: episode_33.mp3.backup.33
+  ACTION: Compare files and decide which to keep
+
+Episode 37: Episode 37.mp3
+  Wants to become: episode_37.mp3
+  But episode_37.mp3 already exists
+  Backup created: episode_37.mp3.backup.37
+  ACTION: Compare files and decide which to keep
+
+DUPLICATE RESOLUTION:
+==============================
+Target filename: episode_01.mp3
+  Episode 01: episode_1.mp3
+  Episode 01: episode-1.mp3
+  ACTION: Decide which episode number is correct
+
+Target filename: episode_05.mp3
+  Episode 05: episode_5.mp3
+  Episode 05: episode-5.mp3
+  ACTION: Decide which episode number is correct
+
+Target filename: episode_26.mp3
+  Episode 26: Episode_26.mp3
+  Episode 26: Episode26.mp3
+  ACTION: Decide which episode number is correct
+
+Target filename: episode_28.mp3
+  Episode 28: Episode_28.mp3
+  Episode 28: Episode 28.mp3
+  ACTION: Decide which episode number is correct
+
+Target filename: episode_29.mp3
+  Episode 29: ep29.mp3
+  Episode 29: Episode_29.mp3
+  ACTION: Decide which episode number is correct
+
+Target filename: episode_37.mp3
+  Episode 37: Episode_37.mp3
+  Episode 37: Episode 37.mp3
+  ACTION: Decide which episode number is correct

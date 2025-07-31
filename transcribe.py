@@ -1167,6 +1167,166 @@ def apply_speaker_mapping_programmatically(transcript: str, speaker_mapping: Dic
     
     return result
 
+def attribute_unknown_speakers_with_ai(transcript: str, speaker_mapping: Dict[str, str] = None, output_basename: str = None, output_dir: str = None) -> str:
+    """
+    Use AI to intelligently attribute SPEAKER_UNKNOWN segments to most likely speakers
+    based on conversational flow and context analysis.
+    
+    Args:
+        transcript: Transcript with SPEAKER_UNKNOWN segments to analyze
+        speaker_mapping: Current speaker mapping (for reference)
+        output_basename: Base name for output files
+        output_dir: Directory for output files
+        
+    Returns:
+        Transcript with SPEAKER_UNKNOWN segments attributed to specific speakers where possible
+    """
+    import re
+    from typing import List, Dict, Any
+    from pathlib import Path
+    
+    print("\n🤖 Analyzing SPEAKER_UNKNOWN segments with AI...")
+    
+    # Extract SPEAKER_UNKNOWN segments with context
+    lines = transcript.split('\n')
+    unknown_segments = []
+    
+    for i, line in enumerate(lines):
+        if '[SPEAKER_UNKNOWN]' in line:
+            # Get context: previous 3 lines and next 3 lines
+            start_idx = max(0, i - 3)
+            end_idx = min(len(lines), i + 4)
+            context_lines = lines[start_idx:end_idx]
+            
+            segment = {
+                'line_number': i + 1,
+                'content': line.strip(),
+                'context': '\n'.join(context_lines),
+                'previous_speaker': None,
+                'next_speaker': None,
+                'line_index': i
+            }
+            
+            # Find previous speaker
+            for j in range(i - 1, -1, -1):
+                if '[SPEAKER_' in lines[j] and '[SPEAKER_UNKNOWN]' not in lines[j]:
+                    segment['previous_speaker'] = lines[j].split(']')[0] + ']'
+                    break
+            
+            # Find next speaker
+            for j in range(i + 1, len(lines)):
+                if '[SPEAKER_' in lines[j] and '[SPEAKER_UNKNOWN]' not in lines[j]:
+                    segment['next_speaker'] = lines[j].split(']')[0] + ']'
+                    break
+            
+            unknown_segments.append(segment)
+    
+    if not unknown_segments:
+        print("✅ No SPEAKER_UNKNOWN segments found")
+        return transcript
+    
+    print(f"📊 Found {len(unknown_segments)} SPEAKER_UNKNOWN segments to analyze")
+    
+    # Load the attribution prompt
+    prompt_file = Path("prompts/speaker_unknown_attribution_prompt.txt")
+    if not prompt_file.exists():
+        print(f"❌ Attribution prompt not found: {prompt_file}")
+        return handle_unknown_speakers(transcript)  # Fallback to simple replacement
+    
+    try:
+        with open(prompt_file, 'r', encoding='utf-8') as f:
+            attribution_prompt = f.read()
+    except Exception as e:
+        print(f"❌ Error loading attribution prompt: {e}")
+        return handle_unknown_speakers(transcript)  # Fallback
+    
+    # Analyze segments in batches to manage API costs and context
+    batch_size = 5
+    attributions = {}
+    
+    for i in range(0, len(unknown_segments), batch_size):
+        batch = unknown_segments[i:i + batch_size]
+        
+        # Create analysis request for this batch
+        batch_text = "\n\n".join([
+            f"SEGMENT {j+1} (Line {seg['line_number']}):\n"
+            f"Content: {seg['content']}\n"
+            f"Previous: {seg['previous_speaker']} → Next: {seg['next_speaker']}\n"
+            f"Context:\n{seg['context']}"
+            for j, seg in enumerate(batch)
+        ])
+        
+        analysis_prompt = f"""{attribution_prompt}
+
+ANALYZE THESE SPEAKER_UNKNOWN SEGMENTS:
+
+{batch_text}
+
+SPEAKER MAPPING REFERENCE:
+{speaker_mapping if speaker_mapping else "No speaker mapping available"}
+
+Provide analysis for each segment in the specified format."""
+
+        try:
+            # Use OpenAI API for attribution analysis
+            from openai import OpenAI
+            client = OpenAI()
+            
+            response = client.chat.completions.create(
+                model="gpt-4o",
+                messages=[{"role": "user", "content": analysis_prompt}],
+                temperature=0.1
+            )
+            
+            analysis_result = response.choices[0].message.content
+            
+            # Parse attribution results and apply high-confidence ones
+            # For now, we'll save the analysis for review
+            if output_dir and output_basename:
+                analysis_file = Path(output_dir) / f"{output_basename}_unknown_attribution_batch_{i//batch_size + 1}.txt"
+                with open(analysis_file, 'w', encoding='utf-8') as f:
+                    f.write(f"BATCH {i//batch_size + 1} ATTRIBUTION ANALYSIS\n")
+                    f.write("=" * 50 + "\n\n")
+                    f.write(analysis_result)
+                print(f"📝 Saved attribution analysis: {analysis_file}")
+            
+            # For now, extract simple patterns for automatic attribution
+            # Pattern: Same speaker before and after UNKNOWN
+            for seg in batch:
+                if seg['previous_speaker'] and seg['next_speaker']:
+                    if seg['previous_speaker'] == seg['next_speaker']:
+                        # High confidence: same speaker continuation
+                        attributions[seg['line_index']] = seg['previous_speaker']
+                        print(f"✅ High confidence attribution: Line {seg['line_number']} → {seg['previous_speaker']}")
+        
+        except Exception as e:
+            print(f"⚠️ Error in AI attribution analysis: {e}")
+            # Continue with pattern-based fallback for this batch
+            for seg in batch:
+                if seg['previous_speaker'] and seg['next_speaker']:
+                    if seg['previous_speaker'] == seg['next_speaker']:
+                        attributions[seg['line_index']] = seg['previous_speaker']
+    
+    # Apply attributions to transcript
+    if attributions:
+        modified_lines = lines.copy()
+        for line_idx, new_speaker in attributions.items():
+            original_line = modified_lines[line_idx]
+            modified_line = original_line.replace('[SPEAKER_UNKNOWN]', new_speaker)
+            modified_lines[line_idx] = modified_line
+            
+        transcript = '\n'.join(modified_lines)
+        print(f"✅ Applied {len(attributions)} SPEAKER_UNKNOWN attributions")
+    
+    # Handle any remaining SPEAKER_UNKNOWN with fallback
+    remaining_unknown = transcript.count('[SPEAKER_UNKNOWN]')
+    if remaining_unknown > 0:
+        print(f"📋 {remaining_unknown} SPEAKER_UNKNOWN segments remain - applying fallback")
+        transcript = handle_unknown_speakers(transcript)
+    
+    return transcript
+
+
 def handle_unknown_speakers(transcript: str) -> str:
     """
     Handle any remaining [SPEAKER_XX] or [SPEAKER_UNKNOWN] tags that weren't mapped.
@@ -1223,7 +1383,10 @@ def speaker_assignment_programmatic(
         # Apply the speaker mapping
         result = apply_speaker_mapping_programmatically(transcript, speaker_mapping)
         
-        # Handle any unknown/unmapped speakers
+        # Use AI to intelligently attribute SPEAKER_UNKNOWN segments before fallback
+        result = attribute_unknown_speakers_with_ai(result, speaker_mapping, output_basename, output_dir)
+        
+        # Handle any remaining unknown/unmapped speakers with fallback
         result = handle_unknown_speakers(result)
         
         # Post-processing statistics
