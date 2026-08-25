@@ -68,6 +68,7 @@ from whycast.events import ProgressEvent, emit, use_sink
 
 from webui import db as webui_db
 from webui import jobs
+from webui import snapshots
 
 __all__ = [
     "EXIT_OK",
@@ -826,6 +827,7 @@ def _run_job_row(conn: sqlite3.Connection, job_id: str, started: float) -> int:
             # twenty minutes.
             _require_api_key(ctx)
         ctx.check_cancel("before starting")
+        _snapshot_before(ctx)
         handler(ctx)
     except JobCancelled as exc:
         return _finish_cancelled(conn, job_id, str(exc), started)
@@ -850,6 +852,39 @@ def _run_job_row(conn: sqlite3.Connection, job_id: str, started: float) -> int:
     )
     _record(conn, job_id, "succeeded", EXIT_OK, None)
     return EXIT_OK
+
+
+def _snapshot_before(ctx: _Context) -> None:
+    """Copy the episode's current artifacts aside so the run can be diffed.
+
+    Only for jobs that target one episode: a feed download writes no artifact to
+    compare against. Best-effort throughout - a job must never fail because the
+    copy it was making for later inspection did not work out (see
+    :mod:`webui.snapshots` for why the copy lives with the job rather than
+    beside the artifact).
+    """
+    if not ctx.base_name:
+        return
+    try:
+        episode = webui_db.get_episode(ctx.conn, ctx.base_name)
+        if not episode:
+            return
+        artifacts = [a for a in episode.get("artifacts", []) if a.get("path")]
+        if not artifacts:
+            return
+        manifest = snapshots.take_snapshot(ctx.job_id, ctx.base_name, artifacts)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("No before-snapshot for job %s: %s", ctx.job_id, exc)
+        return
+    if manifest:
+        copied = sum(1 for a in manifest["artifacts"] if a.get("copied"))
+        emit(
+            "job",
+            f"Recorded {copied} artifact(s) as they were, so this run can be "
+            f"compared against them afterwards.",
+            job_id=ctx.job_id,
+            snapshot_count=copied,
+        )
 
 
 def _require_api_key(ctx: _Context) -> None:

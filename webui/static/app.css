@@ -514,3 +514,18 @@ button:disabled { opacity: .55; cursor: default; }
   max-width: 22rem;
 }
 tr.current { background: var(--neutral-bg); }
+
+/* Unified diff of what a run changed (TASK-005 phase 4).
+   Colour is a hint, never the only signal: every line keeps its leading + or -
+   from the diff itself, so this reads the same to someone who cannot tell the
+   two greens apart, and in a terminal paste. */
+pre.diff {
+  margin: 0;
+  padding: 0.5rem 0.75rem;
+  overflow-x: auto;
+  line-height: 1.45;
+}
+pre.diff span { display: block; white-space: pre; }
+.diff-add { background: var(--ok-bg); }
+.diff-del { background: var(--bad-bg); }
+.diff-hunk { color: var(--fg-muted); }

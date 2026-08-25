@@ -128,6 +128,7 @@ from __future__ import annotations
 import ipaddress
 import json
 import logging
+import difflib
 import os
 import re
 import sqlite3
@@ -152,7 +153,7 @@ from jinja2 import TemplateNotFound
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 import webui as webui_package
-from webui import db, jobs
+from webui import db, jobs, snapshots
 
 # The same import :mod:`webui.jobs` makes, for the same reason: every use of
 # the shared connection serialises on this lock, which is also what keeps a
@@ -2591,6 +2592,251 @@ def _register_job_routes(app: FastAPI, templates: Jinja2Templates) -> None:
             },
             lambda: _job_detail_fallback(job),
         )
+
+    @app.get("/api/config", name="api_config")
+    async def api_config(request: Request):
+        """Allowlisted configuration only; secrets are never read (ADR-008)."""
+        return JSONResponse(_config_payload())
+
+    @app.get("/config", response_class=HTMLResponse, name="config_viewer")
+    async def config_viewer(request: Request):
+        """The same, rendered."""
+        conn = _queue_or_503(request)
+        payload = _config_payload()
+        return _render_or_fallback(
+            templates,
+            request,
+            "config.html",
+            {"config": payload, "meta": _public_meta(db.get_meta(conn))},
+            lambda: JSONResponse(payload),
+        )
+
+    @app.get("/api/jobs/{job_id}/diff", name="api_job_diff")
+    async def api_job_diff(request: Request, job_id: str):
+        """What this run changed, against the copies taken before it started.
+
+        The comparison is the job's own before-snapshot (``webui.snapshots``)
+        versus what is on disk now - not a ``.bak``, which ADR-009 removed. A
+        job with no snapshot answers honestly rather than pretending nothing
+        changed.
+        """
+        job = _get_job_or_404(request, job_id)
+        return JSONResponse(_job_diff_payload(job))
+
+    @app.get("/jobs/{job_id}/diff", response_class=HTMLResponse, name="job_diff")
+    async def job_diff(request: Request, job_id: str):
+        """The same comparison, rendered."""
+        conn = _queue_or_503(request)
+        job = _get_job_or_404(request, job_id)
+        payload = _job_diff_payload(job)
+        return _render_or_fallback(
+            templates,
+            request,
+            "job_diff.html",
+            {
+                "job": job,
+                "diff": payload,
+                "job_types": job_types_payload(),
+                "meta": _public_meta(db.get_meta(conn)),
+            },
+            lambda: _job_detail_fallback(job),
+        )
+
+
+#: How many diff lines are returned per artifact. A regenerated transcript can
+#: differ in thousands of lines; past a point the answer is "it was rewritten",
+#: and shipping the rest helps nobody and costs the browser dearly.
+_MAX_DIFF_LINES = 400
+
+
+def _job_diff_payload(job: Dict[str, Any]) -> Dict[str, Any]:
+    """Compare a job's before-snapshot with the artifacts on disk now."""
+    manifest = snapshots.load_manifest(job["id"])
+    if not manifest:
+        return {
+            "job_id": job["id"],
+            "base_name": job.get("base_name"),
+            "available": False,
+            "reason": (
+                "No before-snapshot was recorded for this job, so there is "
+                "nothing to compare against. Snapshots are taken for jobs that "
+                "target one episode, from the moment the job starts."
+            ),
+            "artifacts": [],
+        }
+
+    entries = []
+    for entry in manifest.get("artifacts", []):
+        filename = os.path.basename(str(entry.get("filename") or ""))
+        if not filename:
+            continue
+        current_path = _safe_file(podcast_dir_from_env(), entry.get("source"))
+        before_path = snapshots.snapshot_file(job["id"], filename)
+        entries.append(
+            _diff_entry(entry, filename, before_path, current_path)
+        )
+
+    changed = sum(1 for e in entries if e["status"] == "changed")
+    return {
+        "job_id": job["id"],
+        "base_name": manifest.get("base_name") or job.get("base_name"),
+        "available": True,
+        "changed_count": changed,
+        "artifacts": entries,
+    }
+
+
+def _diff_entry(
+    entry: Dict[str, Any],
+    filename: str,
+    before_path: str,
+    current_path: Optional[str],
+) -> Dict[str, Any]:
+    """One artifact's before/after comparison, safe on anything unreadable."""
+    result: Dict[str, Any] = {
+        "kind": entry.get("kind"),
+        "fmt": entry.get("fmt"),
+        "filename": filename,
+        "status": "unknown",
+        "lines": [],
+        "truncated": False,
+    }
+    if not entry.get("copied"):
+        result["status"] = "not-recorded"
+        result["reason"] = entry.get("reason") or "not copied before the run"
+        return result
+
+    before = _read_text_or_none(before_path)
+    after = _read_text_or_none(current_path) if current_path else None
+    if before is None:
+        result["status"] = "not-recorded"
+        result["reason"] = "the recorded copy is unreadable"
+        return result
+    if after is None:
+        result["status"] = "removed"
+        return result
+    if before == after:
+        result["status"] = "unchanged"
+        return result
+
+    diff = list(
+        difflib.unified_diff(
+            before.splitlines(),
+            after.splitlines(),
+            fromfile=f"{filename} (before)",
+            tofile=f"{filename} (now)",
+            lineterm="",
+            n=2,
+        )
+    )
+    result["status"] = "changed"
+    result["truncated"] = len(diff) > _MAX_DIFF_LINES
+    result["lines"] = diff[:_MAX_DIFF_LINES]
+    return result
+
+
+#: Configuration values the UI may show. An ALLOWLIST, never a denylist
+#: (ADR-008 Decision Contract): a denylist fails open, so the day someone adds
+#: WHYCAST_SOME_NEW_TOKEN to config.py it would be published until a person
+#: noticed. Everything absent from this tuple is simply never read.
+#:
+#: Secrets are not here, and they are not here in masked form either. "sk-...
+#: (51 chars)" still leaks the length and the prefix, and it invites the next
+#: person to relax it by one more character.
+_VISIBLE_CONFIG_KEYS = (
+    "VERSION",
+    "MODEL_SIZE",
+    "DEVICE",
+    "COMPUTE_TYPE",
+    "BEAM_SIZE",
+    "OPENAI_MODEL",
+    "OPENAI_LARGE_CONTEXT_MODEL",
+    "OPENAI_HISTORY_MODEL",
+    "OPENAI_SPEAKER_MODEL",
+    "TEMPERATURE",
+    "MAX_TOKENS",
+    "MAX_INPUT_TOKENS",
+    "CHARS_PER_TOKEN",
+    "MAX_FILE_SIZE_KB",
+    "USE_RECURSIVE_SUMMARIZATION",
+    "MAX_CHUNK_SIZE",
+    "CHUNK_OVERLAP",
+    "USE_SPEAKER_DIARIZATION",
+    "DIARIZATION_MODEL",
+    "DIARIZATION_ALTERNATIVE_MODEL",
+    "DIARIZATION_MIN_SPEAKERS",
+    "DIARIZATION_MAX_SPEAKERS",
+    "USE_CUSTOM_VOCABULARY",
+)
+
+#: Config values that are filesystem paths. Shown as the basename plus whether
+#: the file exists: the full path of a prompt file is not a secret, but it is
+#: noise, and a reader only wants to know which file and whether it is there.
+_VISIBLE_CONFIG_PATHS = (
+    "PROMPT_CLEANUP_FILE",
+    "PROMPT_SUMMARY_FILE",
+    "PROMPT_BLOG_FILE",
+    "PROMPT_BLOG_ALT1_FILE",
+    "PROMPT_HISTORY_EXTRACT_FILE",
+    "PROMPT_SPEAKER_ASSIGN_FILE",
+    "VOCABULARY_FILE",
+)
+
+
+def _config_payload() -> Dict[str, Any]:
+    """The configuration this UI is willing to show.
+
+    Reads only the names in the allowlists above, straight from
+    :mod:`whycast.config` (ADR-007: env-vars are the source). No environment
+    dictionary is ever iterated, so a new secret cannot arrive here by accident.
+    """
+    from whycast import config as whycast_config
+
+    settings = []
+    for key in _VISIBLE_CONFIG_KEYS:
+        if not hasattr(whycast_config, key):
+            continue
+        settings.append({"key": key, "value": getattr(whycast_config, key)})
+
+    paths = []
+    for key in _VISIBLE_CONFIG_PATHS:
+        raw = getattr(whycast_config, key, None)
+        if not raw:
+            continue
+        paths.append(
+            {
+                "key": key,
+                "filename": os.path.basename(str(raw)),
+                "exists": os.path.isfile(str(raw)),
+            }
+        )
+
+    return {
+        "settings": settings,
+        "paths": paths,
+        "podcast_dir": podcast_dir_from_env(),
+        "host": host_from_env(),
+        "port": port_from_env(),
+        "note": (
+            "Only allowlisted settings are shown. API keys and tokens are never "
+            "read by this page, in any form."
+        ),
+    }
+
+
+def _read_text_or_none(path: Optional[str]) -> Optional[str]:
+    """Read a text file, or None when it is missing or not text."""
+    if not path or not os.path.isfile(path):
+        return None
+    try:
+        with open(path, "rb") as handle:
+            raw = handle.read()
+    except OSError:
+        return None
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return raw.decode("utf-8", errors="replace")
 
 
 def _get_job_or_404(request: Request, job_id: str) -> Dict[str, Any]:
