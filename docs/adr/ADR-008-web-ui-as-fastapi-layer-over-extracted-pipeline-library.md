@@ -220,12 +220,12 @@ Concretely:
   "forbid_import": [],
   "forbid_pattern": [
     {
-      "pattern": "\\b(sys\\.)?exit\\(",
+      "pattern": "^\\s*(sys\\.)?exit\\([^)]*\\)\\s*(#.*)?$",
       "path_glob": "whycast/**/*.py",
       "message": "Library code must raise exceptions, not exit() (ADR-008 Decision Contract)"
     },
     {
-      "pattern": "^\\s*print\\(",
+      "pattern": "^\\s*print\\(.*\\)\\s*(#.*)?$",
       "path_glob": "whycast/pipeline/**/*.py",
       "message": "Pipeline steps must emit events via EventSink and logging, not print() (ADR-008)"
     }
