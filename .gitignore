@@ -178,3 +178,34 @@ cython_debug/
 
 #models stuff from huggingface
 models/
+docs/adr/.adr-kit.local.json
+docs/adr/.adr-kit-state.json
+docs/adr/.adr-kit-init-candidates.json
+
+# Web UI index cache (ADR-008: rebuildable from podcasts/, never source of truth)
+webui/*.db
+webui/*.db-wal
+webui/*.db-shm
+
+# Playwright MCP session artifacts (browser verification runs)
+.playwright-mcp/
+
+# Per-job event logs and runner output (ADR-008 phase 2). Runtime data written
+# by webui.runner: logs/jobs/<job_id>/{events.jsonl,runner.log,verdict.json}.
+# The job *history* lives in the SQLite queue, not here.
+logs/jobs/
+
+# The single-worker lock. Lives next to the queue database it protects
+# (webui.worker.lock_path) and holds a pid, which is per-machine runtime state.
+webui/*.lock
+*.worker.lock
+
+# Verplaatste duplicaten, wachtend op definitieve verwijdering door de eigenaar
+_attic/
+
+# Runtime log written by the pipeline; regenerated on every run
+logs/transcribe.log
+transcribe.log
+
+# Generated knowledge graph (graphify). Regenerate with /graphify; not source.
+graphify-out/
