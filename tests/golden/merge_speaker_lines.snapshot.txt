@@ -1,0 +1,6 @@
+{
+  "diarized_with_timestamps": "[00:00:00.00 --> 00:00:04.20] [SPEAKER_00] Welcome to the WHYcast, episode forty-two.\n\n[00:00:04.20 --> 00:00:07.90] [SPEAKER_00] Today we talk about the campsite network.\n\n[00:00:07.90 --> 00:00:12.10] [SPEAKER_01] Thanks for having me, happy to be here.\n\n[00:00:12.10 --> 00:00:15.00] [SPEAKER_UNKNOWN] Absolutely, glad to join as well.\n\n[00:00:15.00 --> 00:00:19.30] [SPEAKER_01] So the fiber ring covers the whole field.\n\n[00:00:19.30 --> 00:00:23.80] [SPEAKER_00] And power comes from the generator village.",
+  "empty": "",
+  "merge_transcript": "[SPEAKER_00] Welcome to the WHYcast. This is episode forty-two.\n\n[SPEAKER_01] Thanks for having me. and this line has no label at all, It is great to be here.\n\nRobert: Let us switch to colon format. It should merge these two lines.\n\nMarvin: Life, do not talk to me about life.\n\n[SPEAKER_00] Back to brackets for the finale.",
+  "whitespace_only": "   \n  "
+}

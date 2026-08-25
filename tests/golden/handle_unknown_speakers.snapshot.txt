@@ -1,0 +1,5 @@
+{
+  "diarized": "[00:00:00.00 --> 00:00:04.20] Speaker 00: Welcome to the WHYcast, episode forty-two.\n[00:00:04.20 --> 00:00:07.90] Speaker 00: Today we talk about the campsite network.\n[00:00:07.90 --> 00:00:12.10] Speaker 01: Thanks for having me, happy to be here.\n[00:00:12.10 --> 00:00:15.00] Speaker: Absolutely, glad to join as well.\n[00:00:15.00 --> 00:00:19.30] Speaker 01: So the fiber ring covers the whole field.\n[00:00:19.30 --> 00:00:23.80] Speaker 00: And power comes from the generator village.",
+  "no_tags": "Robert: nothing to do here.",
+  "unknowns": "Speaker: Who said this line?\nSpeaker 07: A numbered speaker that was never mapped.\nSpeaker: Some other bracketed speaker tag.\nRobert: An already-mapped line stays untouched.\nSpeaker 00: Another numbered one."
+}

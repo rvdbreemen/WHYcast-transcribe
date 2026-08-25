@@ -1,0 +1,16 @@
+{
+  "final_mapping_section": {
+    "[SPEAKER_00]": "Robert",
+    "[SPEAKER_01]": "Marvin",
+    "[SPEAKER_02]": "Guest (Trillian)"
+  },
+  "loose_patterns": {
+    "[SPEAKER_00]": "Robert vd B",
+    "[SPEAKER_01]": "Ford Prefect"
+  },
+  "no_mapping_at_all": {},
+  "per_speaker_sections": {
+    "[SPEAKER_00]": "Robert",
+    "[SPEAKER_01]": "Marvin"
+  }
+}
