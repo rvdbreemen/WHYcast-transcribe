@@ -1,0 +1,295 @@
+{% extends "base.html" %}
+{% block title %}Jobs - WHYcast{% endblock %}
+
+{% block content %}
+{% import "_macros.html" as m %}
+{#
+  The job dashboard (ADR-008 phase 2, TASK-003).
+
+  Context, as webui.app.jobs_dashboard() builds it:
+
+      jobs       list of job dicts, newest first, filtered by ``status``
+      active     the running job (UNFILTERED - see below), or None
+      status     the status filter in effect, or None
+      statuses   every legal status, for the filter links
+      job_types  list of {type, label, description, gpu, cost,
+                 requires_base_name} - webui.app.job_types_payload()
+      meta       index metadata (rendered by base.html's footer)
+
+  Three things are easy to get wrong here and are handled on purpose:
+
+  * ``active`` is not filtered by ``status``, ``jobs`` is. With ?status=failed
+    the running job is not in ``jobs`` at all. So the queue state below is only
+    trusted when the view is unfiltered; see "queue_known".
+  * ``jobs`` comes back created_at DESC. That is right for history and wrong
+    for a queue - a queue is FIFO - so the queued slice is reversed.
+  * "Nothing is running" and "no worker is running" are different sentences.
+    This page cannot tell them apart from the data it gets (nothing in this
+    context reports worker liveness), so it says exactly that instead of
+    guessing. See the banner.
+#}
+{% set all_jobs = jobs|default([], true) %}
+{% set filtered = (status is defined and status) %}
+{% set queue_known = (not filtered) or status == 'queued' %}
+
+{% set queued = all_jobs|selectattr('status', 'equalto', 'queued')|list|reverse|list %}
+{% set running_rows = all_jobs|selectattr('status', 'equalto', 'running')|list %}
+{% set active_id = active.id if active else none %}
+{% set running = ([active] if active else []) + (running_rows|rejectattr('id', 'equalto', active_id)|list) %}
+{% set history = all_jobs
+     |rejectattr('status', 'equalto', 'queued')
+     |rejectattr('status', 'equalto', 'running')|list %}
+
+<h1>Jobs</h1>
+<p class="sub">
+  One worker, one job at a time (ADR-008): a queued job waits for the one in
+  front of it, whether or not it needs the GPU.
+</p>
+
+{#
+  Everything that changes on its own lives in #jobs-live, which polls itself.
+  The "start a job" panel below is deliberately outside it: a poll that
+  replaced a form mid-interaction would reset the operator's selection, and
+  the whole point of that panel is to be deliberate.
+
+  Poll interval follows the state - two seconds while something is happening,
+  fifteen while the queue is idle. Without htmx nothing polls and the page is
+  simply a snapshot; the browser's reload button still works.
+#}
+<div id="jobs-live"
+     hx-get="/jobs{% if filtered %}?status={{ status|urlencode }}{% endif %}"
+     hx-trigger="every {{ '2s' if (running or queued) else '15s' }}"
+     hx-target="#jobs-live"
+     hx-select="#jobs-live"
+     hx-swap="outerHTML">
+
+  {#
+    Worker state. The honest version.
+
+    A running job proves a worker is alive. Nothing running proves nothing by
+    itself - but "N jobs queued and nothing running" is the state where an
+    operator sits waiting for a run that will never start, so it gets the loud
+    treatment and the command to fix it.
+
+    If a future version puts real worker liveness in this context (a `worker`
+    key here, fed by webui.worker.read_lock_pid(worker.lock_path()) plus
+    process_alive(), and a matching entry in webui.app.META_KEYS if it goes
+    through `meta`), this banner is the place to state it as fact instead of
+    as a pair of possibilities.
+  #}
+  {% if running %}
+  <p class="banner ok">
+    A worker is alive and running {{ running|length }} job{{ '' if running|length == 1 else 's' }}.
+  </p>
+  {% elif queued and queue_known %}
+  <p class="banner warn">
+    <strong>{{ queued|length }} job{{ '' if queued|length == 1 else 's' }} queued and nothing is running.</strong>
+    Either the worker has not claimed the next one yet (it polls every few
+    seconds), or no worker process is running at all - in which case these jobs
+    will sit here forever. Start one with
+    <code class="mono">python -m webui.worker</code>.
+    This page cannot tell those two apart; it only sees the queue.
+  </p>
+  {% elif queue_known %}
+  <p class="banner neutral">Nothing running, nothing queued.</p>
+  {% else %}
+  <p class="banner neutral">
+    Nothing is running. The queue is not shown in this filtered view.
+  </p>
+  {% endif %}
+
+  {# ---- what is running now ---- #}
+  <section class="panel">
+    <h2>Running now</h2>
+    {% for job in running %}
+    <div class="jobcard{{ ' cost' if job.cost else '' }}">
+      <div class="jobcard-head">
+        <strong>{{ job.label }}</strong>
+        {{ m.status_badge(job) }}
+        {{ m.cost_badge(job) }}
+        {{ m.gpu_badge(job) }}
+        {% if not job.known_type %}<span class="badge warn" title="This row was written by a different build of the app. Both flags are assumed to be on.">unknown type</span>{% endif %}
+      </div>
+      <dl class="jobcard-facts">
+        <dt>Job</dt><dd>{{ m.job_link(job) }}</dd>
+        <dt>Episode</dt><dd>{{ m.episode_link(job) }}</dd>
+        <dt>Running for</dt><dd>{{ m.elapsed(job) }}</dd>
+        <dt>Started</dt><dd>{{ m.epoch(job.started_at) }}</dd>
+        <dt>Process</dt><dd class="mono">{% if job.pid %}pid {{ job.pid }}{% else %}<span class="muted">no pid recorded</span>{% endif %}</dd>
+      </dl>
+      <div class="jobcard-actions">
+        <a class="tab" href="/jobs/{{ job.id|urlencode }}">Open the live log</a>
+        {{ m.cancel_form(job) }}
+      </div>
+    </div>
+    {% else %}
+    <p class="hint">No job is running{% if not filtered %}; the GPU is free{% endif %}.</p>
+    {% endfor %}
+  </section>
+
+  {# ---- the queue, in the order it will be worked ---- #}
+  <section class="panel">
+    <h2>Queued</h2>
+    {% if not queue_known %}
+    <p class="hint">Not shown: this view is filtered to <span class="mono">{{ status }}</span>.</p>
+    {% else %}
+    <div class="table-wrap">
+      <table class="jobs">
+        <caption>{{ queued|length }} waiting, next one first</caption>
+        <thead>
+          <tr>
+            <th scope="col" class="num">#</th>
+            <th scope="col">Job</th>
+            <th scope="col">Type</th>
+            <th scope="col">Episode</th>
+            <th scope="col" class="when">Queued at</th>
+            <th scope="col">Cancel</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for job in queued %}
+          <tr>
+            <td class="num">{{ loop.index }}</td>
+            <td>{{ m.job_link(job) }}</td>
+            <td>
+              {{ job.label }}
+              {{ m.cost_badge(job) }}
+              {{ m.gpu_badge(job) }}
+              {% if job.cancel_requested %}<span class="badge s-cancelled">cancelling</span>{% endif %}
+            </td>
+            <td>{{ m.episode_link(job) }}</td>
+            <td class="when">{{ m.epoch(job.created_at) }}</td>
+            <td>{{ m.cancel_form(job) }}</td>
+          </tr>
+          {% else %}
+          <tr class="empty"><td colspan="6">The queue is empty.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+  </section>
+
+  {# ---- what happened before ---- #}
+  <section class="panel">
+    <h2>History</h2>
+    <p class="hint">
+      Newest first{% if filtered %}, filtered to <span class="mono">{{ status }}</span>{% endif %}.
+      Filter:
+      <a href="/jobs"{% if not filtered %} aria-current="true"{% endif %}>all</a>
+      {% for name in statuses|default([], true) %}
+      &middot; <a href="/jobs?status={{ name|urlencode }}"{% if status == name %} aria-current="true"{% endif %}>{{ name }}</a>
+      {% endfor %}
+    </p>
+    <div class="table-wrap">
+      <table class="jobs">
+        <caption>{{ history|length }} finished job{{ '' if history|length == 1 else 's' }} in this view</caption>
+        <thead>
+          <tr>
+            <th scope="col">Job</th>
+            <th scope="col">Outcome</th>
+            <th scope="col">Type</th>
+            <th scope="col">Episode</th>
+            <th scope="col" class="num">Took</th>
+            <th scope="col" class="when">Finished</th>
+            <th scope="col">Why</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for job in history %}
+          <tr>
+            <td>{{ m.job_link(job) }}</td>
+            <td>{{ m.status_badge(job) }}</td>
+            <td>
+              {{ job.label }}
+              {{ m.cost_badge(job) }}
+              {{ m.gpu_badge(job) }}
+            </td>
+            <td>{{ m.episode_link(job) }}</td>
+            <td class="num">{{ m.duration(job.duration_seconds) }}</td>
+            <td class="when">{{ m.epoch(job.finished_at) }}</td>
+            {#
+              Job error text is pipeline output: an exception message, a path,
+              anything a failing step put in a string. It is rendered as text
+              here and nowhere else, and never with |safe.
+            #}
+            <td class="err">
+              {% if job.error %}{{ job.error }}
+              {% elif job.exit_code %}<span class="muted">exit code {{ job.exit_code }}</span>
+              {% else %}<span class="muted">-</span>{% endif %}
+            </td>
+          </tr>
+          {% else %}
+          <tr class="empty"><td colspan="7">No finished jobs in this view.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+</div>
+
+{#
+  ---- starting a job -------------------------------------------------------
+
+  Two gates stand between a click and a paid API call, because one is not
+  enough:
+
+  1. Every action is folded inside <details>. Opening it is a deliberate act,
+     it works with scripting off, and the summary already carries the "$ paid
+     API" badge - so nothing that spends money is ever a single stray click on
+     a page you just opened.
+  2. /static/app.js confirms before it posts, with text that names the job, the
+     episode, and what it will do. That is the JavaScript half; the disclosure
+     above is what still protects you when scripting is off.
+
+  The cost flag comes from the server's own catalogue (webui.app.job_types_payload,
+  which reads webui.jobs.JOB_TYPES) - the same source webui.app validates an
+  enqueue against, so the badge cannot claim "free" for something the API
+  treats as paid.
+
+  Episode-scoped types are not here: they need a base_name, which means they
+  belong on an episode page where the episode is unambiguous.
+#}
+<section class="panel" id="start-a-job">
+  <h2>Start a job</h2>
+  <p class="hint">
+    Queues the job; the worker picks it up. Episode-specific jobs
+    (post-processing, speakers, reprocess) live on the episode's own page.
+  </p>
+
+  <ul class="action-list">
+    {% for spec in job_types|default([], true) if not spec.requires_base_name %}
+    <li>
+      <details class="action{{ ' costly' if spec.cost else '' }}">
+        <summary>
+          {{ spec.label }}
+          {{ m.cost_badge(spec) }}
+          {{ m.gpu_badge(spec) }}
+        </summary>
+        <p class="hint">{{ spec.description }}</p>
+        <form method="post" action="/api/jobs"
+              data-enqueue
+              data-result="start-job-result"
+              data-confirm="Queue: {{ spec.label }}
+
+{{ spec.description }}
+
+{% if spec.cost %}This calls the paid OpenAI API - it will spend money.
+{% endif %}{% if spec.gpu %}It claims the GPU for the whole run; nothing else can transcribe while it works.
+{% endif %}Queue it now?">
+          <input type="hidden" name="type" value="{{ spec.type }}">
+          <button type="submit" class="{{ 'danger' if spec.cost else 'plain' }}">
+            Queue {{ spec.label|lower }}
+          </button>
+        </form>
+      </details>
+    </li>
+    {% else %}
+    <li class="hint">No job types are available.</li>
+    {% endfor %}
+  </ul>
+
+  {# app.js writes the created job's link here (textContent + a real <a>). #}
+  <p id="start-job-result" class="job-result" role="status" aria-live="polite"></p>
+</section>
+{% endblock %}

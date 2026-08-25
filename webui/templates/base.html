@@ -1,0 +1,64 @@
+{#
+  Page skeleton for the WHYcast web UI (ADR-008, TASK-002).
+
+  Two deliberate choices live here:
+
+  * htmx is served from /static/htmx.min.js, vendored in the repo. The app is
+    localhost-only and must keep working with no internet connection, so there
+    is no CDN reference anywhere in these templates.
+  * htmx is configured with allowScriptTags/allowEval off, and only ever swaps
+    in HTML this app rendered itself (the search results table). Artifact
+    content is NOT swapped into this document at all - it is navigated to
+    inside a sandboxed iframe, see episode.html. htmx's allowScriptTags only
+    strips <script> elements; it does not touch inline event handlers, so it
+    is not a sanitiser and must never be relied on as one.
+
+  Every value rendered here is file-derived; autoescape stays on and no
+  template in this directory uses |safe. All script lives in
+  /static/app.js, never inline, so the app's Content-Security-Policy can say
+  script-src 'self' without 'unsafe-inline'.
+#}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}WHYcast{% endblock %}</title>
+  <meta name="htmx-config" content='{"allowScriptTags":false,"allowEval":false,"selfRequestsOnly":true}'>
+  <link rel="stylesheet" href="/static/app.css">
+  <script src="/static/htmx.min.js" defer></script>
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/">WHYcast</a>
+    <nav class="nav">
+      <a href="/">Episodes</a>
+      <a href="/jobs">Jobs</a>
+      <a href="/unmatched">Unmatched files</a>
+    </nav>
+  </header>
+
+  <main class="page">
+    {% block content %}{% endblock %}
+  </main>
+
+  <footer class="footer">
+    <details class="scaninfo">
+      <summary>Scan info</summary>
+      {# meta is an open dict: render whatever the app reports, assume no keys. #}
+      <dl>
+        {% for key, value in meta.items() %}
+          <dt>{{ key }}</dt>
+          <dd>{{ value }}</dd>
+        {% else %}
+          <dt>-</dt>
+          <dd>No scan metadata reported.</dd>
+        {% endfor %}
+      </dl>
+    </details>
+  </footer>
+
+  {# All script is in /static/app.js: nothing inline, so the CSP can forbid it. #}
+</body>
+</html>

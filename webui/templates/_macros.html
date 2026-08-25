@@ -1,0 +1,223 @@
+{#
+  Shared rendering bits for the WHYcast web UI.
+
+  These macros only ever receive plain dicts from the app layer, as built by
+  webui.db._episode_dict:
+
+      episode: {base_name, number, audio_path, audio_size, mtime,
+                kinds, formats: {kind: [fmt, ...]}, artifact_count}
+      artifact: {kind, fmt, size, mtime}          (detail page only)
+
+  "artifacts" is NOT part of that shape: only db.get_episode() nests the
+  artifact rows, for the detail page. Anything rendered for a list of episodes
+  must go through "formats".
+
+  They use stock Jinja2 filters only (no custom environment filters), so the
+  templates render under a bare jinja2.Environment as well as under Starlette's
+  Jinja2Templates.
+#}
+
+{# Two-letter column labels for the status matrix. Ten kinds do not fit as full
+   words in a dense table; the full name stays reachable via title=. Unknown
+   kinds fall back to their first two characters, so adding a kind to
+   ARTIFACT_KINDS never breaks this page. #}
+{% set KIND_ABBREV = {
+  'transcript': 'tr',
+  'ts': 'ts',
+  'cleaned': 'cl',
+  'summary': 'su',
+  'blog': 'bl',
+  'blog_alt1': 'b1',
+  'history': 'hi',
+  'speaker_assignment': 'sp',
+  'analysis': 'an',
+  'merged': 'mg'
+} %}
+
+
+{% macro abbrev(kind) -%}
+{{ KIND_ABBREV.get(kind, kind[:2]) }}
+{%- endmacro %}
+
+
+{# "is not none" rather than truthiness: a 0-byte artifact is a real result
+   (the pipeline wrote an empty file) and must not look like a missing size. #}
+{% macro size(value) -%}
+{% if value is not none %}{{ value|filesizeformat }}{% else %}<span class="muted">-</span>{% endif %}
+{%- endmacro %}
+
+
+{% macro epoch(value) -%}
+{% if value %}<time data-epoch="{{ value|int }}" title="epoch seconds; JavaScript renders local time">{{ value|int }}</time>{% else %}<span class="muted">-</span>{% endif %}
+{%- endmacro %}
+
+
+{# Both macros read episode.formats (kind -> list of formats on disk), which
+   webui.db puts on EVERY episode dict. They must not reach for
+   episode.artifacts: the overview calls db.list_episodes(), which does not
+   nest artifact rows, and Jinja resolves a missing key to Undefined - falsy,
+   never an error - so a selectattr over it yields nothing and silently draws
+   the whole matrix as "missing" while the page still returns 200. #}
+{% macro formats_of(episode, kind) -%}
+{{ (episode.formats.get(kind) or [])|join(', ') }}
+{%- endmacro %}
+
+
+{# One matrix cell: filled when the episode has this kind, with the available
+   formats in the tooltip. #}
+{% macro cell(episode, kind) -%}
+{% set formats = episode.formats.get(kind) or [] %}
+{% if formats %}<td class="cell on" title="{{ kind }}: {{ formats|join(', ') }}">&#9679;</td>{% else %}<td class="cell off" title="{{ kind }}: missing">&middot;</td>{% endif %}
+{%- endmacro %}
+
+
+{# The status matrix: one row per episode, one column per artifact kind.
+   Wrapped in #episodes so an htmx search can replace exactly this element. #}
+{% macro matrix(episodes, kinds) -%}
+<div id="episodes" class="table-wrap">
+  <table class="matrix">
+    <caption>{{ episodes|length }} episode{{ '' if episodes|length == 1 else 's' }}</caption>
+    <thead>
+      <tr>
+        <th scope="col" class="num">#</th>
+        <th scope="col" class="name">Episode</th>
+        <th scope="col" class="cell">Audio</th>
+        {% for kind in kinds %}
+        <th scope="col" class="cell" title="{{ kind }}">{{ abbrev(kind) }}</th>
+        {% endfor %}
+        <th scope="col" class="when">Updated</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for episode in episodes %}
+      <tr>
+        <td class="num">{% if episode.number is not none %}{{ episode.number }}{% else %}<span class="muted">?</span>{% endif %}</td>
+        <td class="name"><a href="/episodes/{{ episode.base_name|urlencode }}">{{ episode.base_name }}</a></td>
+        {% if episode.audio_path %}
+        <td class="cell audio on" title="{{ episode.audio_path }} ({{ episode.audio_size|filesizeformat if episode.audio_size else 'size unknown' }})">&#9679;</td>
+        {% else %}
+        <td class="cell audio off" title="no audio file">&middot;</td>
+        {% endif %}
+        {% for kind in kinds %}{{ cell(episode, kind) }}{% endfor %}
+        <td class="when">{{ epoch(episode.mtime) }}</td>
+      </tr>
+      {% else %}
+      <tr class="empty">
+        <td colspan="{{ kinds|length + 4 }}">No episodes match.</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{%- endmacro %}
+
+
+{#
+  ============================ jobs (ADR-008, TASK-003) =====================
+
+  These macros take one of two dict shapes, and it matters which:
+
+      job   - a row from webui.jobs._job_dict(): id, type, label, params,
+              base_name, status, is_terminal, cancel_requested, worker_id, pid,
+              exit_code, error, created_at, started_at, finished_at,
+              duration_seconds, gpu, cost, known_type (+ *_iso variants).
+      spec  - an entry of webui.app.job_types_payload(): type, label,
+              description, gpu, cost, requires_base_name.
+
+  Both carry ``gpu`` and ``cost``, so cost_badge/gpu_badge accept either. The
+  rest are job-only.
+
+  Nothing here uses |safe. Job error text and params are pipeline output: a
+  path, an exception message, or whatever an LLM step put in a string. It is
+  rendered as text, always.
+#}
+
+{# Seconds as a short human duration. "is none" rather than truthiness: a job
+   that finished in under half a second has duration 0.0, which is a real
+   measurement and must not read as "unknown". #}
+{% macro duration(seconds) -%}
+{%- if seconds is none -%}<span class="muted">-</span>
+{%- else -%}
+{%- set total = (seconds|float)|round(0, 'floor')|int -%}
+{%- if total < 0 -%}<span class="muted">-</span>
+{%- elif total < 60 -%}{{ total }}s
+{%- elif total < 3600 -%}{{ total // 60 }}m {{ '%02d'|format(total % 60) }}s
+{%- else -%}{{ total // 3600 }}h {{ '%02d'|format((total % 3600) // 60) }}m
+{%- endif -%}
+{%- endif -%}
+{%- endmacro %}
+
+
+{# How long a job has been going. The server renders the number it computed;
+   for a *running* job the .live class tells /static/app.js to keep counting
+   from data-since, so "3m 12s" does not sit frozen on screen for an hour.
+   Without JavaScript it stays whatever it was when the page was rendered -
+   stale, but never wrong about the past. #}
+{% macro elapsed(job) -%}
+{%- if job.started_at -%}
+<span class="elapsed{% if job.status == 'running' %} live{% endif %}" data-since="{{ job.started_at|int }}">{{ duration(job.duration_seconds) }}</span>
+{%- elif job.status == 'queued' -%}<span class="muted">not started</span>
+{%- else -%}<span class="muted">-</span>
+{%- endif -%}
+{%- endmacro %}
+
+
+{# One status word. Pass live=true on the job detail page only: app.js updates
+   every [data-job-status-badge] it finds from the SSE "status" frame, and on a
+   list page that would rewrite every row's badge to the streamed job's status. #}
+{% macro status_badge(job, live=false) -%}
+<span class="badge s-{{ job.status }}"{% if live %} data-job-status-badge{% endif %}>{{ job.status }}{% if job.cancel_requested and not job.is_terminal %} &middot; cancelling{% endif %}</span>
+{%- endmacro %}
+
+
+{# THE cost marker. Wherever a job of this type can be started or is listed,
+   this says so. Rendered from the server's own ``cost`` flag - the same field
+   webui.app validates against - so the warning cannot drift from the truth.
+
+   webui.jobs._job_dict() reports cost=True for a type it does not recognise,
+   which is why this needs no "unknown type" branch: unknown over-warns. #}
+{% macro cost_badge(spec) -%}
+{%- if spec.cost %}<span class="badge cost" title="Costs money: this job type calls the paid OpenAI API (ADR-003).">$ paid API</span>{% endif -%}
+{%- endmacro %}
+
+
+{% macro gpu_badge(spec) -%}
+{%- if spec.gpu %}<span class="badge gpu" title="Claims the single CUDA device for the whole run (ADR-001, ADR-002).">GPU</span>{% endif -%}
+{%- endmacro %}
+
+
+{# Job ids are uuid4 hex: unreadable in full, unique enough in eight. #}
+{% macro job_link(job) -%}
+<a class="mono jobid" href="/jobs/{{ job.id|urlencode }}" title="{{ job.id }}">{{ job.id[:8] }}</a>
+{%- endmacro %}
+
+
+{% macro episode_link(job) -%}
+{%- if job.base_name %}<a href="/episodes/{{ job.base_name|urlencode }}">{{ job.base_name }}</a>{% else %}<span class="muted">-</span>{% endif -%}
+{%- endmacro %}
+
+
+{#
+  Cancel. A plain POST form so it works with scripting off; /static/app.js
+  intercepts the submit, confirms, and posts in the background instead.
+
+  Without JavaScript the browser lands on the JSON the API returns - honest,
+  since the cancel did happen, but a dead end you have to press Back out of.
+  Fixing that properly means the API answering a form post with a redirect,
+  which is webui/app.py's call to make, not this template's.
+
+  Cancellable == not terminal. Queued jobs are cancelled outright; a running
+  one gets a flag the worker acts on, so the button reports "cancelling" and
+  stays disabled until the status actually changes.
+#}
+{% macro cancel_form(job) -%}
+{%- if not job.is_terminal %}
+<form class="inline-form" method="post" action="/api/jobs/{{ job.id|urlencode }}/cancel"
+      data-cancel
+      data-confirm="Cancel {{ job.label }}{% if job.base_name %} for {{ job.base_name }}{% endif %}?
+
+{% if job.status == 'running' %}It is running now. Its process tree is killed, so work in progress is lost and has to start over.{% else %}It is still queued, so it is simply removed from the queue.{% endif %}">
+  <button type="submit" class="danger"{% if job.cancel_requested %} disabled{% endif %}>{{ 'cancelling...' if job.cancel_requested else 'Cancel' }}</button>
+</form>
+{% endif -%}
+{%- endmacro %}
