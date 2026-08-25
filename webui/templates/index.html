@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}Episodes - WHYcast{% endblock %}
+
+{% block content %}
+{% import "_macros.html" as m %}
+{#
+  Overview: the dense status matrix.
+
+  The search box works twice over. Without JavaScript it is a plain
+  GET form to "/", which re-renders the whole page filtered. With htmx
+  loaded it fires on typing and on submit, and hx-select="#episodes"
+  pulls just the table out of whatever the server returns - so it works
+  whether /?search=... answers with the full page or with a fragment.
+
+  The hx-* attributes are repeated on the input instead of inherited from the
+  form. Inheritance would probably work, but if hx-select did not inherit, the
+  whole page would be swapped into the table slot on every keystroke. Five
+  duplicated attributes are cheaper than that failure mode.
+#}
+<h1>Episodes</h1>
+
+<form class="search"
+      method="get" action="/"
+      hx-get="/"
+      hx-target="#episodes"
+      hx-select="#episodes"
+      hx-swap="outerHTML"
+      hx-push-url="true"
+      hx-indicator="#search-spinner">
+  <label for="search-input">Filter</label>
+  <input id="search-input"
+         type="search"
+         name="search"
+         value="{{ search or '' }}"
+         placeholder="episode name, e.g. episode_13"
+         autocomplete="off"
+         hx-get="/"
+         hx-trigger="keyup changed delay:300ms, search"
+         hx-target="#episodes"
+         hx-select="#episodes"
+         hx-swap="outerHTML"
+         hx-push-url="true"
+         hx-indicator="#search-spinner">
+  <button type="submit">Search</button>
+  <span id="search-spinner" class="spinner" aria-hidden="true">loading...</span>
+  {% if search %}<a class="clear" href="/">clear</a>{% endif %}
+</form>
+
+{{ m.matrix(episodes, kinds) }}
+
+<p class="legend">
+  <span class="on">&#9679;</span> present
+  <span class="off">&middot;</span> missing
+  &mdash; hover a marker for the formats on disk.
+  Columns:
+  {% for kind in kinds %}<abbr title="{{ kind }}">{{ m.abbrev(kind) }}</abbr>={{ kind }}{% if not loop.last %}, {% endif %}{% endfor %}.
+</p>
+{% endblock %}

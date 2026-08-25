@@ -1,0 +1,5 @@
+{
+  "diarized": "[00:00:00.00 --> 00:00:04.20] Robert: Welcome to the WHYcast, episode forty-two.\n[00:00:04.20 --> 00:00:07.90] Robert: Today we talk about the campsite network.\n[00:00:07.90 --> 00:00:12.10] Marvin: Thanks for having me, happy to be here.\n[00:00:12.10 --> 00:00:15.00] [SPEAKER_UNKNOWN] Absolutely, glad to join as well.\n[00:00:15.00 --> 00:00:19.30] Marvin: So the fiber ring covers the whole field.\n[00:00:19.30 --> 00:00:23.80] Robert: And power comes from the generator village.",
+  "empty_mapping": "[00:00:00.00 --> 00:00:04.20] [SPEAKER_00] Welcome to the WHYcast, episode forty-two.\n[00:00:04.20 --> 00:00:07.90] [SPEAKER_00] Today we talk about the campsite network.\n[00:00:07.90 --> 00:00:12.10] [SPEAKER_01] Thanks for having me, happy to be here.\n[00:00:12.10 --> 00:00:15.00] [SPEAKER_UNKNOWN] Absolutely, glad to join as well.\n[00:00:15.00 --> 00:00:19.30] [SPEAKER_01] So the fiber ring covers the whole field.\n[00:00:19.30 --> 00:00:23.80] [SPEAKER_00] And power comes from the generator village.",
+  "empty_transcript": ""
+}

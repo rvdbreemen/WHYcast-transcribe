@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block title %}What job {{ job.id[:8] }} changed - WHYcast{% endblock %}
+
+{% block content %}
+{#
+  What a run changed (TASK-005 phase 4).
+
+  The comparison is against the job's own before-snapshot in
+  logs/jobs/<id>/before/, not against a .bak - ADR-009 removed those from
+  podcasts/ and this feature deliberately did not bring them back. A job with
+  no snapshot says so rather than implying nothing changed.
+
+  Context:
+      job   the job row
+      diff  {available, reason, changed_count, base_name,
+             artifacts [{kind, fmt, filename, status, lines, truncated, reason}]}
+
+  Diff lines are file content and are escaped by Jinja; no |safe here.
+#}
+<p><a href="/jobs/{{ job.id }}">&larr; back to the job</a></p>
+
+<h1>What this run changed</h1>
+<p class="muted">
+  Job <code>{{ job.id[:8] }}</code>
+  {%- if diff.base_name %} &middot; episode <a href="/episodes/{{ diff.base_name }}">{{ diff.base_name }}</a>{% endif %}
+  &middot; compared against the copies taken when the job started.
+</p>
+
+{% if not diff.available %}
+  <div class="banner">{{ diff.reason }}</div>
+{% else %}
+  {% if diff.changed_count == 0 %}
+    <div class="banner">This run left every recorded artifact byte for byte as it was.</div>
+  {% else %}
+    <p>{{ diff.changed_count }} artifact(s) changed.</p>
+  {% endif %}
+
+  {% for artifact in diff.artifacts %}
+    <h2>
+      {{ artifact.kind }}<span class="muted"> {{ artifact.fmt }}</span>
+      &middot; <span class="muted">{{ artifact.filename }}</span>
+    </h2>
+    {% if artifact.status == "unchanged" %}
+      <p class="muted">Unchanged.</p>
+    {% elif artifact.status == "removed" %}
+      <p><strong>Gone after this run.</strong> It existed before the job started.</p>
+    {% elif artifact.status == "not-recorded" %}
+      <p class="muted">Not recorded before the run{% if artifact.reason %}: {{ artifact.reason }}{% endif %}.</p>
+    {% else %}
+      <div class="table-wrap">
+        <pre class="diff">{% for line in artifact.lines %}<span class="{% if line.startswith('+') and not line.startswith('+++') %}diff-add{% elif line.startswith('-') and not line.startswith('---') %}diff-del{% elif line.startswith('@@') %}diff-hunk{% endif %}">{{ line }}</span>
+{% endfor %}</pre>
+      </div>
+      {% if artifact.truncated %}
+        <p class="muted">Truncated: this artifact was rewritten far enough that the rest adds nothing.</p>
+      {% endif %}
+    {% endif %}
+  {% else %}
+    <p class="muted">No artifacts were recorded for this job.</p>
+  {% endfor %}
+{% endif %}
+{% endblock %}

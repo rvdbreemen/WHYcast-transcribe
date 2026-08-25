@@ -1,0 +1,4 @@
+{
+  "corrections": "Welcome to the WHYcast, recorded at WHY2025.\nThe WHYcast loves a good SID chip tune.\nA true Galactic Hitchhiker never panics.\nBut wycasting is not a word we correct (word boundary check).\nWHYcast in caps is corrected case-insensitively.",
+  "empty_mappings": "Welcome to the wycast, recorded at why 2025.\nThe Wycast loves a good sid chip tune.\nA true galactic hitchhiker never panics.\nBut wycasting is not a word we correct (word boundary check).\nWYCAST in caps is corrected case-insensitively."
+}

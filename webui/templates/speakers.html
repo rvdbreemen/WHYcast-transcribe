@@ -1,0 +1,399 @@
+{#
+  The speaker mapping editor (ADR-010, TASK-004).
+
+  Context, from webui.app.speaker_editor():
+
+      episode       the episode dict from the index
+      state         webui.app._speaker_state(): read from DISK, not from the
+                    index - what the mapping file says, what the transcript
+                    says, and which of the two the next run will believe
+      apply_job     the catalogue entry for the "speakers" job, or None when
+                    the queue is unavailable
+      active_job    the job running right now (any episode), or None
+      episode_jobs  recent jobs for this episode, newest first
+
+  WHAT THIS PAGE IS FOR. A diarizer labels voices SPEAKER_00, SPEAKER_01 -
+  cluster ids, not people. Something has to decide that SPEAKER_01 is Nancy.
+  Until ADR-010 that was a paid reasoning model, on every single run, and when
+  it guessed wrong the only fix was editing the transcript by hand - which the
+  next full run overwrote (see the warning in
+  whycast/pipeline/speakers.py:write_merged_transcript). ADR-010 turns the
+  decision into a file the pipeline reads. This page is that file, with a form
+  around it.
+
+  MONEY. Saving is free and takes no confirmation: it writes one small JSON
+  file. Applying the names is the "speakers" job, which re-runs the paid
+  OpenAI steps, so it goes through the same POST /api/jobs, the same $ badge
+  and the same confirmation as every other paid action here. There is no
+  "save and run" button, on purpose - the two have different prices and are
+  therefore two different decisions.
+
+  Nothing here uses |safe. The names come from a file a person (or a model)
+  wrote, the context lines are transcript text, and both are rendered as text.
+#}
+{% extends "base.html" %}
+{% block title %}Speakers - {{ episode.base_name }} - WHYcast{% endblock %}
+
+{% block content %}
+{% import "_macros.html" as m %}
+<p class="crumbs">
+  <a href="/">&larr; all episodes</a> &middot;
+  <a href="/episodes/{{ episode.base_name|urlencode }}">&larr; {{ episode.base_name }}</a>
+</p>
+
+<h1>Speakers in {{ episode.base_name }}</h1>
+<p class="sub">
+  Who is <span class="mono">SPEAKER_00</span>? Answer once here and every later
+  run uses your answer instead of paying a model to guess again.
+</p>
+
+{#
+  ============================ what happens next ==========================
+
+  The one thing this page must say plainly. Every branch names the file, says
+  whether money is involved, and - where something is wrong - says what to do
+  about it. state.next_run is webui.app's reading of the ADR-010 precedence
+  order; the wording below is that order in English.
+#}
+{% if state.next_run == 'saved' %}
+<p class="banner ok">
+  <strong>The next speakers run will use these names.</strong>
+  They are saved in <code>{{ state.map_file }}</code>{% if state.source == 'human' %}, edited by hand{% elif state.source == 'llm' %}, written by the model on an earlier run{% endif %}.
+  The speaker analysis is skipped entirely, so that part costs nothing.
+</p>
+{% elif state.next_run == 'model' %}
+<p class="banner neutral">
+  <strong>The next speakers run will ask the model.</strong>
+  There is no <code>{{ state.map_file }}</code> yet, so a paid reasoning model
+  works the names out (ADR-003 - it spends money), and what it decides is saved
+  here for you to correct. Typing the names below now skips that call.
+</p>
+{% elif state.next_run == 'stale' %}
+<p class="banner bad">
+  <strong>These names were written for a different transcript.</strong>
+  <span class="mono">SPEAKER_00</span> and friends are per-run cluster ids, not
+  identities: a re-transcription can leave <span class="mono">SPEAKER_00</span>
+  pointing at somebody else entirely. So the saved names are <em>not</em>
+  applied automatically, and a speakers run stops with an error naming
+  <code>{{ state.map_file }}</code> until you decide.
+</p>
+<p class="hint">
+  Nothing has been deleted. Two ways out, both below: check the names against
+  the lines quoted next to each label and <strong>save them again</strong>
+  (which records them against this transcript and clears the warning), or
+  <strong>discard</strong> them and let the model decide from scratch.
+</p>
+{% elif state.next_run == 'malformed' %}
+<p class="banner bad">
+  <strong>{{ state.map_file }} cannot be read, so a speakers run will fail.</strong>
+  It is deliberately not replaced by a model call: that would hide the mistake
+  and charge you for the privilege.
+</p>
+{# The library's own message: it names the file and the exact problem. #}
+<p class="error-text">{{ state.mapping_error }}</p>
+<p class="hint">
+  Fix the file in an editor, save the names below (which overwrites it, keeping
+  a <code>.bak</code>), or discard it.
+</p>
+{% elif state.next_run == 'no_labels' %}
+<p class="banner warn">
+  <strong>{{ state.transcript_file }} carries no SPEAKER_ labels.</strong>
+  There is nothing to name: a speakers run would find nothing to do. This
+  transcript was made without diarization, or its labels have already been
+  replaced by names.
+</p>
+{% else %}
+<p class="banner warn">
+  <strong>There is no transcript to read.</strong>
+  {% if state.transcript_error %}{{ state.transcript_error }}{% else %}This episode has no <span class="mono">merged</span> or <span class="mono">transcript</span> artifact on disk, so there are no speaker labels yet. Run the pipeline first.{% endif %}
+</p>
+{% endif %}
+
+{% if active_job %}
+<p class="banner neutral">
+  A job is running right now ({{ active_job.label }}{% if active_job.base_name %} for {{ active_job.base_name }}{% endif %}).
+  Saving names here is unaffected - it writes a file, it does not queue anything.
+  <a href="/jobs">See the queue</a>.
+</p>
+{% endif %}
+
+{#
+  ================================ the editor =============================
+
+  One row per label the transcript actually contains, each with a few lines of
+  what that voice said. That context is the whole reason this beats editing
+  the JSON by hand: "SPEAKER_03" tells you nothing, "So Ad, what are we talking
+  about today?" tells you who it is.
+
+  A plain <form method="post">. Without JavaScript the browser posts it and
+  lands on the JSON the API returns - blunt, but honest, and the save happened.
+  With app.js it is posted in the background and answered in place.
+#}
+<section class="panel" id="speaker-editor">
+  <h2>Names</h2>
+
+  {% if state.labels %}
+  <p class="hint">
+    Read from <code>{{ state.transcript_file }}</code>{% if state.transcript_kind %} (the <span class="mono">{{ state.transcript_kind }}</span> artifact - the same file a speakers run reads){% endif %}.
+    Leave a name blank to leave that label alone. Saving costs nothing.
+  </p>
+  <p class="hint">
+    Saving writes the whole mapping, not just what you changed: whatever is in
+    these boxes replaces the file. So if this episode is open in a second tab,
+    the last save wins and the other tab's names go into the
+    <code>.bak</code> - reload a tab before saving in it.
+  </p>
+  {% if state.labels_truncated %}
+  <p class="banner warn">
+    <strong>Only the first {{ state.labels|length }} labels are shown.</strong>
+    This transcript has more than the editor lists, and a label that is not on
+    this page cannot be named here. That many distinct speakers usually means
+    the diarization went wrong rather than that the room was crowded - worth
+    looking at the transcript before naming anything.
+  </p>
+  {% endif %}
+  {% if state.labels|selectattr('label', 'equalto', 'SPEAKER_UNKNOWN')|list %}
+  <p class="hint">
+    <span class="mono">SPEAKER_UNKNOWN</span> is what the diarizer produces when
+    it cannot tell whose voice it is. Naming it here is worth doing: the
+    assignment step otherwise sends every unknown segment to a second paid model
+    to guess from context, and it skips that entirely once none are left.
+  </p>
+  {% endif %}
+
+  <form method="post"
+        action="/api/episodes/{{ episode.base_name|urlencode }}/speakers"
+        data-speaker-save
+        data-result="speaker-save-result">
+    <ol class="speaker-list">
+      {% for item in state.labels %}
+      <li class="speaker-row">
+        <div class="speaker-head">
+          <label class="speaker-label" for="speaker-{{ loop.index }}">
+            <span class="mono">{{ item.label }}</span>
+            <span class="hint">{{ item.turns }} turn{{ '' if item.turns == 1 else 's' }}</span>
+          </label>
+          <input type="text"
+                 id="speaker-{{ loop.index }}"
+                 name="speaker:{{ item.label }}"
+                 value="{{ item.name }}"
+                 maxlength="120"
+                 autocomplete="off"
+                 spellcheck="false"
+                 placeholder="who is this?">
+        </div>
+        {% if item.context %}
+        {# Transcript text. Rendered as text, always - autoescape does the work. #}
+        <ul class="speaker-context">
+          {% for line in item.context %}<li>{{ line }}</li>{% endfor %}
+        </ul>
+        {% else %}
+        <p class="hint">This label appears in the file but never opens a line, so there is nothing to quote.</p>
+        {% endif %}
+      </li>
+      {% endfor %}
+    </ol>
+
+    <p class="speaker-actions">
+      <button type="submit" class="plain">Save these names</button>
+      <span class="hint">Writes <code>{{ state.map_file }}</code>. No model call, no charge.</span>
+    </p>
+  </form>
+
+  {# app.js reports the save here. #}
+  <p id="speaker-save-result" class="job-result" role="status" aria-live="polite"></p>
+
+  {% if state.orphans %}
+  <p class="banner warn">
+    <strong>{{ state.orphans|length }} saved name{{ '' if state.orphans|length == 1 else 's' }} for label{{ '' if state.orphans|length == 1 else 's' }} this transcript does not have:</strong>
+    {% for orphan in state.orphans %}<span class="mono">{{ orphan.label }}</span> = {{ orphan.name }}{{ ', ' if not loop.last }}{% endfor %}.
+    Saving from this page drops {{ 'it' if state.orphans|length == 1 else 'them' }},
+    because a name for a label that is not in the text can never be applied.
+    Usually this means the episode was transcribed again and the voices were
+    renumbered.
+  </p>
+  {% endif %}
+
+  {% elif state.speakers %}
+  {# Nothing to edit, but there is a saved mapping worth showing. #}
+  <p class="hint">There is nothing to edit, but this is what <code>{{ state.map_file }}</code> currently says:</p>
+  <div class="table-wrap">
+    <table class="files">
+      <thead><tr><th scope="col">Label</th><th scope="col">Name</th></tr></thead>
+      <tbody>
+        {% for label, name in state.speakers|dictsort %}
+        <tr><td class="mono">{{ label }}</td><td>{{ name }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="hint">No speaker labels and no saved mapping - nothing to do here yet.</p>
+  {% endif %}
+</section>
+
+{#
+  ============================== apply the names ==========================
+
+  THE PAID BUTTON. Same shape as the episode page's actions: a closed
+  <details> with the cost badge on the summary, a data-enqueue form that
+  app.js confirms before posting, and flags read from the server's own job
+  catalogue so a button cannot claim "free" for something the API charges for.
+
+  Saving above does not run this. The saved mapping is what the *next* run
+  reads, whenever that is; this is how you make "next" mean "now".
+#}
+<section class="panel" id="speaker-apply">
+  <h2>Apply the names</h2>
+  {% if apply_job %}
+  <p class="hint">
+    Saving a mapping does not rewrite anything. This queues the speaker
+    assignment job, which reads
+    {% if state.transcript_file %}<code>{{ state.transcript_file }}</code>{% else %}the transcript{% endif %},
+    applies the saved names with plain string replacement (ADR-004 - code
+    applies them, not a model) and writes the assignment artifact.
+  </p>
+  <ul class="action-list">
+    <li>
+      <details class="action{{ ' costly' if apply_job.cost else '' }}">
+        <summary>
+          {{ apply_job.label }}
+          {{ m.cost_badge(apply_job) }}
+          {{ m.gpu_badge(apply_job) }}
+        </summary>
+        <p class="hint">{{ apply_job.description }}</p>
+        {% if state.next_run in ('stale', 'malformed') %}
+        <p class="banner bad">
+          As things stand this job will <strong>fail</strong> on
+          <code>{{ state.map_file }}</code> - see the top of the page. Save the
+          names again, or discard them, first.
+        </p>
+        {% endif %}
+        <form method="post" action="/api/jobs"
+              data-enqueue
+              data-result="speaker-apply-result"
+              data-confirm="{{ apply_job.label }} for episode {{ episode.base_name }}
+
+{{ apply_job.description }}
+
+{% if state.next_run == 'saved' %}It uses the names saved in {{ state.map_file }}; the speaker analysis is skipped.
+{% elif state.next_run == 'model' %}There is no saved mapping, so a paid model works the names out and they are saved afterwards.
+{% endif %}{% if apply_job.cost %}This calls the paid OpenAI API - it will spend money.
+{% endif %}{% if apply_job.gpu %}It claims the GPU for the whole run.
+{% endif %}Queue it now?">
+          <input type="hidden" name="type" value="{{ apply_job.type }}">
+          <input type="hidden" name="base_name" value="{{ episode.base_name }}">
+          <button type="submit" class="{{ 'danger' if apply_job.cost else 'plain' }}">
+            Queue {{ apply_job.label|lower }}
+          </button>
+        </form>
+      </details>
+    </li>
+  </ul>
+  <p id="speaker-apply-result" class="job-result" role="status" aria-live="polite"></p>
+  {% else %}
+  <p class="hint">
+    The job queue is unavailable, so nothing can be queued from here. Saving
+    names still works - they are read by whichever run happens next.
+    <a href="/jobs">The jobs page</a> will say what is wrong.
+  </p>
+  {% endif %}
+</section>
+
+{#
+  ================================= discard ===============================
+
+  The only route in this app that deletes a mapping, behind a closed
+  <details>, a confirmation naming the file and what is in it, and a button
+  that says what it does. ADR-010: never delete a mapping automatically - it
+  is human work.
+#}
+<section class="panel" id="speaker-discard">
+  <h2>Start over</h2>
+  {% if state.exists %}
+  <details class="action costly">
+    <summary>Discard the saved mapping and let the model decide again</summary>
+    <p class="hint">
+      Deletes <code>{{ state.map_file }}</code>. The names in it are gone from
+      the pipeline's view, and the next speakers run pays a reasoning model to
+      work them out from scratch.
+      {% if state.backup_file %}The previous version stays behind as <code>{{ state.backup_file }}</code>, which is not deleted here.{% endif %}
+    </p>
+    <form method="post"
+          action="/api/episodes/{{ episode.base_name|urlencode }}/speakers/discard"
+          data-speaker-discard
+          data-result="speaker-discard-result"
+          data-confirm="Discard the saved speaker mapping for {{ episode.base_name }}?
+
+This deletes {{ state.map_file }}{% if state.speakers %} and the {{ state.speakers|length }} name{{ '' if state.speakers|length == 1 else 's' }} in it{% endif %}.
+
+The next speakers run will ask a paid model to work the names out again.{% if state.backup_file %}
+
+{{ state.backup_file }} is left where it is.{% endif %}">
+      <button type="submit" class="danger">Discard {{ state.map_file }}</button>
+    </form>
+    <p id="speaker-discard-result" class="job-result" role="status" aria-live="polite"></p>
+  </details>
+  {% else %}
+  <p class="hint">
+    There is no saved mapping for this episode, so there is nothing to discard.
+  </p>
+  {% endif %}
+</section>
+
+{# ================================ the file =============================== #}
+<section class="panel">
+  <h2>The file behind this page</h2>
+  <dl class="jobfacts">
+    <dt>Mapping</dt>
+    <dd class="mono">{{ state.map_file }} &mdash; {% if state.exists %}on disk{% else %}not written yet{% endif %}</dd>
+    <dt>Written by</dt>
+    <dd>{% if state.source == 'human' %}a person{% elif state.source == 'llm' %}the model, on an earlier run{% else %}<span class="muted">-</span>{% endif %}</dd>
+    <dt>Last saved</dt>
+    <dd>{% if state.updated_at %}{{ state.updated_at }}{% else %}<span class="muted">-</span>{% endif %}</dd>
+    <dt>Backup</dt>
+    <dd class="mono">{% if state.backup_file %}{{ state.backup_file }}{% else %}<span class="muted">none yet</span>{% endif %}</dd>
+    <dt>Transcript</dt>
+    <dd class="mono">{% if state.transcript_file %}{{ state.transcript_file }}{% else %}<span class="muted">none</span>{% endif %}</dd>
+  </dl>
+  <p class="hint">
+    It is plain JSON and hand-editable; the simplest form that works is
+    <code>{"SPEAKER_00": "Nancy"}</code>. This is pipeline <em>input</em>, so
+    unlike a generated artifact it keeps a <code>.bak</code> when it is
+    overwritten (ADR-009). That <code>.bak</code> belongs to no artifact kind,
+    so it turns up under <a href="/unmatched">unmatched files</a> - expected,
+    not a fault.
+  </p>
+</section>
+
+{% if episode_jobs %}
+<section class="panel">
+  <h2>Recent runs for this episode</h2>
+  <div class="table-wrap">
+    <table class="jobs">
+      <thead>
+        <tr>
+          <th scope="col">Job</th>
+          <th scope="col">Outcome</th>
+          <th scope="col">Type</th>
+          <th scope="col" class="when">Queued</th>
+          <th scope="col">Why</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for job in episode_jobs %}
+        <tr>
+          <td>{{ m.job_link(job) }}</td>
+          <td>{{ m.status_badge(job) }}</td>
+          <td>{{ job.label }} {{ m.cost_badge(job) }}</td>
+          <td class="when">{{ m.epoch(job.created_at) }}</td>
+          {# Pipeline error text, rendered as text. Never |safe. #}
+          <td class="err">{% if job.error %}{{ job.error }}{% else %}<span class="muted">-</span>{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endif %}
+{% endblock %}

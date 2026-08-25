@@ -1,0 +1,531 @@
+/*
+ * WHYcast web UI - all of the styling (ADR-008, TASK-002).
+ *
+ * Rules of the house: no build step, no external fonts, no framework. Colours
+ * are CSS custom properties defined once for light and overridden once for
+ * dark, so the page follows the operating system without a theme switcher.
+ * This is a local single-user tool; density beats decoration.
+ */
+
+:root {
+  --bg: #ffffff;
+  --bg-soft: #f4f5f7;
+  --bg-panel: #fbfbfc;
+  --fg: #16181d;
+  --fg-muted: #6a7280;
+  --line: #d7dae0;
+  --accent: #1f6feb;
+  --on: #1a7f37;
+  --off: #b4b8c0;
+  /* Job outcomes and the cost warning. Every one of these is redefined in the
+     dark block below; a token defined only once is a light-only token. */
+  --warn: #8a6100;
+  --bad: #b42318;
+  --ok-bg: #ecf6ee;
+  --warn-bg: #fdf5e3;
+  --bad-bg: #fdefee;
+  --neutral-bg: #eef1f5;
+  --mono: ui-monospace, "Cascadia Mono", "Consolas", "DejaVu Sans Mono", monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #14161a;
+    --bg-soft: #1b1e24;
+    --bg-panel: #191c21;
+    --fg: #e6e8ec;
+    --fg-muted: #969ba5;
+    --line: #2e333b;
+    --accent: #6aa8ff;
+    --on: #4ec971;
+    --off: #4a5058;
+    --warn: #e3b341;
+    --bad: #ff7b72;
+    --ok-bg: #15241a;
+    --warn-bg: #2a2417;
+    --bad-bg: #2b1b1a;
+    --neutral-bg: #1f232a;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 14px/1.45 var(--sans);
+}
+
+a { color: var(--accent); }
+h1 { font-size: 1.35rem; margin: 0 0 .2rem; }
+h2 { font-size: 1rem; margin: 0 0 .5rem; }
+.mono { font-family: var(--mono); }
+.muted, .hint { color: var(--fg-muted); }
+.hint { font-size: .85rem; margin: .3rem 0; }
+.sub { color: var(--fg-muted); margin: 0 0 1rem; }
+.crumbs { margin: 0 0 .5rem; font-size: .85rem; }
+
+/* ---- chrome ---- */
+
+.topbar {
+  display: flex;
+  align-items: baseline;
+  gap: 1.2rem;
+  padding: .55rem 1rem;
+  background: var(--bg-soft);
+  border-bottom: 1px solid var(--line);
+}
+.brand { font-weight: 700; text-decoration: none; color: var(--fg); }
+.nav a { margin-right: 1rem; }
+
+.page { padding: 1rem; max-width: 1500px; }
+
+.footer {
+  padding: .6rem 1rem 2rem;
+  border-top: 1px solid var(--line);
+  color: var(--fg-muted);
+  font-size: .8rem;
+}
+.footer dl { display: grid; grid-template-columns: max-content 1fr; gap: .1rem .8rem; margin: .5rem 0 0; }
+.footer dt { font-family: var(--mono); }
+.footer dd { margin: 0; overflow-wrap: anywhere; }
+
+/* ---- search ---- */
+
+.search {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  margin: 0 0 .8rem;
+  flex-wrap: wrap;
+}
+.search input[type="search"] {
+  flex: 0 1 26rem;
+  padding: .35rem .5rem;
+  background: var(--bg-panel);
+  color: var(--fg);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  font: inherit;
+}
+.search button {
+  padding: .35rem .8rem;
+  background: var(--bg-soft);
+  color: var(--fg);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  font: inherit;
+  cursor: pointer;
+}
+
+/* htmx sets .htmx-request on the element named by hx-indicator while a
+   request is in flight. Without JavaScript the spinner simply never shows. */
+.spinner { visibility: hidden; color: var(--fg-muted); font-size: .8rem; }
+.htmx-request .spinner, .spinner.htmx-request { visibility: visible; }
+
+/* ---- tables ---- */
+
+/* max-height matters: without it the wrapper grows to fit and never scrolls,
+   which quietly turns the sticky table header below into a no-op. */
+.table-wrap { max-height: 78vh; overflow: auto; border: 1px solid var(--line); border-radius: 5px; }
+
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+caption {
+  text-align: left;
+  padding: .4rem .6rem;
+  color: var(--fg-muted);
+  background: var(--bg-soft);
+  border-bottom: 1px solid var(--line);
+}
+th, td { padding: .22rem .5rem; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; }
+thead th { position: sticky; top: 0; background: var(--bg-soft); font-weight: 600; }
+tbody tr:hover { background: var(--bg-soft); }
+tbody tr:last-child td { border-bottom: none; }
+
+.num { text-align: right; font-variant-numeric: tabular-nums; }
+.when, .fmts { font-family: var(--mono); font-size: 12px; color: var(--fg-muted); }
+.name a { text-decoration: none; }
+.name a:hover { text-decoration: underline; }
+.path { font-family: var(--mono); white-space: normal; overflow-wrap: anywhere; }
+.empty td { color: var(--fg-muted); text-align: center; padding: .8rem; }
+
+/* status matrix: one narrow column per artifact kind */
+.matrix .cell { text-align: center; width: 2.1rem; padding-left: .1rem; padding-right: .1rem; cursor: default; }
+.matrix thead .cell { font-family: var(--mono); font-weight: 600; }
+.cell.on { color: var(--on); }
+.cell.off { color: var(--off); }
+
+.legend { color: var(--fg-muted); font-size: .8rem; margin-top: .6rem; }
+.legend .on { color: var(--on); }
+.legend .off { color: var(--off); }
+.legend abbr { font-family: var(--mono); }
+
+/* ---- episode detail ---- */
+
+.panel { margin: 1.2rem 0; }
+.audio-panel audio { width: 100%; max-width: 40rem; }
+
+.tabs { display: flex; flex-wrap: wrap; gap: .3rem; margin-bottom: .5rem; }
+.tab {
+  display: inline-flex;
+  align-items: baseline;
+  gap: .35rem;
+  padding: .25rem .55rem;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--bg-soft);
+  text-decoration: none;
+  font-size: .85rem;
+}
+.tab:hover { border-color: var(--accent); }
+.tab:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.tab.absent { color: var(--off); background: transparent; border-style: dashed; cursor: default; }
+.tab .fmts { font-size: 11px; }
+
+/* The artifact box is deliberately framed: everything inside it came out of a
+   generated file, and it must read as content, not as part of the page. */
+.artifact-panel { border: 1px solid var(--line); border-radius: 5px; background: var(--bg-panel); }
+.artifact-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: .3rem .6rem;
+  background: var(--bg-soft);
+  border-bottom: 1px solid var(--line);
+  font-size: .8rem;
+  color: var(--fg-muted);
+}
+.artifact-body {
+  padding: .6rem;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.artifact-body pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; font-family: var(--mono); }
+.artifact-body img { max-width: 100%; }
+/* The artifact renders inside this frame, sandboxed. It scrolls itself, so the
+   container must not add a second scrollbar around it. */
+.artifact-body iframe {
+  display: block;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  width: 100%;
+  height: 70vh;
+  background: var(--bg);
+}
+.artifact-body iframe[hidden] { display: none; }
+/* Marked by app.js on click; purely presentational. */
+.tab[aria-current="true"] { border-color: var(--accent); font-weight: 600; }
+
+tr.absent td { color: var(--fg-muted); }
+
+/* ---- jobs (ADR-008 phase 2) ---------------------------------------------
+ *
+ * The cost badge is the one piece of styling here with a job to do rather
+ * than a look to have: it marks every place a paid job can be started or is
+ * listed. It gets the warning colour and a border so it reads as a label, not
+ * as decoration, in both themes.
+ */
+
+.badge {
+  display: inline-block;
+  padding: 0 .35rem;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: var(--bg-soft);
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: nowrap;
+  vertical-align: baseline;
+}
+.badge.cost { color: var(--warn); border-color: var(--warn); background: var(--warn-bg); font-weight: 600; }
+.badge.gpu { color: var(--accent); border-color: var(--accent); }
+.badge.warn { color: var(--warn); border-color: var(--warn); background: var(--warn-bg); }
+.badge.s-running { color: var(--accent); border-color: var(--accent); }
+.badge.s-succeeded { color: var(--on); border-color: var(--on); background: var(--ok-bg); }
+.badge.s-failed { color: var(--bad); border-color: var(--bad); background: var(--bad-bg); font-weight: 600; }
+.badge.s-cancelled { color: var(--fg-muted); }
+.badge.s-queued { color: var(--fg-muted); }
+
+.banner {
+  margin: .6rem 0;
+  padding: .45rem .6rem;
+  border: 1px solid var(--line);
+  border-left-width: 4px;
+  border-radius: 4px;
+  background: var(--neutral-bg);
+  font-size: .9rem;
+}
+.banner.ok { border-left-color: var(--on); background: var(--ok-bg); }
+.banner.warn { border-left-color: var(--warn); background: var(--warn-bg); }
+.banner.bad { border-left-color: var(--bad); background: var(--bad-bg); }
+.banner.neutral { border-left-color: var(--line); }
+.banner code { font-family: var(--mono); }
+
+/* The running-job card. Deliberately not a table row: this is the one thing
+   on the page an operator looks for first. */
+.jobcard {
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--accent);
+  border-radius: 5px;
+  background: var(--bg-panel);
+  padding: .5rem .7rem;
+  margin-bottom: .5rem;
+}
+.jobcard.cost { border-left-color: var(--warn); }
+.jobcard-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: .4rem; margin-bottom: .4rem; }
+.jobcard-facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: .05rem .8rem;
+  margin: 0 0 .5rem;
+  font-size: .85rem;
+}
+.jobcard-facts dt { color: var(--fg-muted); }
+.jobcard-facts dd { margin: 0; overflow-wrap: anywhere; }
+.jobcard-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
+
+.jobfacts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: .05rem .8rem;
+  margin: 0 0 .8rem;
+  font-size: .9rem;
+}
+.jobfacts dt { color: var(--fg-muted); }
+.jobfacts dd { margin: 0; overflow-wrap: anywhere; }
+
+.jobs .jobid { text-decoration: none; }
+.elapsed { font-variant-numeric: tabular-nums; }
+
+/* Error text in a table cell: the only cell allowed to wrap, because a
+   pipeline error is a sentence and a path, not a value. */
+td.err {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  max-width: 34rem;
+  color: var(--bad);
+  font-size: 12px;
+}
+td.err .muted { color: var(--fg-muted); }
+
+.error-text {
+  margin: 0;
+  padding: .5rem .6rem;
+  border: 1px solid var(--bad);
+  border-radius: 4px;
+  background: var(--bad-bg);
+  color: var(--fg);
+  font-family: var(--mono);
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* ---- start-a-job actions ---- */
+
+.action-list { list-style: none; margin: .4rem 0; padding: 0; }
+.action-list > li { margin-bottom: .3rem; }
+.action {
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--bg-panel);
+  padding: .3rem .55rem;
+}
+.action.costly { border-color: var(--warn); }
+.action > summary { cursor: pointer; }
+.action > summary::marker { color: var(--fg-muted); }
+.action[open] > summary { font-weight: 600; margin-bottom: .3rem; }
+.action .hint { max-width: 46rem; }
+
+button.plain, button.danger {
+  padding: .3rem .7rem;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--bg-soft);
+  color: var(--fg);
+  font: inherit;
+  cursor: pointer;
+}
+button.danger { border-color: var(--warn); color: var(--warn); font-weight: 600; }
+button.danger:hover:enabled { background: var(--warn-bg); }
+button:disabled { opacity: .55; cursor: default; }
+.inline-form { display: inline; margin: 0; }
+
+.job-result { min-height: 1.2rem; font-size: .9rem; }
+.job-result.bad { color: var(--bad); }
+
+/* ---- the live job log ---- */
+
+.joblog-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: .6rem;
+  padding: .3rem .5rem;
+  border: 1px solid var(--line);
+  border-bottom: none;
+  border-radius: 5px 5px 0 0;
+  background: var(--bg-soft);
+  font-size: .8rem;
+}
+.joblog-head progress { width: 14rem; height: .7rem; }
+.joblog-head .follow { color: var(--fg-muted); cursor: pointer; }
+.joblog-head .hint { margin: 0; }
+
+.joblog {
+  height: 26rem;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 0 0 5px 5px;
+  background: var(--bg-panel);
+}
+.joblog-lines {
+  margin: 0;
+  padding: .35rem .5rem;
+  list-style: none;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.logline { display: flex; gap: .55rem; align-items: baseline; }
+.logline + .logline { border-top: 1px solid transparent; }
+.logts { color: var(--fg-muted); flex: none; }
+.logstep { color: var(--accent); flex: none; }
+.logmsg { white-space: pre-wrap; overflow-wrap: anywhere; }
+.logline.lvl-warning .logmsg { color: var(--warn); }
+.logline.lvl-error .logmsg,
+.logline.lvl-critical .logmsg { color: var(--bad); }
+.logline.lvl-debug { color: var(--fg-muted); }
+.logline.meta .logmsg { color: var(--fg-muted); font-style: italic; }
+
+/* ---- the speaker mapping editor (ADR-010) -------------------------------
+ *
+ * One card per diarization label. The quoted lines are what makes the label
+ * recognisable, so they get room to breathe and a mono face - they are
+ * transcript text, and reading them is the task. The name field sits on the
+ * same line as the label so the eye goes label -> box -> evidence.
+ */
+
+.speaker-list { list-style: none; margin: .5rem 0; padding: 0; }
+
+.speaker-row {
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--bg-panel);
+  padding: .5rem .7rem;
+  margin-bottom: .5rem;
+  max-width: 60rem;
+}
+
+.speaker-head { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem; }
+.speaker-label { display: flex; align-items: baseline; gap: .4rem; min-width: 11rem; }
+.speaker-label .hint { margin: 0; }
+
+.speaker-head input[type="text"] {
+  flex: 1 1 14rem;
+  min-width: 10rem;
+  padding: .3rem .45rem;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+}
+.speaker-head input[type="text"]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.speaker-context {
+  margin: .45rem 0 0;
+  padding: 0 0 0 .8rem;
+  list-style: none;
+  border-left: 2px solid var(--line);
+  color: var(--fg-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.speaker-context li { margin: .2rem 0; overflow-wrap: anywhere; }
+
+.speaker-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem; }
+.speaker-actions .hint { margin: 0; }
+
+/* ---------------------------------------------------------------------------
+ * Input editors: vocabulary.json and the prompt files (TASK-004).
+ *
+ * A textarea inherits none of the page's type by default, so without this the
+ * vocabulary would be rendered in the browser's 13px Times. Everything else
+ * here is spacing.
+ * ------------------------------------------------------------------------ */
+.editor-form { margin: 0; }
+.editor-label {
+  display: block;
+  margin: .6rem 0 .25rem;
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+.editor-area {
+  display: block;
+  width: 100%;
+  padding: .55rem .65rem;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--bg-panel);
+  color: var(--fg);
+  font: 13px/1.5 var(--sans);
+  resize: vertical;
+  tab-size: 2;
+}
+.editor-area.mono { font-family: var(--mono); }
+.editor-area:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+.editor-actions {
+  display: flex;
+  gap: .8rem;
+  align-items: center;
+  margin: .6rem 0 0;
+}
+
+/* "What happens when you press Save" - the plain-words block that has to be
+   readable before the button is, so it sits directly under the form. */
+.whatnext {
+  margin-top: 1rem;
+  padding: .1rem .9rem .6rem;
+  border-left: 3px solid var(--line);
+  background: var(--bg-soft);
+  border-radius: 0 5px 5px 0;
+}
+.whatnext h3 { margin: .8rem 0 .4rem; font-size: 13px; }
+.whatnext ol { margin: 0; padding-left: 1.2rem; color: var(--fg-muted); }
+.whatnext li { margin: .3rem 0; }
+.whatnext strong { color: var(--fg); }
+.whatnext code, .banner code { font-family: var(--mono); }
+
+.action-list select {
+  margin-right: .5rem;
+  padding: .3rem .4rem;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  max-width: 22rem;
+}
+tr.current { background: var(--neutral-bg); }
+
+/* Unified diff of what a run changed (TASK-005 phase 4).
+   Colour is a hint, never the only signal: every line keeps its leading + or -
+   from the diff itself, so this reads the same to someone who cannot tell the
+   two greens apart, and in a terminal paste. */
+pre.diff {
+  margin: 0;
+  padding: 0.5rem 0.75rem;
+  overflow-x: auto;
+  line-height: 1.45;
+}
+pre.diff span { display: block; white-space: pre; }
+.diff-add { background: var(--ok-bg); }
+.diff-del { background: var(--bad-bg); }
+.diff-hunk { color: var(--fg-muted); }

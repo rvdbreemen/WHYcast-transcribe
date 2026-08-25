@@ -1,0 +1,4 @@
+{
+  "empty": "",
+  "markdown_doc": "= Episode 42 — The Answer =\n\n'''Bold statement''' about the ''emphasised'' campsite network.\n\n== Topics ==\n\n* First point with [https://example.com/ep42 a link]\n* Second point that is '''bold inside a list'''\n* Third point\n\n# Ordered item one\n# Ordered item two\n\n=== Details ===\n\nA paragraph with <code>inline code</code> and a bare URL: https://why2025.org\n\nAnother paragraph. Mostly harmless."
+}

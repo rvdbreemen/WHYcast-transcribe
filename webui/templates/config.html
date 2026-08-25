@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block title %}Configuration - WHYcast{% endblock %}
+
+{% block content %}
+{#
+  The configuration viewer (ADR-008 Decision Contract, TASK-005 phase 4).
+
+  Read-only on purpose. Configuration comes from environment variables and .env
+  (ADR-007); editing it here would put a second source of truth in a web page,
+  and the one thing that page must never touch is the file holding the API keys.
+
+  Context from webui.app._config_payload():
+
+      config  {settings [{key, value}], paths [{key, filename, exists}],
+               podcast_dir, host, port, note}
+
+  Everything shown here comes from an allowlist in webui/app.py. A denylist
+  would fail open the day a new secret is added to config.py.
+#}
+<h1>Configuration</h1>
+
+<p class="muted">
+  {{ config.note }}
+  Change any of these through environment variables or <code>.env</code>, then
+  restart the server and worker (ADR-007).
+</p>
+
+<h2>Server</h2>
+<table class="files">
+  <tbody>
+    <tr><th scope="row">Listening on</th><td><code>{{ config.host }}:{{ config.port }}</code></td></tr>
+    <tr><th scope="row">Episodes directory</th><td><code>{{ config.podcast_dir }}</code></td></tr>
+  </tbody>
+</table>
+
+<h2>Pipeline settings</h2>
+<table class="files">
+  <thead><tr><th>Setting</th><th>Value</th></tr></thead>
+  <tbody>
+    {% for item in config.settings %}
+    <tr>
+      <th scope="row"><code>{{ item.key }}</code></th>
+      <td><code>{{ item.value }}</code></td>
+    </tr>
+    {% else %}
+    <tr><td colspan="2" class="muted">Nothing to show.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<h2>Files the pipeline reads</h2>
+<table class="files">
+  <thead><tr><th>Setting</th><th>File</th><th>Present</th></tr></thead>
+  <tbody>
+    {% for item in config.paths %}
+    <tr>
+      <th scope="row"><code>{{ item.key }}</code></th>
+      <td><code>{{ item.filename }}</code></td>
+      <td>{% if item.exists %}yes{% else %}<strong>missing</strong>{% endif %}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="3" class="muted">Nothing to show.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<p class="muted">
+  API keys and tokens are deliberately absent, masked forms included: a masked
+  key still leaks its length and prefix.
+</p>
+{% endblock %}

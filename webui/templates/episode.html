@@ -1,0 +1,283 @@
+{% extends "base.html" %}
+{% block title %}{{ episode.base_name }} - WHYcast{% endblock %}
+
+{% block content %}
+{% import "_macros.html" as m %}
+<p class="crumbs"><a href="/">&larr; all episodes</a></p>
+
+<h1>{{ episode.base_name }}</h1>
+<p class="sub">
+  {% if episode.number is not none %}Episode {{ episode.number }}{% else %}No episode number in the name{% endif %}
+  &middot; {{ episode.artifacts|length }} artifact{{ '' if episode.artifacts|length == 1 else 's' }}
+  &middot; newest change {{ m.epoch(episode.mtime) }}
+</p>
+
+{#
+  Audio. preload="none" matters: episodes are 50-150 MB and opening this page
+  should not start a download.
+#}
+<section class="panel audio-panel">
+  <h2>Audio</h2>
+  {% if episode.audio_path %}
+  <audio controls preload="none" src="/media/{{ episode.base_name|urlencode }}/audio">
+    Your browser cannot play audio inline.
+    <a href="/media/{{ episode.base_name|urlencode }}/audio">Download the file</a> instead.
+  </audio>
+  <p class="hint mono">{{ episode.audio_path }} &middot; {{ m.size(episode.audio_size) }}</p>
+  {% else %}
+  <p class="hint">No audio file for this episode - the artifacts below are orphans of an audio file that is gone or elsewhere.</p>
+  {% endif %}
+</section>
+
+{#
+  Speakers (ADR-010, TASK-004). A pointer, not a control surface: the editor
+  is its own page, and this line exists so that "does this episode already
+  have names?" is answerable without opening it.
+
+  speaker_map comes from webui.app._speaker_map_summary(), which stats the
+  file itself rather than reading episode.formats. The index is a cache that
+  can be a rescan behind; whether the next run uses your names is not a
+  question a cache may answer.
+#}
+<section class="panel" id="episode-speakers">
+  <h2>Speakers</h2>
+  {% if speaker_map and speaker_map.exists %}
+  <p class="banner ok">
+    <strong>A saved speaker mapping exists</strong> (<code>{{ speaker_map.file }}</code>).
+    A speakers run reads it instead of paying a model to work the names out -
+    unless it was made for an older transcript, which the editor will say.
+    <a href="/episodes/{{ episode.base_name|urlencode }}/speakers">Check or edit the names</a>.
+  </p>
+  {% else %}
+  <p class="banner neutral">
+    <strong>No saved speaker mapping.</strong>
+    The next speakers run asks a paid model who <span class="mono">SPEAKER_00</span>
+    is, then saves the answer.
+    <a href="/episodes/{{ episode.base_name|urlencode }}/speakers">Name them yourself</a>
+    to skip that call - it costs nothing.
+  </p>
+  {% endif %}
+</section>
+
+{#
+  Actions: queue a pipeline job for this episode (ADR-008 phase 2, TASK-003).
+
+  Context added by webui.app.episode_detail():
+
+      episode_actions  the offered job types, cheapest first, each
+                       {type, label, description, gpu, cost, requires_base_name}
+      episode_jobs     recent jobs that targeted this episode, newest first
+      active_job       the job running right now (any episode), or None
+      job_types        the full catalogue (unused here - episode_actions is the
+                       curated subset, and adding a button would contradict
+                       webui.app.EPISODE_ACTION_TYPES, which is ordered
+                       cheapest-first on purpose)
+
+  EVERY ACTION HERE SPENDS MONEY. postprocess and speakers are the cheap
+  path only in the sense that they skip transcription and the GPU; they still
+  call the paid OpenAI API (ADR-003). So each one is marked, and each one is
+  behind two gates:
+
+  1. A closed <details>. Opening it is deliberate, it needs no JavaScript, and
+     the "$ paid API" badge is on the summary - so nothing paid is ever one
+     stray click away on a page you just opened.
+  2. /static/app.js confirms before posting, naming this episode, what the job
+     does, and that it calls a paid API.
+
+  The flags come from the server's catalogue, which is the same source
+  webui.app validates an enqueue against - a button cannot claim "free" for
+  something the API charges for.
+#}
+<section class="panel actions" id="episode-actions">
+  <h2>Actions</h2>
+
+  {% if active_job %}
+  <p class="banner neutral">
+    A job is running right now ({{ active_job.label }}{% if active_job.base_name %} for {{ active_job.base_name }}{% endif %}).
+    The worker runs one job at a time, so anything queued here waits for it.
+    <a href="/jobs">See the queue</a>.
+  </p>
+  {% endif %}
+
+  <p class="hint">
+    These queue a job; they do not start one. The worker claims it, runs it in
+    its own process, and the live log is on the job's page.
+  </p>
+
+  <ul class="action-list">
+    {% for spec in episode_actions|default([], true) %}
+    <li>
+      <details class="action{{ ' costly' if spec.cost else '' }}">
+        <summary>
+          {{ spec.label }}
+          {{ m.cost_badge(spec) }}
+          {{ m.gpu_badge(spec) }}
+        </summary>
+        <p class="hint">{{ spec.description }}</p>
+        <form method="post" action="/api/jobs"
+              data-enqueue
+              data-result="episode-job-result"
+              data-confirm="{{ spec.label }} for episode {{ episode.base_name }}
+
+{{ spec.description }}
+
+{% if spec.cost %}This calls the paid OpenAI API - it will spend money.
+{% endif %}{% if spec.gpu %}It claims the GPU for the whole run; nothing else can transcribe while it works.
+{% endif %}Queue it now?">
+          <input type="hidden" name="type" value="{{ spec.type }}">
+          <input type="hidden" name="base_name" value="{{ episode.base_name }}">
+          <button type="submit" class="{{ 'danger' if spec.cost else 'plain' }}">
+            Queue {{ spec.label|lower }}
+          </button>
+        </form>
+      </details>
+    </li>
+    {% else %}
+    <li class="hint">
+      No actions are available for this episode. The job queue may be
+      unavailable; <a href="/jobs">the jobs page</a> will say so.
+    </li>
+    {% endfor %}
+  </ul>
+
+  {# app.js writes the created job's link here. #}
+  <p id="episode-job-result" class="job-result" role="status" aria-live="polite"></p>
+
+  {% if episode_jobs|default([], true) %}
+  <h3>Recent runs for this episode</h3>
+  <div class="table-wrap">
+    <table class="jobs">
+      <thead>
+        <tr>
+          <th scope="col">Job</th>
+          <th scope="col">Outcome</th>
+          <th scope="col">Type</th>
+          <th scope="col" class="num">Took</th>
+          <th scope="col" class="when">Queued</th>
+          <th scope="col">Why</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for job in episode_jobs %}
+        <tr>
+          <td>{{ m.job_link(job) }}</td>
+          <td>{{ m.status_badge(job) }}</td>
+          <td>{{ job.label }} {{ m.cost_badge(job) }} {{ m.gpu_badge(job) }}</td>
+          <td class="num">{{ m.duration(job.duration_seconds) }}</td>
+          <td class="when">{{ m.epoch(job.created_at) }}</td>
+          {# Pipeline error text, rendered as text. Never |safe. #}
+          <td class="err">{% if job.error %}{{ job.error }}{% else %}<span class="muted">-</span>{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+</section>
+
+{#
+  Artifact tabs.
+
+  SECURITY - read before changing the swap mechanism.
+
+  Artifact files are not trusted input. They are LLM output generated from
+  podcast audio and feed text over years of runs, and anything that can write
+  to podcasts/ can edit them. An artifact containing
+  <img src=x onerror="..."> is a realistic case, not a hypothetical.
+
+  So artifact content is never brought into THIS document. Each tab is a plain
+  link whose target is the sandboxed iframe below, which means the browser
+  *navigates* to the artifact instead of splicing it into the live DOM. That
+  distinction is the whole fix:
+
+  * A previous version used hx-get + hx-swap="innerHTML". A response header
+    cannot govern a string handed to innerHTML - there is no browsing context
+    to apply it to - so the API's `Content-Security-Policy: sandbox` was inert
+    and inline handlers executed in the app's own origin. htmx parses every
+    response body into a fragment regardless of Content-Type, so a text/plain
+    transcript was just as dangerous as an .html blog.
+  * As an iframe navigation, that same `sandbox` header now genuinely applies,
+    and the sandbox attribute here applies a second time on the embedding
+    side. With no allow-* tokens there is no scripting and the frame gets a
+    unique opaque origin, so hostile content cannot reach this page, its DOM,
+    or the API.
+
+  This also works with JavaScript disabled: target= is plain HTML. app.js only
+  marks the active tab.
+#}
+<section class="panel">
+  <h2>Artifacts</h2>
+
+  <nav class="tabs">
+    {% for kind in kinds %}
+      {% set formats = episode.artifacts|selectattr('kind', 'equalto', kind)|map(attribute='fmt')|list %}
+      {% if formats %}
+      <a class="tab"
+         href="/api/episodes/{{ episode.base_name|urlencode }}/artifacts/{{ kind|urlencode }}"
+         target="artifact-frame"
+         rel="noopener noreferrer"
+         title="{{ kind }}: {{ formats|join(', ') }}">
+        {{ kind }}<span class="fmts">{{ formats|join('/') }}</span>
+      </a>
+      {% else %}
+      <span class="tab absent" title="{{ kind }}: missing">{{ kind }}</span>
+      {% endif %}
+    {% endfor %}
+  </nav>
+
+  <div class="artifact-panel">
+    <div class="artifact-head">
+      <span>Artifact content</span>
+      <span class="hint">opens sandboxed &mdash; scripts in a generated file cannot run</span>
+    </div>
+    <div class="artifact-body">
+      <p class="hint" id="artifact-placeholder">Pick an artifact above. It opens inside the sandboxed frame below; nothing from a generated file is merged into this page.</p>
+      {# sandbox with no tokens: no scripts, no forms, unique opaque origin. #}
+      <iframe id="artifact-frame"
+              name="artifact-frame"
+              sandbox
+              referrerpolicy="no-referrer"
+              title="Artifact content for {{ episode.base_name }}"
+              hidden></iframe>
+    </div>
+  </div>
+</section>
+
+{# Metadata: every file behind this episode, with size, format and mtime. #}
+<section class="panel">
+  <h2>Files on disk</h2>
+  <div class="table-wrap">
+    <table class="files">
+      <thead>
+        <tr>
+          <th scope="col">Kind</th>
+          <th scope="col">Formats</th>
+          <th scope="col" class="num">Size</th>
+          <th scope="col" class="when">Modified</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for kind in kinds %}
+          {% set found = episode.artifacts|selectattr('kind', 'equalto', kind)|list %}
+          {% for artifact in found %}
+          <tr>
+            <td>{% if loop.first %}{{ kind }}{% endif %}</td>
+            <td class="mono">{{ artifact.fmt }}</td>
+            <td class="num">{{ m.size(artifact.size) }}</td>
+            <td class="when">{{ m.epoch(artifact.mtime) }}</td>
+          </tr>
+          {% endfor %}
+          {% if not found %}
+          <tr class="absent">
+            <td>{{ kind }}</td>
+            <td class="mono muted">-</td>
+            <td class="num muted">-</td>
+            <td class="when muted">not generated</td>
+          </tr>
+          {% endif %}
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

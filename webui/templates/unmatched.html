@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}Unmatched files - WHYcast{% endblock %}
+
+{% block content %}
+{% import "_macros.html" as m %}
+{#
+  Files in the podcast directory that belong to no episode. Showing them beats
+  silently dropping them: this is how naming drift becomes visible (TASK-002
+  acceptance criterion 3).
+
+  Each entry is a dict from webui.db.list_unmatched():
+      {path, name, ext, size, mtime, position}
+  Iterating it as if it were a bare string prints the Python dict repr into the
+  cell, which is how this table read before - and why size/ext/mtime, which
+  db.py stats on purpose ("this 4 MB stray mp4 is ignored"), are shown here.
+
+  A subdirectory of podcasts/ lands in this list too: the scan is shallow
+  (whycast.episodes.scan_podcasts), so "episode31" appears as an entry with no
+  extension. That is honest - those artifacts really are not indexed.
+#}
+<h1>Unmatched files</h1>
+
+<p class="hint">
+  {{ unmatched|length }} entr{{ 'y' if unmatched|length == 1 else 'ies' }} in the podcast
+  directory could not be attached to any episode. They are listed, not touched.
+</p>
+
+<div class="table-wrap">
+  <table class="files">
+    <thead>
+      <tr>
+        <th scope="col" class="num">#</th>
+        <th scope="col">Name</th>
+        <th scope="col" class="mono">Type</th>
+        <th scope="col" class="num">Size</th>
+        <th scope="col" class="when">Modified</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for entry in unmatched %}
+      <tr>
+        <td class="num">{{ loop.index }}</td>
+        <td class="path" title="{{ entry.path }}">{{ entry.name or entry.path }}</td>
+        <td class="mono">{% if entry.ext %}{{ entry.ext }}{% else %}<span class="muted">directory or no extension</span>{% endif %}</td>
+        <td class="num">{{ m.size(entry.size) }}</td>
+        <td class="when">{{ m.epoch(entry.mtime) }}</td>
+      </tr>
+      {% else %}
+      <tr class="empty">
+        <td colspan="5">Nothing unmatched - every file belongs to an episode.</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

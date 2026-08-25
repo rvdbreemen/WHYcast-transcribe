@@ -1,0 +1,151 @@
+{% extends "base.html" %}
+{% block title %}Job {{ job.id[:8] }} - WHYcast{% endblock %}
+
+{% block content %}
+{% import "_macros.html" as m %}
+{#
+  One job, with its log streamed live (ADR-008 phase 2, TASK-003).
+
+  Context, as webui.app.job_detail() builds it:
+
+      job         a job dict (see _macros.html for the shape)
+      events_url  "/api/jobs/<id>/events" - the SSE stream
+      job_types   the catalogue (not used here; job rows carry their own flags)
+      meta        index metadata (base.html's footer)
+
+  THE LOG IS NOT RENDERED SERVER-SIDE. Every line arrives over the stream,
+  which replays the whole events.jsonl from the beginning (or from
+  Last-Event-ID on a reconnect) before it starts tailing. So a finished job
+  shows its complete log too - it just arrives over the same pipe.
+
+  Log lines are pipeline output. /static/app.js builds each line with
+  textContent, never innerHTML, and no |safe appears anywhere in this file:
+  an exception message containing <img onerror=...> is text on this page.
+
+  The container's attribute contract is shared with webui.app's built-in
+  fallback page, which renders the same .joblog[data-job-id] and
+  [data-job-log] hooks. app.js works on both; do not rename them here without
+  changing _job_detail_fallback() too.
+#}
+<p class="crumbs">
+  <a href="/jobs">&larr; all jobs</a>
+  {% if job.base_name %}&middot; <a href="/episodes/{{ job.base_name|urlencode }}">{{ job.base_name }}</a>{% endif %}
+</p>
+
+<h1>{{ job.label }}</h1>
+<p class="sub">
+  {{ m.status_badge(job, live=true) }}
+  {{ m.cost_badge(job) }}
+  {{ m.gpu_badge(job) }}
+  {% if not job.known_type %}<span class="badge warn" title="This row was written by a different build of the app; both flags are assumed to be on.">unknown type</span>{% endif %}
+  &middot; <span class="mono">{{ job.id }}</span>
+  {%- if job.base_name %}
+  {# Only episode jobs get a before-snapshot, so only they have anything to
+     compare (TASK-005). The page itself explains when there is none. #}
+  &middot; <a href="/jobs/{{ job.id }}/diff">what it changed</a>
+  {%- endif %}
+</p>
+
+{#
+  The outcome, stated once and plainly. Server-rendered from the row; app.js
+  rewrites it (textContent) when a "status" or "end" frame says otherwise, so
+  a job that finishes while you watch does not need a reload to look finished.
+#}
+<p id="job-outcome"
+   data-job-outcome
+   class="banner {{ {'succeeded': 'ok', 'failed': 'bad', 'cancelled': 'warn', 'running': 'neutral', 'queued': 'neutral'}.get(job.status, 'neutral') }}">
+  {% if job.status == 'succeeded' %}
+    Succeeded after {{ m.duration(job.duration_seconds) }}.
+  {% elif job.status == 'failed' %}
+    Failed{% if job.exit_code is not none %} (exit code {{ job.exit_code }}){% endif %}. The reason is below.
+  {% elif job.status == 'cancelled' %}
+    Cancelled. Anything half-written was discarded by the pipeline's atomic writes.
+  {% elif job.status == 'running' %}
+    Running for {{ m.elapsed(job) }}.
+  {% else %}
+    Queued. It starts when the worker has finished whatever is in front of it.
+  {% endif %}
+</p>
+
+{% if job.error %}
+{# Pipeline error text: a path, an exception message, arbitrary characters.
+   Rendered as text inside <pre>. Never |safe. #}
+<section class="panel">
+  <h2>Error</h2>
+  <pre class="error-text">{{ job.error }}</pre>
+  <p class="hint">The full traceback, if there was one, is in the log below.</p>
+</section>
+{% endif %}
+
+<section class="panel">
+  <h2>Live log</h2>
+  <div class="joblog-head">
+    {# Both hidden until an event actually carries progress: a bar stuck at 0%
+       for forty minutes says less than no bar at all. #}
+    <progress id="job-progress" max="1000" value="0" hidden></progress>
+    <span id="job-progress-label" class="hint mono" hidden></span>
+    <label class="follow"><input type="checkbox" id="joblog-follow" checked> Follow</label>
+    <span id="joblog-status" class="hint">not connected</span>
+  </div>
+
+  {#
+    data-events-url is an override; app.js derives the same URL from
+    data-job-id when it is missing, which is how the fallback page works.
+    data-terminal tells the script whether a dropped connection is worth
+    reconnecting for - a finished job's log cannot grow.
+  #}
+  <div class="joblog"
+       data-job-id="{{ job.id }}"
+       data-events-url="{{ events_url|default('', true) }}"
+       data-terminal="{{ 'true' if job.is_terminal else 'false' }}"
+       tabindex="0"
+       aria-label="Job log">
+    <ol class="joblog-lines" data-job-log></ol>
+  </div>
+
+  <p class="hint" id="joblog-nojs">
+    The live log needs JavaScript: it is streamed from
+    <span class="mono">{{ events_url|default('/api/jobs/' ~ job.id ~ '/events', true) }}</span>
+    as server-sent events. Everything it shows is also on disk, in this job's
+    <span class="mono">events.jsonl</span>.
+  </p>
+</section>
+
+<section class="panel">
+  <h2>Details</h2>
+  <dl class="jobfacts">
+    <dt>Type</dt><dd class="mono">{{ job.type }}</dd>
+    <dt>Episode</dt><dd>{{ m.episode_link(job) }}</dd>
+    <dt>Queued</dt><dd>{{ m.epoch(job.created_at) }}</dd>
+    <dt>Started</dt><dd>{{ m.epoch(job.started_at) }}</dd>
+    <dt>Finished</dt><dd>{{ m.epoch(job.finished_at) }}</dd>
+    <dt>Duration</dt><dd>{{ m.elapsed(job) }}</dd>
+    <dt>Worker</dt><dd class="mono">{{ job.worker_id or '-' }}</dd>
+    <dt>Process</dt><dd class="mono">{% if job.pid %}pid {{ job.pid }}{% else %}-{% endif %}</dd>
+    <dt>Exit code</dt><dd class="mono">{% if job.exit_code is not none %}{{ job.exit_code }}{% else %}-{% endif %}</dd>
+    <dt>Cancel asked</dt><dd>{{ 'yes' if job.cancel_requested else 'no' }}</dd>
+  </dl>
+
+  <h3>Parameters</h3>
+  {# params is whatever the enqueue request sent, stored as JSON. Values can be
+     any JSON type, so they are printed with Jinja's own repr and escaped. #}
+  {% if job.params %}
+  <div class="table-wrap">
+    <table class="files">
+      <thead><tr><th scope="col">Key</th><th scope="col">Value</th></tr></thead>
+      <tbody>
+        {% for key, value in job.params|dictsort %}
+        <tr><td class="mono">{{ key }}</td><td class="mono path">{{ value }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="hint">No parameters.</p>
+  {% endif %}
+
+  {% if not job.is_terminal %}
+  <div class="jobcard-actions">{{ m.cancel_form(job) }}</div>
+  {% endif %}
+</section>
+{% endblock %}

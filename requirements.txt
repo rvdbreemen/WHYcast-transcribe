@@ -8,3 +8,15 @@ torchaudio
 feedparser
 tqdm
 pyannote.audio
+
+# Web UI (ADR-008 / TASK-002). Only these three are needed to serve the
+# read-only episode browser: `python -m webui`. htmx is vendored in
+# webui/static/, so the UI has no CDN dependency and no build toolchain.
+fastapi
+uvicorn
+jinja2
+
+# CUDA 12 runtime for CTranslate2 (faster-whisper). PyTorch ships CUDA 11
+# (cublas64_11), CTranslate2 needs CUDA 12 (cublas64_12) and loads it lazily on
+# the first GPU compute call. See whycast/cuda_setup.py and ADR-001.
+nvidia-cublas-cu12

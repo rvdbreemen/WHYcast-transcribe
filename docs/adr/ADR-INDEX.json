@@ -1,0 +1,741 @@
+{
+  "$schema": "../../schemas/adr-index.schema.json",
+  "schema_version": 2,
+  "adrs": [
+    {
+      "id": "ADR-001",
+      "title": "Use faster-whisper on CUDA for transcription",
+      "path": "ADR-001-use-faster-whisper-on-cuda-for-transcription.md",
+      "format": "madr",
+      "status": "Accepted",
+      "date": "2026-08-24",
+      "decision_summary": "Chosen option: faster-whisper (CTranslate2) on CUDA float16, because it gives roughly 4x the throughput of the refere...",
+      "topics": [
+        "cuda",
+        "gpu",
+        "transcription",
+        "whisper"
+      ],
+      "aliases": [
+        "CTranslate2 whisper",
+        "faster-whisper",
+        "whisper large-v3"
+      ],
+      "components": [
+        "config.MODEL_SIZE",
+        "transcribe.setup_model",
+        "transcribe.transcribe_audio"
+      ],
+      "symbols": [],
+      "context_scope": "selective",
+      "decision_contract": {
+        "must": [
+          "Transcription uses fasterwhisper.WhisperModel; model size, device, compute type and beam size come from config.py env-vars",
+          "CUDA is the default device; a missing GPU is reported loudly, never silently downgraded"
+        ],
+        "must_not": [
+          "Do not send audio to a hosted transcription API",
+          "Do not hard-code model size or device outside config.py"
+        ],
+        "exceptions": [
+          "None"
+        ],
+        "verification": [
+          "transcribe.py:1990 setupmodel",
+          "transcribe.py:1924-1990 CUDA checks",
+          "config.py:11-14"
+        ]
+      },
+      "scope": {
+        "path_globs": [
+          "*.py"
+        ]
+      },
+      "metadata": {
+        "binding": false,
+        "gate": null,
+        "documents_shipped": true,
+        "verified_in": [
+          "requirements.txt",
+          "config.py",
+          "transcribe.py"
+        ],
+        "supersedes": [],
+        "superseded_by": null
+      }
+    },
+    {
+      "id": "ADR-002",
+      "title": "Speaker diarization via pyannote.audio 3.1",
+      "path": "ADR-002-speaker-diarization-via-pyannote-audio-3-1.md",
+      "format": "madr",
+      "status": "Accepted",
+      "date": "2026-08-24",
+      "decision_summary": "Chosen option: pyannote.audio 3.1 speaker-diarization pipeline, because it is the best-performing open diarization mo...",
+      "topics": [
+        "diarization",
+        "gpu",
+        "pyannote",
+        "speakers"
+      ],
+      "aliases": [
+        "pyannote.audio",
+        "speaker diarization",
+        "who spoke when"
+      ],
+      "components": [
+        "config.DIARIZATION_MODEL",
+        "transcribe.diarize_audio",
+        "transcribe.prepare_audio_for_diarization"
+      ],
+      "symbols": [],
+      "context_scope": "selective",
+      "decision_contract": {
+        "must": [
+          "Diarization runs before transcription alignment; speaker segments are passed into transcribeaudio",
+          "Model id, min/max speakers come from config.py env-vars",
+          "A missing HF token is prompted for, never silently skipped"
+        ],
+        "must_not": [
+          "Do not depend on WhisperX or another wrapper that pins its own whisper build"
+        ],
+        "exceptions": [
+          "None"
+        ],
+        "verification": [
+          "transcribe.py:2742 diarizeaudio",
+          "transcribe.py:2621 call site in fullworkflow",
+          "config.py:36-41"
+        ]
+      },
+      "scope": {
+        "path_globs": [
+          "*.py"
+        ]
+      },
+      "metadata": {
+        "binding": false,
+        "gate": null,
+        "documents_shipped": true,
+        "verified_in": [
+          "config.py",
+          "transcribe.py"
+        ],
+        "supersedes": [],
+        "superseded_by": null
+      }
+    },
+    {
+      "id": "ADR-003",
+      "title": "Per-task OpenAI model selection",
+      "path": "ADR-003-per-task-openai-model-selection.md",
+      "format": "madr",
+      "status": "Accepted",
+      "date": "2026-08-23",
+      "decision_summary": "Chosen option: Per-task model env-vars with length-based switch, because each step has a different cost/quality profi...",
+      "topics": [
+        "cost",
+        "llm",
+        "models",
+        "openai"
+      ],
+      "aliases": [
+        "gpt-4.1",
+        "model selection",
+        "o4-mini"
+      ],
+      "components": [
+        "config.OPENAI_MODEL",
+        "config.OPENAI_SPEAKER_MODEL",
+        "transcribe.choose_appropriate_model"
+      ],
+      "symbols": [],
+      "context_scope": "selective",
+      "decision_contract": {
+        "must": [
+          "Every OpenAI call takes its model from a config.py OPENAIMODEL constant",
+          "Long inputs route through chooseappropriatemodel"
+        ],
+        "must_not": [
+          "Do not hard-code a model name string at transcribe.py call sites"
+        ],
+        "exceptions": [
+          "None"
+        ],
+        "verification": [
+          "config.py:17-26",
+          "transcribe.py:629 chooseappropriatemodel",
+          "transcribe.py:942 analyzespeakerswitho4"
+        ]
+      },
+      "scope": {
+        "path_globs": [
+          "transcribe.py"
+        ]
+      },
+      "metadata": {
+        "binding": false,
+        "gate": null,
+        "documents_shipped": true,
+        "verified_in": [
+          "config.py",
+          "transcribe.py"
+        ],
+        "supersedes": [],
+        "superseded_by": null
+      }
+    },
+    {
+      "id": "ADR-004",
+      "title": "Hybrid AI-analysis plus programmatic speaker assignment",
+      "path": "ADR-004-hybrid-ai-analysis-plus-programmatic-speaker-assignment.md",
+      "format": "madr",
+      "status": "Accepted",
+      "date": "2026-08-25",
+      "decision_summary": "Chosen option: Two-phase: LLM produces mapping, code applies it, because separating judgement (who is SPEAKER02) from...",
+      "topics": [
+        "attribution",
+        "llm",
+        "pipeline",
+        "speakers"
+      ],
+      "aliases": [
+        "speaker assignment",
+        "SPEAKER_UNKNOWN attribution",
+        "two-phase speaker mapping"
+      ],
+      "components": [
+        "transcribe.analyze_speakers_with_o4",
+        "transcribe.apply_speaker_mapping_programmatically",
+        "transcribe.attribute_unknown_speakers_with_ai",
+        "transcribe.speaker_assignment_step"
+      ],
+      "symbols": [],
+      "context_scope": "selective",
+      "decision_contract": {
+        "must": [
+          "Speaker names are applied by deterministic code from a parsed mapping",
+          "Any LLM step that rewrites transcript text is followed by a change analysis",
+          "Failure of the analysis phase falls back rather than aborting"
+        ],
+        "must_not": [
+          "Do not reintroduce a single prompt that outputs the complete renamed transcript as the primary path"
+        ],
+        "exceptions": [
+          "None"
+        ],
+        "verification": [
+          "transcribe.py:1439-1504",
+          "transcribe.py:1136",
+          "transcribe.py:1110"
+        ]
+      },
+      "scope": {
+        "path_globs": []
+      },
+      "metadata": {
+        "binding": false,
+        "gate": null,
+        "documents_shipped": true,
+        "verified_in": [
+          "transcribe.py",
+          "prompts/speaker_analysis_prompt.txt"
+        ],
+        "supersedes": [],
+        "superseded_by": null
+      }
+    },
+    {
+      "id": "ADR-005",
+      "title": "Recursive chunked summarization for long transcripts",
+      "path": "ADR-005-recursive-chunked-summarization-for-long-transcripts.md",
+      "format": "madr",
+      "status": "Accepted",
+      "date": "2026-08-23",
+      "decision_summary": "Chosen option: Recursive map-reduce summarization with overlap, because it preserves coverage of the whole episode in...",
+      "topics": [
+        "chunking",
+        "context-window",
+        "llm",
+        "summarization"
+      ],
+      "aliases": [
+        "chunked summarization",
+        "map-reduce summary",
+        "recursive summary"
+      ],
+      "components": [
+        "config.MAX_CHUNK_SIZE",
+        "transcribe.split_into_chunks",
+        "transcribe.summarize_large_transcript"
+      ],
+      "symbols": [],
+      "context_scope": "selective",
+      "decision_contract": {
+        "must": [
+          "Summaries of inputs above MAXINPUTTOKENS go through summarizelargetranscript when USERECURSIVESUMMARIZATION is on",
+          "Chunk size and overlap are config constants"
+        ],
+        "must_not": [
+          "Do not truncate transcript content as the default summary path"
+        ],
+        "exceptions": [
+          "None"
+        ],
+        "verification": [
+          "transcribe.py:704-750",
+          "transcribe.py:666",
+          "config.py:31-33"
+        ]
+      },
+      "scope": {
+        "path_globs": []
+      },
+      "metadata": {
+        "binding": false,
+        "gate": null,
+        "documents_shipped": true,
+        "verified_in": [
+          "config.py",
+          "transcribe.py"
+        ],
+        "supersedes": [],
+        "superseded_by": null
+      }
+    },
+    {
+      "id": "ADR-006",
+      "title": "Post-transcription vocabulary correction via vocabulary.json",
+      "path": "ADR-006-post-transcription-vocabulary-correction-via-vocabulary-json.md",
+      "format": "madr",
+      "status": "Accepted",
+      "date": "2026-08-23",
+      "decision_summary": "Chosen option: Post-hoc JSON replacement map, because it is deterministic, testable, editable without code, and survi...",
+      "topics": [
+        "post-processing",
+        "quality",
+        "transcription",
+        "vocabulary"
+      ],
+      "aliases": [
+        "term correction",
+        "vocabulary.json",
+        "WHY misspellings"
+      ],
+      "components": [
+        "transcribe.apply_vocabulary_corrections",
+        "transcribe.load_vocabulary_mappings",
+        "vocabulary.json"
+      ],
+      "symbols": [],
+      "context_scope": "selective",
+      "decision_contract": {
+        "must": [
+          "Domain term fixes go into vocabulary.json, not into code or prompts",
+          "Replacement is word-boundary and longest-match-first"
+        ],
+        "must_not": [
+          "Do not hard-code term replacements in transcribe.py"
+        ],
+        "exceptions": [
+          "None"
+        ],
+        "verification": [
+          "transcribe.py:1690-1800",
+          "vocabulary.json",
+          "config.py:55-56"
+        ]
+      },
+      "scope": {
+        "path_globs": []
+      },
+      "metadata": {
+        "binding": false,
+        "gate": null,
+        "documents_shipped": true,
+        "verified_in": [
+          "vocabulary.json",
+          "transcribe.py"
+        ],
+        "supersedes": [],
+        "superseded_by": null
+      }
+    },
+    {
+      "id": "ADR-007",
+      "title": "Environment-variable configuration and file-based prompts",
+      "path": "ADR-007-environment-variable-configuration-and-file-based-prompts.md",
+      "format": "madr",
+      "status": "Accepted",
+      "date": "2026-08-24",
+      "decision_summary": "Chosen option: Env-vars + config.py constants + prompts/.txt, because it keeps secrets in .env, machine settings in e...",
+      "topics": [
+        "configuration",
+        "conventions",
+        "env-vars",
+        "prompts"
+      ],
+      "aliases": [
+        ".env",
+        "config.py",
+        "prompts directory"
+      ],
+      "components": [
+        "config",
+        "prompts/",
+        "transcribe.read_prompt_file"
+      ],
+      "symbols": [],
+      "context_scope": "selective",
+      "decision_contract": {
+        "must": [
+          "New tunables are added to config.py as os.environ.get with a default",
+          "New prompts are files in prompts/ with a PROMPTFILE constant"
+        ],
+        "must_not": [
+          "Do not embed multi-line prompt text in Python source",
+          "Do not read os.environ outside config.py except for secrets"
+        ],
+        "exceptions": [
+          "None"
+        ],
+        "verification": [
+          "config.py",
+          "transcribe.py:575",
+          "prompts/"
+        ]
+      },
+      "scope": {
+        "path_globs": []
+      },
+      "metadata": {
+        "binding": false,
+        "gate": null,
+        "documents_shipped": true,
+        "verified_in": [
+          "config.py",
+          "prompts/summary_prompt.txt"
+        ],
+        "supersedes": [],
+        "superseded_by": null
+      }
+    },
+    {
+      "id": "ADR-008",
+      "title": "Web UI as FastAPI layer over extracted pipeline library",
+      "path": "ADR-008-web-ui-as-fastapi-layer-over-extracted-pipeline-library.md",
+      "format": "madr",
+      "status": "Accepted",
+      "date": "2026-08-25",
+      "decision_summary": "Chosen option: Option A, because only library extraction gives the web layer structured progress, typed errors, and p...",
+      "topics": [
+        "job-orchestration",
+        "pipeline-architecture",
+        "refactoring",
+        "web-ui"
+      ],
+      "aliases": [
+        "dashboard",
+        "web interface",
+        "webui",
+        "whycast package"
+      ],
+      "components": [
+        "webui",
+        "whycast",
+        "worker"
+      ],
+      "symbols": [
+        "EventSink",
+        "full_workflow",
+        "process_transcript_workflow",
+        "ProgressEvent"
+      ],
+      "context_scope": "selective",
+      "decision_contract": {
+        "must": [
+          "Pipeline code must be importable (import whycast) without side effects: no GPU initialization, no model loading, no filesystem writes at import time.",
+          "Pipeline progress and errors must flow through the event sink and logging; library code paths must raise exceptions instead of calling exit().",
+          "The web server must bind to 127.0.0.1 by default.",
+          "At most one GPU job may run at a time, enforced by the single worker process.",
+          "The filesystem remains the source of truth; the SQLite database must be deletable and rebuildable from podcasts/ without data loss.",
+          "Any API surface that exposes configuration must use an allowlist of visible keys; secrets (OPENAIAPIKEY, HuggingFace token) must never be returned, masked or otherwise."
+        ],
+        "must_not": [
+          "No external job brokers or services (Celery, Redis, RabbitMQ, cloud queues).",
+          "No exit()/sys.exit() in whycast/ library code.",
+          "The web layer must not write episode artifacts directly; all artifact writes go through the pipeline library, which writes atomically (write-to-temp, then rename) and backs up files it overwrites."
+        ],
+        "exceptions": [
+          "None."
+        ],
+        "verification": [
+          "Golden-master diff test in tests/ (added in phase 0).",
+          "Enforcement patterns below (exit( forbidden in whycast/).",
+          "Manual: python -c \"import whycast\" completes without GPU or network activity."
+        ]
+      },
+      "scope": {
+        "path_globs": [
+          "whycast/**/*.py",
+          "whycast/pipeline/**/*.py"
+        ]
+      },
+      "metadata": {
+        "binding": false,
+        "gate": null,
+        "documents_shipped": false,
+        "verified_in": [],
+        "supersedes": [],
+        "superseded_by": null
+      }
+    },
+    {
+      "id": "ADR-009",
+      "title": "Discard partial downloads and drop per-artifact backups",
+      "path": "ADR-009-discard-partial-downloads-and-drop-per-artifact-backups.md",
+      "format": "madr",
+      "status": "Accepted",
+      "date": "2026-08-25",
+      "decision_summary": "Chosen option: Option A, because it removes the noise where it is generated without weakening the primitive: whycast....",
+      "topics": [
+        "artifact-writes",
+        "data-durability",
+        "downloads"
+      ],
+      "aliases": [
+        ".bak",
+        "backup",
+        "partial download",
+        "truncated mp3"
+      ],
+      "components": [
+        "whycast.io_utils",
+        "whycast.pipeline.feed"
+      ],
+      "symbols": [],
+      "context_scope": "selective",
+      "decision_contract": {
+        "must": [
+          "Artifact writes stay atomic: temp file in the same directory, then os.replace. A partial file must never appear at the target path.",
+          "Artifact call sites in whycast/pipeline/ pass backup=False explicitly.",
+          "whycast.ioutils keeps backup=True as its default, and that path stays tested.",
+          "Audio downloads write through the streaming atomic writer and discard the temp file on any failure.",
+          "A download whose body is shorter than the Content-Length the server advertised counts as failed, not complete."
+        ],
+        "must_not": [
+          "Do not change the ioutils default to backup=False.",
+          "Do not buffer an entire episode in memory to make a download atomic.",
+          "Do not back up .env (a .env.bak would be a second plaintext copy of a secret).",
+          "Human input must not be stored in a file the pipeline writes. A correction workflow edits the pipeline's input (the speaker mapping, vocabulary.json, a prompt file), never a generated artifact, because a generated artifact carries no bac..."
+        ],
+        "exceptions": [
+          "None."
+        ],
+        "verification": []
+      },
+      "scope": {
+        "path_globs": [
+          "whycast/pipeline/feed.py"
+        ]
+      },
+      "metadata": {
+        "binding": false,
+        "gate": null,
+        "documents_shipped": false,
+        "verified_in": [],
+        "supersedes": [],
+        "superseded_by": null
+      }
+    },
+    {
+      "id": "ADR-010",
+      "title": "Persisted editable speaker mapping as pipeline input",
+      "path": "ADR-010-persisted-editable-speaker-mapping-as-pipeline-input.md",
+      "format": "madr",
+      "status": "Accepted",
+      "date": "2026-08-25",
+      "decision_summary": "Chosen option: Option A.",
+      "topics": [
+        "correction-workflow",
+        "pipeline-inputs",
+        "speaker-assignment"
+      ],
+      "aliases": [
+        "speaker editor",
+        "speaker mapping",
+        "speakers.json"
+      ],
+      "components": [
+        "whycast.episodes",
+        "whycast.pipeline.speakers"
+      ],
+      "symbols": [
+        "analyze_speakers_with_o4",
+        "load_speaker_mapping",
+        "save_speaker_mapping",
+        "speaker_assignment_step"
+      ],
+      "context_scope": "selective",
+      "decision_contract": {
+        "must": [
+          "The mapping lives at / speakers.json as a JSON object of {\"SPEAKER00\": \"Name\", ...}.",
+          "When that file exists and parses, it is the mapping; the paid analysis phase is skipped.",
+          "When it does not exist, the LLM-derived mapping is saved to it, so the next run can be corrected and re-run for free.",
+          "Writes to it use backup=True: it is human input, unlike generated artifacts (ADR-009).",
+          "The scanner recognises it as a distinct kind, so it does not appear as an unmatched file.",
+          "Deterministic code still applies the mapping (ADR-004 is unchanged in that respect).",
+          "Re-transcribing an episode marks its mapping stale rather than deleting it. The file records which transcript it was made for; when that no longer matches, the mapping is not applied automatically and the person is asked to check the nam..."
+        ],
+        "must_not": [
+          "Do not store speaker corrections in the web UI database or any other cache.",
+          "Do not delete a mapping automatically, on re-transcription or otherwise. It is human work; discarding it is a decision only a person makes.",
+          "Do not parse the mapping back out of speakeranalysis.txt; that report is prose for a human reader.",
+          "Do not let a malformed or unreadable mapping file silently fall back to the LLM - report it, so a typo in a hand-edited file is visible rather than expensively papered over."
+        ],
+        "exceptions": [
+          "None."
+        ],
+        "verification": []
+      },
+      "scope": {
+        "path_globs": []
+      },
+      "metadata": {
+        "binding": false,
+        "gate": null,
+        "documents_shipped": false,
+        "verified_in": [
+          "whycast/pipeline/speakers.py",
+          "whycast/episodes.py",
+          "tests/test_speaker_mapping_precedence.py",
+          "tests/test_webui_speakers_editor.py"
+        ],
+        "supersedes": [],
+        "superseded_by": null
+      }
+    }
+  ],
+  "relationships": [
+    {
+      "source": "ADR-001",
+      "target": "ADR-008",
+      "type": "related",
+      "resolved": true
+    },
+    {
+      "source": "ADR-002",
+      "target": "ADR-001",
+      "type": "related",
+      "resolved": true
+    },
+    {
+      "source": "ADR-002",
+      "target": "ADR-008",
+      "type": "related",
+      "resolved": true
+    },
+    {
+      "source": "ADR-004",
+      "target": "ADR-002",
+      "type": "related",
+      "resolved": true
+    },
+    {
+      "source": "ADR-004",
+      "target": "ADR-003",
+      "type": "related",
+      "resolved": true
+    },
+    {
+      "source": "ADR-004",
+      "target": "ADR-010",
+      "type": "related",
+      "resolved": true
+    },
+    {
+      "source": "ADR-005",
+      "target": "ADR-003",
+      "type": "related",
+      "resolved": true
+    },
+    {
+      "source": "ADR-006",
+      "target": "ADR-001",
+      "type": "related",
+      "resolved": true
+    },
+    {
+      "source": "ADR-007",
+      "target": "ADR-003",
+      "type": "related",
+      "resolved": true
+    },
+    {
+      "source": "ADR-007",
+      "target": "ADR-008",
+      "type": "related",
+      "resolved": true
+    },
+    {
+      "source": "ADR-008",
+      "target": "ADR-001",
+      "type": "related",
+      "resolved": true
+    },
+    {
+      "source": "ADR-008",
+      "target": "ADR-002",
+      "type": "related",
+      "resolved": true
+    },
+    {
+      "source": "ADR-008",
+      "target": "ADR-003",
+      "type": "related",
+      "resolved": true
+    },
+    {
+      "source": "ADR-008",
+      "target": "ADR-007",
+      "type": "related",
+      "resolved": true
+    },
+    {
+      "source": "ADR-008",
+      "target": "ADR-009",
+      "type": "related",
+      "resolved": true
+    },
+    {
+      "source": "ADR-009",
+      "target": "ADR-008",
+      "type": "related",
+      "resolved": true
+    },
+    {
+      "source": "ADR-009",
+      "target": "ADR-010",
+      "type": "related",
+      "resolved": true
+    },
+    {
+      "source": "ADR-010",
+      "target": "ADR-003",
+      "type": "related",
+      "resolved": true
+    },
+    {
+      "source": "ADR-010",
+      "target": "ADR-004",
+      "type": "related",
+      "resolved": true
+    },
+    {
+      "source": "ADR-010",
+      "target": "ADR-009",
+      "type": "related",
+      "resolved": true
+    }
+  ]
+}
