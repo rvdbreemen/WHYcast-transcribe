@@ -1,0 +1,202 @@
+{% extends "base.html" %}
+{% block title %}Vocabulary - WHYcast{% endblock %}
+
+{% block content %}
+{% import "_macros.html" as m %}
+{#
+  The vocabulary editor (ADR-006, ADR-008 phase 3, TASK-004).
+
+  vocabulary.json is pipeline INPUT, not an artifact. That is why it may be
+  edited here at all and why it is saved with a .bak: ADR-009 says a generated
+  file is regenerable and gets no backup, while something a person typed is not
+  regenerable and does. A term added here survives every later run.
+
+  Context from webui.app.vocabulary_context():
+
+      vocab        {display_path, filename, exists, size, mtime, has_backup,
+                    readable, text, error}
+      entry_count  number of corrections parsed from the text, or None
+      error        why a save was refused, or None
+      saved        True right after a successful save (?saved=1)
+      apply_job    the job catalogue entry for force_episode: {type, label,
+                   description, gpu, cost, ...}
+      episodes     episodes that have audio - the only ones that can be
+                   re-transcribed, which is what "apply" means for this file
+      backup_suffix  ".bak"
+
+  No |safe anywhere. The file's contents go into a <textarea>, which Jinja
+  escapes; the vocabulary is hand-written but the same rule holds regardless.
+#}
+<h1>Vocabulary</h1>
+
+<p class="sub">
+  <span class="mono">{{ vocab.display_path }}</span>
+  {% if vocab.exists %}
+    &middot; {{ m.size(vocab.size) }}
+    &middot; changed {{ m.epoch(vocab.mtime) }}
+    {% if entry_count is not none %}&middot; {{ entry_count }} correction{{ '' if entry_count == 1 else 's' }}{% endif %}
+  {% else %}
+    &middot; <span class="muted">does not exist yet</span>
+  {% endif %}
+</p>
+
+{% if saved %}
+<p class="banner ok" role="status">
+  Saved. The previous version is kept as
+  <code>{{ vocab.filename }}{{ backup_suffix }}</code>.
+</p>
+{% endif %}
+
+{% if error %}
+<p class="banner bad" role="alert">
+  Not saved: {{ error }}
+</p>
+{% endif %}
+
+<section class="panel">
+  <h2>What this file does</h2>
+  <p class="hint">
+    One JSON object mapping a wrong spelling to the right one, for example
+    <code>{"WAIcast": "WHYcast"}</code>. It is the project's list of terms
+    Whisper keeps mishearing, kept as data rather than in code so it can be
+    edited without a developer (ADR-006).
+  </p>
+  <p class="hint">
+    It is read once, at the <strong>start of a transcription</strong>, and the
+    right-hand terms are handed to Whisper as a word list. So it changes how the
+    audio is <em>heard</em> - it does not rewrite a transcript that already
+    exists.
+  </p>
+  <details class="hint">
+    <summary>A known gap, stated rather than hidden</summary>
+    <p>
+      ADR-006 also describes a deterministic replacement pass over the finished
+      transcript (<span class="mono">apply_vocabulary_corrections</span>). That
+      function is in the library, but the current pipeline does not call it - only
+      the word-list hint above is wired up. This page therefore promises the
+      word list and nothing more. Wiring the replacement pass back in is a
+      pipeline change, not a UI one.
+    </p>
+  </details>
+</section>
+
+<section class="panel editor">
+  <h2>Edit</h2>
+
+  {% if not vocab.readable %}
+  <p class="banner bad">
+    This file cannot be shown, so it cannot be saved from here either.
+  </p>
+  {% else %}
+  {#
+    A plain form: it works with scripting off, and it posts
+    application/x-www-form-urlencoded, which webui.app._editor_payload() reads.
+    On success the server answers a browser with a 303 back to this page, so
+    nobody lands on a JSON document.
+  #}
+  <form method="post" action="/api/vocabulary" class="editor-form">
+    <label class="editor-label" for="vocab-text">
+      vocabulary.json - the whole file
+    </label>
+    <textarea id="vocab-text" name="text" class="editor-area mono" rows="24"
+              spellcheck="false" autocomplete="off"
+              aria-describedby="vocab-next">{{ vocab.text }}</textarea>
+    <p class="editor-actions">
+      <button type="submit" class="plain">Save vocabulary</button>
+      <a class="hint" href="/vocabulary">Discard and reload from disk</a>
+    </p>
+  </form>
+
+  <div id="vocab-next" class="whatnext">
+    <h3>What happens when you press Save</h3>
+    <ol>
+      <li>
+        The text is checked first. If it is not a JSON object of text-to-text
+        pairs, the save is refused and <strong>nothing on disk changes</strong> -
+        a broken vocabulary file would silently switch off every correction on
+        every later run.
+      </li>
+      <li>
+        If it passes, <code>{{ vocab.filename }}</code> is replaced and the
+        previous version is kept as
+        <code>{{ vocab.filename }}{{ backup_suffix }}</code> (ADR-009: this is
+        your typing, not a generated file).
+      </li>
+      <li>
+        <strong>No pipeline step runs.</strong> Saving costs nothing and starts
+        nothing. The next transcription picks the file up by itself.
+      </li>
+    </ol>
+  </div>
+  {% endif %}
+</section>
+
+<section class="panel actions">
+  <h2>Apply it to one episode</h2>
+
+  {% if apply_job %}
+  <p class="hint">
+    Because the vocabulary only takes effect while the audio is being
+    transcribed, applying it to an episode that is already done means
+    transcribing that episode again. There is no cheap version of this, and
+    pretending otherwise would just waste your time:
+  </p>
+
+  <ul class="action-list">
+    <li>
+      <details class="action{{ ' costly' if apply_job.cost else '' }}">
+        <summary>
+          {{ apply_job.label }}
+          {{ m.cost_badge(apply_job) }}
+          {{ m.gpu_badge(apply_job) }}
+        </summary>
+        <p class="hint">{{ apply_job.description }}</p>
+
+        {% if episodes %}
+        {#
+          Same enqueue path as every other button in this app: a POST to
+          /api/jobs with a job type and an episode key. app.js intercepts it,
+          shows data-confirm, and posts in the background. Cost is a property
+          of the job type on the server, so this cannot claim to be free.
+        #}
+        <form method="post" action="/api/jobs"
+              data-enqueue
+              data-result="vocabulary-job-result"
+              data-confirm="{{ apply_job.label }}, to apply the vocabulary you just saved.
+
+{{ apply_job.description }}
+
+{% if apply_job.cost %}This calls the paid OpenAI API - it will spend money.
+{% endif %}{% if apply_job.gpu %}It claims the GPU for the whole run; nothing else can transcribe while it works.
+{% endif %}Queue it now?">
+          <input type="hidden" name="type" value="{{ apply_job.type }}">
+          <label class="editor-label" for="vocab-episode">Episode to reprocess</label>
+          <select id="vocab-episode" name="base_name" required>
+            {% for episode in episodes %}
+            <option value="{{ episode.base_name }}">{{ episode.base_name }}</option>
+            {% endfor %}
+          </select>
+          <button type="submit" class="{{ 'danger' if apply_job.cost else 'plain' }}">
+            Queue {{ apply_job.label|lower }}
+          </button>
+        </form>
+        {% else %}
+        <p class="hint">
+          No episode in the index has an audio file, so there is nothing to
+          transcribe again.
+        </p>
+        {% endif %}
+      </details>
+    </li>
+  </ul>
+
+  {# app.js writes the created job's link here. #}
+  <p id="vocabulary-job-result" class="job-result" role="status" aria-live="polite"></p>
+  {% else %}
+  <p class="hint">
+    The job catalogue is unavailable, so no re-run can be offered from here.
+    <a href="/jobs">The jobs page</a> will say why.
+  </p>
+  {% endif %}
+</section>
+{% endblock %}

@@ -343,14 +343,63 @@ def _make_temp(path: str):
 
 
 def _commit(tmp_path: str, path: str, backup: bool) -> None:
-    """Back up the current file if asked, then move the temp file into place."""
-    if backup:
-        _make_backup(path)
-    os.replace(tmp_path, path)
+    """Publish the temp file, keeping the previous version if asked.
+
+    The order matters and it is not the obvious one. This used to overwrite the
+    ``.bak`` first and rename second, so a failed rename - no space, a Windows
+    sharing violation from any process holding the file open, a permissions
+    change - left the target correctly untouched *and the backup already
+    replaced by the content that never got published*. The save answered HTTP
+    500 with "The previous contents are still on disk", which was true of the
+    file and false of its backup, and the one undo slot ADR-010 grants human
+    input had been spent on a write that did not happen.
+
+    So the copy is *staged* next to the backup, the target is published, and
+    only then is the staged copy renamed over the ``.bak``. Every step is a
+    rename of a fully-written file. A failure or a kill at any point leaves
+    either the old ``.bak`` or the new one - never a ``.bak`` for a version
+    that was never published - plus at worst a ``.tmp`` stray the scanner
+    already quarantines.
+    """
+    staged = _stage_backup(path) if backup else None
+    try:
+        os.replace(tmp_path, path)
+    except OSError:
+        # The new content never reached the target, so the previous version is
+        # still the current one and must keep its backup exactly as it was.
+        if staged is not None:
+            _discard(staged)
+        raise
+    if staged is not None:
+        _publish_backup(staged, path + BACKUP_SUFFIX)
 
 
 def _make_backup(path: str) -> None:
-    """Best-effort *atomic* copy of an existing ``path`` to ``path + ".bak"``.
+    """Back up ``path`` to ``path + ".bak"``, immediately. Best effort.
+
+    Retained as the standalone spelling of stage-then-publish for callers that
+    want a backup taken now rather than as part of a write.
+    """
+    staged = _stage_backup(path)
+    if staged is not None:
+        _publish_backup(staged, path + BACKUP_SUFFIX)
+
+
+def _publish_backup(staged: str, backup: str) -> None:
+    """Move a staged copy onto the ``.bak``. Best effort, like the copy."""
+    try:
+        os.replace(staged, backup)
+    except OSError as e:
+        _discard(staged)
+        logger.warning("Could not publish the backup %s: %s", backup, e)
+
+
+def _stage_backup(path: str) -> Optional[str]:
+    """Best-effort *atomic* copy of an existing ``path``, ready to become its ``.bak``.
+
+    Returns:
+        The path of a fully-written temp file holding the current contents of
+        ``path``, or None when there was nothing to copy or the copy failed.
 
     Best-effort on purpose. By the time this runs the new content is already
     written and fsynced; refusing to publish it because the safety copy failed
@@ -373,15 +422,19 @@ def _make_backup(path: str) -> None:
     scanner already quarantines. ``copystat`` after the copy keeps the mtime
     and mode that ``copy2`` used to carry over, and the rename carries them to
     the backup.
+
+    The rename itself is the caller's to make (:func:`_publish_backup`), so
+    that a write which fails to publish can throw this copy away instead of
+    spending the ``.bak`` on content that never became the current version.
     """
     if not os.path.exists(path):
-        return
+        return None
     backup = path + BACKUP_SUFFIX
     try:
         fd, tmp_path = _make_temp(backup)
     except OSError as e:
         logger.warning("Could not back up %s before overwriting it: %s", path, e)
-        return
+        return None
     try:
         target = os.fdopen(fd, "wb")
     except OSError as e:
@@ -391,7 +444,7 @@ def _make_backup(path: str) -> None:
         os.close(fd)
         _discard(tmp_path)
         logger.warning("Could not back up %s before overwriting it: %s", path, e)
-        return
+        return None
     try:
         # The descriptor goes into the `with` FIRST, and the source is opened
         # inside it. The other way round - `with open(path, "rb") as source,
@@ -406,10 +459,11 @@ def _make_backup(path: str) -> None:
             target.flush()
             os.fsync(target.fileno())
         shutil.copystat(path, tmp_path)
-        os.replace(tmp_path, backup)
     except OSError as e:
         _discard(tmp_path)
         logger.warning("Could not back up %s before overwriting it: %s", path, e)
+        return None
+    return tmp_path
 
 
 def _discard(tmp_path: str) -> None:

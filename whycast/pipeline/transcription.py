@@ -270,12 +270,22 @@ def transcribe_audio(model: WhisperModel, audio_file: str, speaker_segments: Opt
     def process_segment(segment):
         text = segment.text
 
-        # Apply word replacements to each segment
+        # Apply word replacements to each segment.
+        # The replacement is a function, not a template string, for the same
+        # reason as in whycast.pipeline.vocabulary.apply_vocabulary_corrections:
+        # these values come from a hand-edited vocabulary.json, and re.sub would
+        # otherwise read "\1" as a group reference (raising here, mid-loop,
+        # after the GPU work is already paid for) and "C:\temp" as an escape.
         if word_replacements:
             for original, replacement in word_replacements.items():
                 # Replace whole words with a case-insensitive match
                 pattern = r'\b' + re.escape(original) + r'\b'
-                text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
+                text = re.sub(
+                    pattern,
+                    lambda _match, value=replacement: value,
+                    text,
+                    flags=re.IGNORECASE,
+                )
 
         # Add speaker info if available
         speaker_info = ""

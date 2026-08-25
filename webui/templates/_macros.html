@@ -20,7 +20,16 @@
 {# Two-letter column labels for the status matrix. Ten kinds do not fit as full
    words in a dense table; the full name stays reachable via title=. Unknown
    kinds fall back to their first two characters, so adding a kind to
-   ARTIFACT_KINDS never breaks this page. #}
+   ARTIFACT_KINDS never breaks this page.
+
+   speakers_map is 'sm', not the two-letter fallback: that would be 'sp',
+   which speaker_assignment already uses, and two identical columns in a
+   status matrix are worse than no column at all.
+
+   NOTE: a Jinja comment cannot go *inside* the set-statement below. Jinja
+   tokenises the whole statement as one expression, so a comment nested in it
+   is a TemplateSyntaxError - and since every page imports this file, that
+   takes down the entire app. Annotations for the map belong up here. #}
 {% set KIND_ABBREV = {
   'transcript': 'tr',
   'ts': 'ts',
@@ -29,6 +38,7 @@
   'blog': 'bl',
   'blog_alt1': 'b1',
   'history': 'hi',
+  'speakers_map': 'sm',
   'speaker_assignment': 'sp',
   'analysis': 'an',
   'merged': 'mg'

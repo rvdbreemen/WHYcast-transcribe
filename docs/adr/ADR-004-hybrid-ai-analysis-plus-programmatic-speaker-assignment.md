@@ -11,6 +11,8 @@ verified_in:
   - "prompts/speaker_analysis_prompt.txt"
 supersedes: []
 superseded_by: null
+related:
+  - "ADR-010"
 topics:
   - "speakers"
   - "llm"
@@ -57,6 +59,11 @@ status_history:
     status: Accepted
     changed_by: "User: Robert van den Breemen"
     reason: Auto-accepted already-shipped ADR with verified evidence
+    changed_via: adr-kit lifecycle
+  - date: 2026-08-25
+    status: Accepted
+    changed_by: "User: Robert van den Breemen"
+    reason: Related to ADR-010
     changed_via: adr-kit lifecycle
 ```
 

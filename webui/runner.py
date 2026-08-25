@@ -478,7 +478,8 @@ def _job_force_episode(ctx: _Context) -> None:
     emit(
         "workflow",
         f"Force reprocess: deleting existing artifacts for {base} in "
-        f"{ctx.output_dir} (the audio file is kept)",
+        f"{ctx.output_dir} (the audio file and the saved speaker mapping "
+        f"are kept)",
         level="warning",
         base_name=base,
         audio_path=audio,

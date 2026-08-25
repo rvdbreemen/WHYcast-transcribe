@@ -13,6 +13,7 @@ Naming in ``podcasts/`` is inconsistent after years of runs: ``episode_13``,
    its own stem. This is the only trustworthy source of episode identity.
 2. A file whose stem carries a known artifact suffix but matches no base yet
    mints an audio-less episode - the mp3 may have been deleted or moved.
+   Input files (:data:`INPUT_KINDS`) are the one exception; see below.
 3. Every remaining file is attached to the *longest* base it matches, where a
    match means ``stem == base + rest`` and ``rest`` is empty or starts with
    ``_`` or ``.``.
@@ -25,6 +26,22 @@ Rule 2 is a separate pass rather than part of rule 3 because a bare
 ``<base>.<fmt>`` transcript can join an episode but can never mint one, and
 ``.`` sorts before ``_``: in one pass ``episode_52.txt`` is decided before
 ``episode_52_ts.txt`` has minted ``episode_52``.
+
+Almost everything here is generated output. One file is not: the editable
+speaker mapping ``<base>_speakers.json`` (ADR-010). The pipeline writes it once
+so a person can correct the names in it, and reads it back on every later run
+instead of paying a model to guess again. The scanner reports it as kind
+``speakers_map`` so it is not mistaken for junk, and :data:`INPUT_KINDS` marks
+it as input, so the web UI can offer it as something to edit rather than as one
+more file to download.
+
+Two rules follow from it being input rather than output. ``json`` is a legal
+format for that kind and no other (:func:`formats_for_kind`): a stray
+``notes.json``, or a hand-made ``episode_9_summary.json``, must not become an
+artifact of some other kind. And an input file mints no episode: a generated
+file is evidence that an episode once existed, whereas a hand-written mapping
+only claims one does, so a mistyped base name surfaces in ``unmatched`` -
+where it can be seen and fixed - instead of minting a phantom episode.
 
 Matching is case-insensitive. The directory is NTFS and holds ``Episode_28.mp3``
 next to ``episode_28_summary.txt``; treating those as different episodes would
@@ -65,10 +82,14 @@ __all__ = [
     "ARTIFACT_KINDS",
     "ARTIFACT_FORMATS",
     "AUDIO_EXTENSIONS",
+    "INPUT_KINDS",
+    "SPEAKER_MAP_SUFFIX",
     "Artifact",
     "Episode",
     "ScanResult",
     "belongs_to_base",
+    "formats_for_kind",
+    "is_input_filename",
     "scan_podcasts",
 ]
 
@@ -76,7 +97,17 @@ __all__ = [
 # Vocabulary
 # ---------------------------------------------------------------------------
 
-#: Artifact kinds the pipeline produces, in display order.
+#: Filename suffix of the editable speaker mapping (ADR-010). The single
+#: source of truth for the name: ``whycast.pipeline.speakers`` builds the path
+#: from this, and the two halves below keep the scanner in step with it.
+SPEAKER_MAP_SUFFIX = "_speakers.json"
+
+_SPEAKER_MAP_STEM, _SPEAKER_MAP_DOT_EXT = os.path.splitext(SPEAKER_MAP_SUFFIX)
+_SPEAKER_MAP_FMT = _SPEAKER_MAP_DOT_EXT.lstrip(".")
+
+#: Artifact kinds the scanner reports, in display order. All but
+#: :data:`INPUT_KINDS` are produced by the pipeline; ``speakers_map`` is read
+#: by it. It sits next to the step it feeds.
 ARTIFACT_KINDS = [
     "transcript",
     "ts",
@@ -85,13 +116,69 @@ ARTIFACT_KINDS = [
     "blog",
     "blog_alt1",
     "history",
+    "speakers_map",
     "speaker_assignment",
     "analysis",
     "merged",
 ]
 
-#: Artifact file formats, in preference order (best first).
-ARTIFACT_FORMATS = ("txt", "html", "wiki", "md")
+#: Kinds that are pipeline *input*: a human writes them, the pipeline reads
+#: them. They are scanned and listed like any other file, but they are not
+#: results, they mint no episode, and ADR-009 has them written with
+#: ``backup=True`` while generated artifacts carry no backup. The web UI needs
+#: this distinction to present an input as something to edit.
+INPUT_KINDS = frozenset({"speakers_map"})
+
+#: Suffix :mod:`whycast.io_utils` gives the one copy it keeps of a human input.
+#: Repeated rather than imported: ``io_utils`` is the low-level writer and this
+#: is the scanner, and a cycle between them would be a worse coupling than one
+#: four-character literal. The test suite pins them equal.
+_BACKUP_SUFFIX = ".bak"
+
+
+def is_input_filename(name: str) -> bool:
+    """Is this filename a pipeline *input* rather than a generated artifact?
+
+    Args:
+        name: A bare filename, not a path (``episode_42_speakers.json``).
+
+    Returns:
+        True for the editable speaker mapping (:data:`INPUT_KINDS`) and for the
+        single ``.bak`` that ADR-009 keeps beside it.
+
+    The predicate lives here, next to :data:`SPEAKER_MAP_SUFFIX`, because the
+    thing it must never drift from is that literal. It exists because "which
+    files may a forced re-run delete" cannot be answered by the scanner's kind
+    lookup alone: the backup's stem is ``episode_42_speakers.json``, which
+    decomposes into no known suffix chain at all, so :func:`_kind_of_rest`
+    reports it as unrecognised - and "unrecognised" is exactly the answer that
+    would get it deleted.
+
+    ADR-010's Must Not is the reason this matters: *do not delete a mapping
+    automatically, on re-transcription or otherwise*. A ``--force`` re-run used
+    to take both the mapping and its backup, which is unrecoverable - podcasts/
+    is gitignored, and the ``.bak`` that exists to make the mapping recoverable
+    went in the same sweep.
+    """
+    lowered = os.path.basename(name).lower()
+    suffix = SPEAKER_MAP_SUFFIX.lower()
+    return lowered.endswith(suffix) or lowered.endswith(suffix + _BACKUP_SUFFIX)
+
+
+#: Formats a generated artifact may use, in preference order (best first).
+_GENERATED_FORMATS = ("txt", "html", "wiki", "md")
+
+#: Formats each kind may use; a kind absent here uses :data:`_GENERATED_FORMATS`.
+#: The mapping is data, not prose, so it is the one kind written as JSON - and
+#: the only one, which is why this is per kind rather than one global list.
+_KIND_FORMATS: Dict[str, Tuple[str, ...]] = {
+    "speakers_map": (_SPEAKER_MAP_FMT,),
+}
+
+#: Every artifact file format, in preference order (best first). ``json`` is
+#: legal for ``speakers_map`` alone - use :func:`formats_for_kind` to ask which
+#: formats a given kind may appear in, never this list.
+ARTIFACT_FORMATS = _GENERATED_FORMATS + (_SPEAKER_MAP_FMT,)
 
 #: Extensions that make a file the audio of an episode.
 AUDIO_EXTENSIONS = (".mp3", ".m4a", ".wav")
@@ -106,6 +193,8 @@ _AUDIO_ORDER: Dict[str, int] = {e: i for i, e in enumerate(AUDIO_EXTENSIONS)}
 #   _analysis   / _speaker_analysis    -> analysis  (whycast/pipeline/speakers.py:174)
 # A file that is exactly "<base>.<fmt>" (no suffix at all) is a transcript too;
 # that case is handled separately because it has no suffix to look up.
+# "_speakers" is the odd one out: it names an input, not a result, and only
+# ever carries the .json of SPEAKER_MAP_SUFFIX.
 _SUFFIX_KINDS: Dict[str, str] = {
     "_transcript": "transcript",
     "_ts": "ts",
@@ -114,6 +203,7 @@ _SUFFIX_KINDS: Dict[str, str] = {
     "_blog": "blog",
     "_blog_alt1": "blog_alt1",
     "_history": "history",
+    _SPEAKER_MAP_STEM: "speakers_map",
     "_assignment": "speaker_assignment",
     "_speaker_assignment": "speaker_assignment",
     "_analysis": "analysis",
@@ -137,18 +227,34 @@ _FIRST_NUMBER = re.compile(r"\d+")
 
 @dataclass(frozen=True)
 class Artifact:
-    """One generated file belonging to an episode."""
+    """One file belonging to an episode - generated output, or human input."""
 
     kind: str    #: one of :data:`ARTIFACT_KINDS`
-    fmt: str     #: "txt" | "html" | "wiki" | "md"
+    fmt: str     #: a format from :func:`formats_for_kind` for that ``kind``
     path: str    #: absolute path on disk
     size: int    #: bytes
     mtime: float  #: epoch seconds
 
+    @property
+    def is_input(self) -> bool:
+        """True when a person owns this file and the pipeline only reads it.
+
+        Derived from :data:`INPUT_KINDS`, deliberately not stored: a field
+        would have to be passed at every construction site and written to
+        every cache row, to hold something the kind already says.
+
+        Callers that treat writing as safe must consult this. A generated
+        artifact may be overwritten by any run (ADR-009 dropped their
+        backups); an input is human work, is written with ``backup=True``,
+        and is never deleted on the pipeline's own initiative (ADR-010).
+        """
+        return self.kind in INPUT_KINDS
+
 
 @dataclass
 class Episode:
-    """One episode: its audio (if any) and everything generated from it."""
+    """One episode: its audio (if any), everything generated from it, and the
+    input files that steer that generation (:data:`INPUT_KINDS`)."""
 
     base_name: str                  #: canonical stem, e.g. "episode_13"
     audio_path: Optional[str] = None  #: absolute path to the audio, None if audio-less
@@ -207,6 +313,18 @@ class ScanResult:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def formats_for_kind(kind: str) -> Tuple[str, ...]:
+    """The formats ``kind`` may appear in, in preference order (best first).
+
+    Only ``speakers_map`` is JSON, and only it may be: without this check a
+    stray ``notes.json`` next to an episode would be filed as that episode's
+    transcript, and ``episode_9_summary.json`` as its summary. A file whose
+    (kind, format) pair is not listed here is reported unmatched, like any
+    other file the scanner cannot name.
+    """
+    return _KIND_FORMATS.get(kind, _GENERATED_FORMATS)
 
 
 def _fmt_rank(fmt: str) -> int:
@@ -509,7 +627,10 @@ def _pass2_artifacts(
 
     A bare file still mints nothing on its own (see :func:`_derive_base`): an
     episode whose files are *all* bare stays unmatched, deliberately, because
-    any stray ``notes.txt`` would otherwise become an episode.
+    any stray ``notes.txt`` would otherwise become an episode. Sub-pass A adds
+    two more things that mint nothing: a file whose format is illegal for the
+    kind it names, and an input file, which describes an episode rather than
+    proving one existed.
     """
     # Split off the files that can never be an artifact first, so both
     # sub-passes below iterate over the same, already-filtered list.
@@ -530,11 +651,21 @@ def _pass2_artifacts(
     # Only files that match no existing base may mint one. Checking that first
     # is what stops "episode_1_frobnicated_summary.txt" - an unrecognised
     # artifact of a real episode - from minting "episode_1_frobnicated".
-    for entry, _fmt in artifact_files:
+    for entry, fmt in artifact_files:
         if _matching_base(entry.stem.lower(), bases) is not None:
             continue
         base_name, kind = _derive_base(entry.stem)
         if base_name is None or kind is None:
+            continue
+        if fmt not in formats_for_kind(kind):
+            # "notes_summary.json" names a kind but cannot be one, so it is
+            # no evidence of an episode either. Without this, admitting .json
+            # for speakers_map would let any *_summary.json mint an episode.
+            continue
+        if kind in INPUT_KINDS:
+            # An input mints nothing (module docstring): a mistyped
+            # "epsiode_9_speakers.json" must show up in unmatched, not as a
+            # phantom episode holding one file and no results.
             continue
         key = base_name.lower()
         if key in episodes:
@@ -557,8 +688,14 @@ def _pass2_artifacts(
             unmatched.append(entry.path)
             continue
         kind = _kind_of_rest(stem_lower[len(base):])
-        if kind is None:
-            # Right episode, unrecognised artifact: reported, never invented.
+        if kind is None or fmt not in formats_for_kind(kind):
+            # Right episode, but the file names no kind ("<base>.mp3.ffmpeg
+            # .16k_diarization.txt") or names one it cannot be in this format
+            # ("<base>_summary.json", "<base>_speakers.txt"): reported, never
+            # invented. The format half also carries a case with no suffix to
+            # give it away: a bare "<base>.json" has an empty rest, which
+            # _kind_of_rest answers "transcript" for without seeing the format,
+            # so this check is all that keeps a stray json out of the index.
             unmatched.append(entry.path)
             continue
         episodes[base].artifacts.append(

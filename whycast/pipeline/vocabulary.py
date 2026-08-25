@@ -92,20 +92,37 @@ def apply_vocabulary_corrections(text: str, vocab_mappings: Dict[str, str]) -> s
         
     Returns:
         Corrected text
+
+    The replacement is substituted *literally*. ``re.sub`` reads its
+    replacement argument as a template, and every value here comes from
+    ``vocabulary.json`` - a file a person edits, through the web UI or in an
+    editor. Two measured consequences of treating that text as a template:
+    ``{"WAIcast": "\\1"}`` raises ``error: invalid group reference`` and kills
+    the transcription *after* the GPU has been paid for, and it does so only
+    when the term actually occurs, i.e. exactly when the entry is doing its
+    job; and the entirely ordinary ``{"WAIcast": "C:\\temp"}`` silently expands
+    ``\\t`` into a real tab in the transcript. A replacement function makes the
+    value a value again. The default argument binds the current replacement
+    rather than the loop variable.
     """
     if not vocab_mappings:
         return text
-    
+
     corrected_text = text
-    
+
     # Sort mappings by length (descending) to handle longer phrases first
     sorted_mappings = sorted(vocab_mappings.items(), key=lambda x: len(x[0]), reverse=True)
-    
+
     for incorrect, correct in sorted_mappings:
         # Use word boundaries for more accurate replacement
         pattern = r'\b' + re.escape(incorrect) + r'\b'
-        corrected_text = re.sub(pattern, correct, corrected_text, flags=re.IGNORECASE)
-    
+        corrected_text = re.sub(
+            pattern,
+            lambda _match, replacement=correct: replacement,
+            corrected_text,
+            flags=re.IGNORECASE,
+        )
+
     return corrected_text
 
 def process_transcript_with_vocabulary(transcript: str) -> str:

@@ -21,7 +21,7 @@ from typing import List, Optional
 import requests
 
 from whycast._deps import feedparser
-from whycast.episodes import belongs_to_base
+from whycast.episodes import belongs_to_base, is_input_filename
 from whycast.errors import PipelineError
 from whycast.events import emit
 from whycast.io_utils import atomic_writer
@@ -50,6 +50,22 @@ def delete_episode_files(base_name: str, output_dir: str, exclude_files: Optiona
     artifacts carry no ``.bak`` (ADR-009). Sharing the scanner's rule means a
     file the scanner attributes to ``episode_10`` can never be deleted by a
     re-run of ``episode_1``.
+
+    Pipeline *inputs* are not deleted either, whichever episode they belong to
+    (:func:`whycast.episodes.is_input_filename`). ADR-010's Must Not is
+    explicit: *do not delete a mapping automatically, on re-transcription or
+    otherwise. It is human work; discarding it is a decision only a person
+    makes.* This function is what ``--force`` and the web UI's "force
+    reprocess" call, and it used to take ``<base>_speakers.json`` **and** the
+    ``.bak`` kept precisely to make that file recoverable - so a single click
+    destroyed both copies of somebody's typing, silently, in a gitignored
+    directory. The mapping may of course be *stale* after a re-transcription;
+    that is the fingerprint's job to notice and a person's job to resolve
+    (:func:`whycast.pipeline.speakers.mapping_is_stale`), and it is a decision
+    made with the file still in front of them.
+
+    What survives a force, then: the audio, anything in ``exclude_files``, and
+    human input. Everything else the pipeline can make again.
     """
     if not os.path.isdir(output_dir):
         return
@@ -57,6 +73,12 @@ def delete_episode_files(base_name: str, output_dir: str, exclude_files: Optiona
     for name in sorted(os.listdir(output_dir)):
         file_path = os.path.join(output_dir, name)
         if not os.path.isfile(file_path):
+            continue
+        # Checked before the base match on purpose: human input is spared
+        # whoever it belongs to, and the ``.bak`` does not decompose into a
+        # base plus a known suffix anyway.
+        if is_input_filename(name):
+            logging.info("Kept human input, not an artifact: %s", file_path)
             continue
         stem = os.path.splitext(name)[0]
         if not belongs_to_base(stem, base_name):

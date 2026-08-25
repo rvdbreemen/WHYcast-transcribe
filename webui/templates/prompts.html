@@ -1,0 +1,220 @@
+{% extends "base.html" %}
+{% block title %}{% if prompt %}{{ prompt.label }} prompt{% else %}Prompts{% endif %} - WHYcast{% endblock %}
+
+{% block content %}
+{% import "_macros.html" as m %}
+{#
+  The prompt editor (ADR-008 phase 3, TASK-004).
+
+  A prompt file is pipeline INPUT: the instruction text a step sends to OpenAI.
+  Like vocabulary.json it is human-written and not regenerable, so it is saved
+  with a .bak (ADR-009) and an edit survives every later run instead of being
+  overwritten by one.
+
+  The list is FIXED. It comes from webui.app.PROMPT_SPECS, where each entry
+  names a whycast.config constant - never a path, and never anything a request
+  supplied. A name that is not on that list is a 404 in the app before any file
+  is touched, which is why there is no path anywhere in this template.
+
+  Context from webui.app.prompts_context():
+
+      prompts    every allowlisted prompt: {name, label, description, produces,
+                 display_path, filename, exists, size, mtime, has_backup,
+                 readable, job}
+      prompt     the one being edited, same shape plus {text}, or None
+      error      why a save was refused, or None
+      saved      True right after a successful save (?saved=1)
+      episodes   episodes in the index, for the "re-run this step" picker
+      backup_suffix  ".bak"
+
+  No |safe. Prompt text is written by a human here, but it goes into a
+  <textarea> and is escaped like everything else.
+#}
+<h1>Prompts</h1>
+
+<p class="sub">
+  The instruction text behind each OpenAI step. Editing one changes what every
+  later run produces.
+</p>
+
+{% if saved and prompt %}
+<p class="banner ok" role="status">
+  Saved <code>{{ prompt.filename }}</code>. The previous version is kept as
+  <code>{{ prompt.filename }}{{ backup_suffix }}</code>.
+</p>
+{% endif %}
+
+{% if error %}
+<p class="banner bad" role="alert">
+  Not saved: {{ error }}
+</p>
+{% endif %}
+
+<section class="panel">
+  <h2>Editable prompts</h2>
+  <div class="table-wrap">
+    <table class="files">
+      <thead>
+        <tr>
+          <th scope="col">Prompt</th>
+          <th scope="col">Produces</th>
+          <th scope="col">File</th>
+          <th scope="col" class="num">Size</th>
+          <th scope="col" class="when">Modified</th>
+          <th scope="col">Re-run with</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for entry in prompts %}
+        <tr{% if prompt and prompt.name == entry.name %} class="current"{% endif %}>
+          <td><a href="/prompts/{{ entry.name|urlencode }}">{{ entry.label }}</a></td>
+          <td>{{ entry.produces }}</td>
+          <td class="mono">{{ entry.display_path }}</td>
+          <td class="num">{% if entry.exists %}{{ m.size(entry.size) }}{% else %}<span class="muted">absent</span>{% endif %}</td>
+          <td class="when">{% if entry.exists %}{{ m.epoch(entry.mtime) }}{% else %}<span class="muted">-</span>{% endif %}</td>
+          <td>{% if entry.job %}{{ entry.job.label }} {{ m.cost_badge(entry.job) }}{% else %}<span class="muted">-</span>{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <p class="hint">
+    This list is the whole list. Two more prompt files exist on disk -
+    <span class="mono">speaker_analysis_prompt.txt</span> and
+    <span class="mono">speaker_unknown_attribution_prompt.txt</span> - and the
+    pipeline reads them, but they have no entry in
+    <span class="mono">whycast/config.py</span>. Editing them here would mean
+    building a file path in the web layer, which ADR-008 forbids, so they are
+    left out on purpose rather than by oversight.
+  </p>
+</section>
+
+{% if prompt %}
+<section class="panel editor">
+  <h2>{{ prompt.label }}</h2>
+  <p class="sub">
+    <span class="mono">{{ prompt.display_path }}</span>
+    {% if prompt.exists %}
+      &middot; {{ m.size(prompt.size) }}
+      &middot; changed {{ m.epoch(prompt.mtime) }}
+    {% else %}
+      &middot; <span class="muted">does not exist yet</span>
+    {% endif %}
+  </p>
+
+  <p class="hint">{{ prompt.description }}</p>
+
+  {% if not prompt.exists %}
+  <p class="banner warn">
+    There is no file here yet, so the pipeline skips this step. Writing the
+    prompt and saving it is what switches the step on.
+  </p>
+  {% endif %}
+
+  {% if not prompt.readable %}
+  <p class="banner bad">
+    This file cannot be shown, so it cannot be saved from here either.
+  </p>
+  {% else %}
+  {# Plain form, no JavaScript required; the server redirects a browser back
+     here after a successful save so nobody lands on a JSON document. #}
+  <form method="post" action="/api/prompts/{{ prompt.name|urlencode }}" class="editor-form">
+    <label class="editor-label" for="prompt-text">
+      {{ prompt.filename }} - the whole file
+    </label>
+    <textarea id="prompt-text" name="text" class="editor-area" rows="24"
+              spellcheck="false" autocomplete="off"
+              aria-describedby="prompt-next">{{ prompt.text }}</textarea>
+    <p class="editor-actions">
+      <button type="submit" class="plain">Save prompt</button>
+      <a class="hint" href="/prompts/{{ prompt.name|urlencode }}">Discard and reload from disk</a>
+    </p>
+  </form>
+
+  <div id="prompt-next" class="whatnext">
+    <h3>What happens when you press Save</h3>
+    <ol>
+      <li>
+        An empty prompt is refused. The pipeline skips a step whose prompt file
+        is empty, so an empty save would not change {{ prompt.produces }} - it
+        would stop it being produced at all, quietly.
+      </li>
+      <li>
+        Otherwise <code>{{ prompt.filename }}</code> is replaced and the
+        previous version is kept as
+        <code>{{ prompt.filename }}{{ backup_suffix }}</code> (ADR-009: this is
+        your writing, not a generated file).
+      </li>
+      <li>
+        <strong>No pipeline step runs.</strong> Saving costs nothing and starts
+        nothing. The next run that reaches this step reads the file from disk.
+      </li>
+    </ol>
+  </div>
+  {% endif %}
+</section>
+
+<section class="panel actions">
+  <h2>Re-run this step for one episode</h2>
+
+  {% if prompt.job %}
+  <p class="hint">
+    This regenerates {{ prompt.produces }} from what is already on disk - no
+    transcription, no GPU. It does call OpenAI, so it is not free.
+  </p>
+
+  <ul class="action-list">
+    <li>
+      <details class="action{{ ' costly' if prompt.job.cost else '' }}">
+        <summary>
+          {{ prompt.job.label }}
+          {{ m.cost_badge(prompt.job) }}
+          {{ m.gpu_badge(prompt.job) }}
+        </summary>
+        <p class="hint">{{ prompt.job.description }}</p>
+
+        {% if episodes %}
+        {# Same enqueue path as the episode page: POST /api/jobs with a job
+           type and an episode key. Cost is a property of the type on the
+           server, so this cannot advertise a paid job as free. #}
+        <form method="post" action="/api/jobs"
+              data-enqueue
+              data-result="prompt-job-result"
+              data-confirm="{{ prompt.job.label }}, with the {{ prompt.label|lower }} prompt you just saved.
+
+{{ prompt.job.description }}
+
+{% if prompt.job.cost %}This calls the paid OpenAI API - it will spend money.
+{% endif %}{% if prompt.job.gpu %}It claims the GPU for the whole run; nothing else can transcribe while it works.
+{% endif %}Queue it now?">
+          <input type="hidden" name="type" value="{{ prompt.job.type }}">
+          <label class="editor-label" for="prompt-episode">Episode</label>
+          <select id="prompt-episode" name="base_name" required>
+            {% for episode in episodes %}
+            <option value="{{ episode.base_name }}">{{ episode.base_name }}</option>
+            {% endfor %}
+          </select>
+          <button type="submit" class="{{ 'danger' if prompt.job.cost else 'plain' }}">
+            Queue {{ prompt.job.label|lower }}
+          </button>
+        </form>
+        {% else %}
+        <p class="hint">The index has no episodes, so there is nothing to re-run.</p>
+        {% endif %}
+      </details>
+    </li>
+  </ul>
+
+  {# app.js writes the created job's link here. #}
+  <p id="prompt-job-result" class="job-result" role="status" aria-live="polite"></p>
+  {% else %}
+  <p class="hint">
+    The job catalogue is unavailable, so no re-run can be offered from here.
+    <a href="/jobs">The jobs page</a> will say why.
+  </p>
+  {% endif %}
+</section>
+{% else %}
+<p class="hint">Pick a prompt above to open it.</p>
+{% endif %}
+{% endblock %}

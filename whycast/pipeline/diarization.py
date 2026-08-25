@@ -19,6 +19,7 @@ from typing import Optional
 
 from whycast.config import base_dir
 from whycast.events import emit
+from whycast.io_utils import atomic_write_text
 
 logger = logging.getLogger(__name__)
 
@@ -57,10 +58,20 @@ def set_huggingface_token(token: str) -> bool:
                 content += '\n'
             content += f'HUGGINGFACE_TOKEN={token}\n'
         
-        # Write back to .env file
-        with open(env_file, 'w', encoding='utf-8') as f:
-            f.write(content)
-            
+        # Write back to .env file.
+        #
+        # Atomically (ADR-008), and this is the one file where it matters most.
+        # A plain open(..., 'w') truncates first and writes second, so any
+        # failure in between - a full disk, a kill - leaves a zero-byte .env,
+        # taking OPENAI_API_KEY and PODCAST_FEED_URL with it, while this
+        # function returns False and logs a line about a token. ADR-009 rightly
+        # forbids a .env.bak (a backup of a secrets file is a second copy of
+        # the secrets), which leaves atomicity as the only protection this file
+        # can have: write a temp file next to it, fsync, rename. The rename
+        # either happens or it does not.
+        atomic_write_text(env_file, content, backup=False)
+
+
         # Set in current environment
         os.environ['HUGGINGFACE_TOKEN'] = token
         

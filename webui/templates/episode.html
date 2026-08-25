@@ -30,6 +30,36 @@
 </section>
 
 {#
+  Speakers (ADR-010, TASK-004). A pointer, not a control surface: the editor
+  is its own page, and this line exists so that "does this episode already
+  have names?" is answerable without opening it.
+
+  speaker_map comes from webui.app._speaker_map_summary(), which stats the
+  file itself rather than reading episode.formats. The index is a cache that
+  can be a rescan behind; whether the next run uses your names is not a
+  question a cache may answer.
+#}
+<section class="panel" id="episode-speakers">
+  <h2>Speakers</h2>
+  {% if speaker_map and speaker_map.exists %}
+  <p class="banner ok">
+    <strong>A saved speaker mapping exists</strong> (<code>{{ speaker_map.file }}</code>).
+    A speakers run reads it instead of paying a model to work the names out -
+    unless it was made for an older transcript, which the editor will say.
+    <a href="/episodes/{{ episode.base_name|urlencode }}/speakers">Check or edit the names</a>.
+  </p>
+  {% else %}
+  <p class="banner neutral">
+    <strong>No saved speaker mapping.</strong>
+    The next speakers run asks a paid model who <span class="mono">SPEAKER_00</span>
+    is, then saves the answer.
+    <a href="/episodes/{{ episode.base_name|urlencode }}/speakers">Name them yourself</a>
+    to skip that call - it costs nothing.
+  </p>
+  {% endif %}
+</section>
+
+{#
   Actions: queue a pipeline job for this episode (ADR-008 phase 2, TASK-003).
 
   Context added by webui.app.episode_detail():

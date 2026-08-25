@@ -427,10 +427,21 @@ class _NoNetworkOpenAI:
 
 _TIMESTAMP_RE = re.compile(r"Generated: \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}")
 
+#: The second wall-clock stamp: "updated_at" in <base>_speakers.json (ADR-010).
+#: The old and the new workflow write their copy a fraction of a second apart,
+#: so whenever that fraction crossed a second boundary this test failed on a
+#: field that records when the file was written, not what the pipeline decided.
+_UPDATED_AT_RE = re.compile(r'"updated_at": "[^"]*"')
+
 
 def _normalize(text):
-    """Blank out the one non-deterministic bit (datetime.now in the analysis report)."""
-    return _TIMESTAMP_RE.sub("Generated: <TIMESTAMP>", text)
+    """Blank out the non-deterministic bits: both are ``datetime.now()``.
+
+    One in the analysis report, one in the speaker mapping. Everything else the
+    two implementations write has to match byte for byte, which is the point.
+    """
+    text = _TIMESTAMP_RE.sub("Generated: <TIMESTAMP>", text)
+    return _UPDATED_AT_RE.sub('"updated_at": "<TIMESTAMP>"', text)
 
 
 def _read_output_dir(directory):

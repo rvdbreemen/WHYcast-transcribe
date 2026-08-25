@@ -34,6 +34,25 @@ one at a time - and runs it as a ``python -m webui.runner <id>`` child. So:
 else here: it is resolved through the index before the row is written, so a
 name the scanner never produced cannot reach the runner.
 
+Speaker mappings, phase 3 (TASK-004)
+------------------------------------
+One page and three routes write a file, which is the single exception to the
+sentence above - and a deliberate one. ``<base>_speakers.json`` is pipeline
+*input*, not a result: :data:`whycast.episodes.INPUT_KINDS` says so, ADR-010
+defines it, and :func:`whycast.pipeline.speakers.speaker_assignment_step` reads
+it instead of paying a reasoning model to decide who ``SPEAKER_00`` is. ADR-008
+forbids this layer writing episode *artifacts* - the things the pipeline
+generates and can regenerate - because two writers of one output is how a
+half-written file happens. A human input file has exactly one writer, which is
+the human, and this is the form they type it into.
+
+So: saving a mapping is free and writes one small JSON file (atomically, with a
+``.bak``, per ADR-009). Applying it is the ``speakers`` job, enqueued through
+``POST /api/jobs`` like every other paid action. Nothing on that page starts a
+job by itself, and the one route that *deletes* a mapping
+(``POST .../speakers/discard``) is reached only on purpose - it is human work,
+and the pipeline may never throw it away on its own.
+
 Security (ADR-008)
 ------------------
 No filesystem path is ever accepted from a request. ``base_name``, ``kind`` and
@@ -110,8 +129,10 @@ import ipaddress
 import json
 import logging
 import os
+import re
 import sqlite3
 import time
+import urllib.parse
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
 
@@ -121,6 +142,7 @@ from fastapi.responses import (
     FileResponse,
     HTMLResponse,
     JSONResponse,
+    RedirectResponse,
     Response,
     StreamingResponse,
 )
@@ -138,8 +160,22 @@ from webui import db, jobs
 # needs it for the one raw query it runs itself (:func:`_queue_or_503`);
 # everything else goes through ``db`` or ``jobs``, which take it themselves.
 from webui.db import _LOCK as _DB_LOCK
-from whycast.episodes import ARTIFACT_FORMATS, ARTIFACT_KINDS
+from whycast.episodes import (
+    ARTIFACT_FORMATS,
+    ARTIFACT_KINDS,
+    SPEAKER_MAP_SUFFIX,
+    formats_for_kind,
+)
 from whycast.errors import ConfigurationError, WhycastError
+from whycast.io_utils import BACKUP_SUFFIX, atomic_write_text
+
+# The *module*, not its constants. ``whycast.config`` computes VOCABULARY_FILE
+# and the PROMPT_*_FILE paths at import time from the repository root and offers
+# no environment override, so a from-import would bake the operator's live files
+# into this module - and the editor tests could not point anywhere else, which
+# means running them would rewrite the real vocabulary. Reading the attribute
+# per request costs nothing and keeps the input editors testable.
+from whycast import config as whycast_config
 
 __all__ = [
     "DEFAULT_ALLOWED_HOSTS",
@@ -149,10 +185,20 @@ __all__ = [
     "EPISODE_ACTION_TYPES",
     "EPISODE_JOB_HISTORY",
     "JOB_LIST_LIMIT",
+    "MAX_EDITOR_BODY_BYTES",
     "MAX_JOB_BODY_BYTES",
+    "MAX_SPEAKER_LABELS",
+    "MAX_SPEAKER_NAME_CHARS",
     "META_KEYS",
+    "PROMPT_NAMES",
+    "PROMPT_SPECS",
+    "SPEAKER_APPLY_JOB",
+    "SPEAKER_CONTEXT_CHARS",
+    "SPEAKER_CONTEXT_LINES",
+    "SPEAKER_FORM_PREFIX",
     "SSE_HEARTBEAT_SECONDS",
     "SSE_POLL_SECONDS",
+    "VOCABULARY_APPLY_JOB",
     "allowed_hosts_from_env",
     "create_app",
     "app",
@@ -218,6 +264,9 @@ _ARTIFACT_MEDIA_TYPES = {
     "wiki": "text/plain; charset=utf-8",
     "md": "text/plain; charset=utf-8",
     "html": "text/html; charset=utf-8",
+    # Only the speaker mapping is json (ADR-010), and it is the one artifact a
+    # person edits rather than reads, so a browser that pretty-prints it helps.
+    "json": "application/json; charset=utf-8",
 }
 
 _AUDIO_MEDIA_TYPES = {
@@ -304,6 +353,14 @@ MAX_JOB_LIST_LIMIT = 500
 #: UI ever sends. Without a cap the body is buffered in full and then written
 #: into the ``jobs`` table, which shares a SQLite file with the episode index.
 MAX_JOB_BODY_BYTES = 64 * 1024
+
+#: The 413 wording for each body cap. Each route's message is part of its own
+#: contract - the editors apologise in prose the operator is reading, the job
+#: API states a limit a client is parsing - so the shared reader
+#: (:func:`_read_capped_body`) is told which one to use rather than composing
+#: one for everybody.
+_JOB_BODY_TOO_LARGE = f"Job request body is larger than {MAX_JOB_BODY_BYTES} bytes"
+_SPEAKER_BODY_TOO_LARGE = f"Request body is larger than {MAX_JOB_BODY_BYTES} bytes"
 
 #: How far back the episode page looks for jobs that targeted this episode.
 #: :func:`webui.jobs.list_jobs` filters by status, not by episode, so this is a
@@ -650,7 +707,9 @@ def create_app(
 
     _register_guards(app)
     _register_routes(app, templates)
+    _register_speaker_routes(app, templates)
     _register_job_routes(app, templates)
+    _register_editor_routes(app, templates)
     _register_error_handlers(app, templates)
     return app
 
@@ -777,6 +836,14 @@ def _register_routes(app: FastAPI, templates: Jinja2Templates) -> None:
                 "job_types": job_types_payload(),
                 "episode_jobs": episode_jobs,
                 "active_job": active,
+                # Whether a saved speaker mapping exists, read from disk so the
+                # answer cannot be a rescan out of date (ADR-010). On a thread
+                # because it resolves a path: one stat is nothing, but
+                # os.path.realpath on a network drive can sit in an SMB timeout
+                # for seconds, and this process also carries live SSE streams.
+                "speaker_map": await anyio.to_thread.run_sync(
+                    _speaker_map_summary, request, episode
+                ),
             },
         )
 
@@ -827,7 +894,10 @@ def _register_routes(app: FastAPI, templates: Jinja2Templates) -> None:
         """
         if kind not in ARTIFACT_KINDS:
             raise HTTPException(status_code=404, detail="Unknown artifact kind")
-        if fmt is not None and fmt not in ARTIFACT_FORMATS:
+        # Per kind, not the global set: json is legal for speakers_map alone
+        # (ADR-010), so kind=summary&fmt=json is rejected here rather than
+        # passed through to miss in the index.
+        if fmt is not None and fmt not in formats_for_kind(kind):
             raise HTTPException(status_code=404, detail="Unknown artifact format")
 
         episode = _get_episode_or_404(request, base_name)
@@ -905,6 +975,815 @@ def _register_routes(app: FastAPI, templates: Jinja2Templates) -> None:
     async def api_health(request: Request):
         """Liveness plus the allowlisted index statistics."""
         return {"status": "ok", "meta": _public_meta(db.get_meta(_conn(request)))}
+
+
+# ---------------------------------------------------------------------------
+# Speaker mapping editor (ADR-010, TASK-004)
+#
+# ``<base>_speakers.json`` is pipeline *input*: a person decides that
+# SPEAKER_01 is Nancy, and :func:`whycast.pipeline.speakers.speaker_assignment_step`
+# reads that decision instead of paying a reasoning model to guess it again.
+# This is the page that lets them decide it without opening a JSON file in an
+# editor, and the API behind it.
+#
+# Three rules shape everything below.
+#
+# * **Saving is free; applying is not.** Writing the mapping costs nothing and
+#   needs no confirmation. Turning it into a rewritten transcript is the
+#   ``speakers`` job, which calls the paid OpenAI API for the *other* steps and
+#   is therefore enqueued through the same ``POST /api/jobs`` path, with the
+#   same cost badge and the same confirmation, as every other paid action in
+#   this UI. There is no route here that starts a job.
+# * **The filesystem is the source of truth** (ADR-008). Everything this
+#   section reports - does a mapping exist, is it stale, what does it say - is
+#   read from disk at request time, never from the SQLite index. The index is a
+#   cache that may lag by a rescan; the answer to "what will the next run do"
+#   may not.
+# * **Deleting is deliberate and singular.** A mapping is human work. Only
+#   ``POST .../speakers/discard`` (and its ``DELETE`` twin) removes one, only
+#   after a confirmation that names what is lost, and it removes exactly the
+#   one file - the ``.bak`` beside it is left where it is.
+#
+#   This was an aspiration rather than a fact until the mapping was excluded
+#   from :func:`whycast.pipeline.feed.delete_episode_files`. "Force reprocess"
+#   took the mapping *and* its ``.bak`` in the same sweep, under a confirmation
+#   dialog built from a job description that said "deletes this episode's
+#   existing artifacts" - while the scanner's own taxonomy classifies the
+#   mapping as INPUT, not artifact. Two copies of somebody's typing, gone on
+#   one click, in a gitignored directory. It is a fact now, and
+#   ``tests/test_speaker_mapping.py`` is what keeps it one.
+#
+# Path safety is the same contract as the rest of this module: ``base_name`` is
+# an opaque key that has already been resolved through the index, and the file
+# name it produces is re-checked against the podcast directory
+# (:func:`_speaker_map_target`) before anything is written or removed.
+# ---------------------------------------------------------------------------
+
+#: A diarization label as it appears in a transcript. ``SPEAKER_00`` mostly,
+#: but pyannote also emits ``SPEAKER_UNKNOWN``, so this is not ``\d+``.
+_SPEAKER_LABEL_RE = re.compile(r"SPEAKER_[A-Za-z0-9_]+")
+
+#: One transcript line that opens with a label, in either spelling the pipeline
+#: has ever written: ``[SPEAKER_00] text`` (current) or ``SPEAKER_00: text``.
+_SPEAKER_LINE_RE = re.compile(
+    r"^\s*(?:\[(SPEAKER_[A-Za-z0-9_]+)\]|(SPEAKER_[A-Za-z0-9_]+)\s*:)\s*(.*)$"
+)
+
+#: Anything that cannot legitimately appear in a person's name and would only
+#: ever be there to confuse a reader or a log: C0 controls plus DEL.
+_CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
+
+#: The same idea for prompt text, minus the three controls that are ordinary
+#: punctuation in prose: tab, newline and carriage return. Reusing
+#: :data:`_CONTROL_CHARS` here would reject every multi-line prompt, which is
+#: every prompt. The two human-input editors used to disagree about what "plain
+#: text" means - the speaker editor refused a NUL byte in a name while the
+#: prompt editor wrote one to a file that is then sent to the paid API - and
+#: this is the pattern that settles the disagreement in the prompt's favour.
+_PROMPT_CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+
+#: How many lines of what a speaker actually said are shown per label. Enough
+#: to recognise a voice - a greeting, a question, an answer - without turning
+#: the editor into a transcript viewer.
+SPEAKER_CONTEXT_LINES = 3
+
+#: Longest context snippet, in characters. A merged transcript puts a whole
+#: paragraph on one line; the first couple of sentences identify the speaker.
+SPEAKER_CONTEXT_CHARS = 280
+
+#: Longest name accepted for one label. Names are rendered on this page, in the
+#: job log and in the assigned transcript; 120 characters is a generous human
+#: name and a poor place to hide a payload.
+MAX_SPEAKER_NAME_CHARS = 120
+
+#: Most labels one transcript may contribute. A working diarization produces a
+#: handful; hundreds mean a broken file, and rendering an input per label would
+#: turn that into an unusable page.
+MAX_SPEAKER_LABELS = 200
+
+#: Prefix for the form fields that carry names, so a ``<form>`` post and a JSON
+#: post validate identically: every ``speaker:<LABEL>`` field is a mapping
+#: entry - including a bogus one, which is then rejected rather than ignored -
+#: and every other field is form furniture this route does not read.
+SPEAKER_FORM_PREFIX = "speaker:"
+
+#: The job type that applies a saved mapping to the transcript. Named here so
+#: the page can offer it, but enqueued through ``POST /api/jobs`` like anything
+#: else: the cost flag comes from :data:`webui.jobs.JOB_TYPES`, never from here.
+SPEAKER_APPLY_JOB = "speakers"
+
+
+def _speakers_module():
+    """Import :mod:`whycast.pipeline.speakers`, or raise 503.
+
+    Imported lazily, per request, for two reasons. It pulls in the OpenAI SDK
+    (about two seconds on this machine), which the read-only half of the UI has
+    no use for and should not pay for at startup; and if that dependency is
+    missing, the episode browser and the job queue must keep working. The
+    module itself makes no network call and holds no GPU - it is imported here
+    only for the mapping file's format, path and fingerprint.
+    """
+    try:
+        from whycast.pipeline import speakers as speakers_module
+    except Exception as exc:  # ImportError, but a bad dependency can raise more
+        logger.error("The speaker mapping helpers could not be imported: %s", exc)
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "The speaker mapping code is not importable in this "
+                "environment, so mappings cannot be read or written here."
+            ),
+        ) from None
+    return speakers_module
+
+
+def _speaker_map_target(request: Request, episode: Dict[str, Any]) -> str:
+    """Where this episode's mapping file lives, verified to be inside ``podcasts/``.
+
+    The same reasoning as :func:`_safe_file`, for a path that may not exist yet:
+    that function insists on a regular file, which a file about to be *created*
+    is not. So the containment check is done here instead, and it is stricter
+    than a prefix test - the mapping must be a direct child of the podcast
+    directory (the scanner is shallow, so every episode file is) and must be
+    named exactly ``<base_name>_speakers.json``.
+
+    ``base_name`` is the index's own spelling, produced by the scanner from a
+    real directory entry, so it cannot contain a separator. This check is what
+    makes that a guarantee rather than an assumption.
+    """
+    root = request.app.state.podcast_dir
+    base = episode["base_name"]
+    expected = f"{base}{SPEAKER_MAP_SUFFIX}"
+    candidate = os.path.join(root, expected)
+    try:
+        resolved = os.path.realpath(candidate)
+        real_root = os.path.realpath(root)
+    except (OSError, ValueError):
+        raise HTTPException(
+            status_code=404, detail="The podcast directory is not readable"
+        ) from None
+
+    # normpath on both sides before comparing: it is the one spelling that also
+    # holds when the podcast directory *is* a drive root, where "D:\" has a
+    # trailing separator that no amount of rstrip makes match a dirname.
+    same_dir = os.path.normcase(
+        os.path.normpath(os.path.dirname(resolved))
+    ) == os.path.normcase(os.path.normpath(real_root))
+    same_name = os.path.normcase(os.path.basename(resolved)) == os.path.normcase(
+        expected
+    )
+    if not (same_dir and same_name):
+        logger.warning(
+            "Refusing a speaker mapping path for %r: %r is not %s/%s",
+            base,
+            resolved,
+            real_root,
+            expected,
+        )
+        raise HTTPException(
+            status_code=400, detail="That episode name cannot hold a speaker mapping"
+        )
+    return resolved
+
+
+def _speaker_map_summary(request: Request, episode: Dict[str, Any]) -> Dict[str, Any]:
+    """Does this episode have a saved mapping? One stat, straight from disk.
+
+    Used by the episode page for its at-a-glance line. Read from the filesystem
+    rather than from ``episode.formats``, because the index can be a rescan
+    behind and "will the next run use my names" is exactly the question that
+    must not be answered from a cache. One ``os.path.isfile`` on a local path
+    costs less than the template line that renders it.
+    """
+    try:
+        path = _speaker_map_target(request, episode)
+    except HTTPException:
+        return {"file": None, "exists": False}
+    return {"file": os.path.basename(path), "exists": os.path.isfile(path)}
+
+
+def _transcript_artifact(episode: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The transcript a speakers re-run would start from, or None.
+
+    Deliberately identical to :func:`webui.runner._read_transcript`: ``merged``
+    before ``transcript``, ordered by format preference, stable within a kind
+    because the index returns artifacts in scan order and :func:`sorted` keeps
+    it. It has to be identical, because the fingerprint this editor records is
+    the hash of *this* file and the runner will compare it against the hash of
+    whatever it picks. Choose a different file here and every saved mapping
+    would read as stale the moment it was applied.
+    """
+    artifacts = _artifacts_of(episode)
+    for kind in ("merged", "transcript"):
+        matches = sorted(
+            (a for a in artifacts if a.get("kind") == kind),
+            key=lambda a: _FMT_ORDER.get(a.get("fmt"), len(_FMT_ORDER)),
+        )
+        if matches:
+            return matches[0]
+    return None
+
+
+def _labels_with_context(text: str) -> Tuple[List[Dict[str, Any]], bool]:
+    """Every ``SPEAKER_xx`` label in ``text``, in order, with a few of its lines.
+
+    Returns ``(labels, truncated)``. ``truncated`` is True when
+    :data:`MAX_SPEAKER_LABELS` was reached and labels past it were left out - a
+    cap that drops work silently is the wrong kind of cap, and a label that is
+    not on this page cannot be named at all.
+
+    The context is the point of this page: ``SPEAKER_03`` means nothing, while
+    "So Ad, what are we talking about today?" tells you who is speaking without
+    opening the transcript.
+
+    Two passes on purpose. The first reads lines that *open* with a label and
+    keeps what was said; the second sweeps the whole text for labels that never
+    start a line (a mid-line tag, a label only mentioned in passing) so the list
+    is complete even where there is nothing to quote. Completeness matters more
+    than tidiness here: a label missing from this list cannot be given a name,
+    and would silently survive into the assigned transcript.
+    """
+    turns: Dict[str, int] = {}
+    context: Dict[str, List[str]] = {}
+    order: List[str] = []
+    truncated = False
+
+    def remember(label: str) -> bool:
+        nonlocal truncated
+        if label in turns:
+            return True
+        if len(order) >= MAX_SPEAKER_LABELS:
+            truncated = True
+            return False
+        order.append(label)
+        turns[label] = 0
+        context[label] = []
+        return True
+
+    for line in text.splitlines():
+        match = _SPEAKER_LINE_RE.match(line)
+        if not match:
+            continue
+        label = match.group(1) or match.group(2)
+        if not remember(label):
+            continue
+        turns[label] += 1
+        said = (match.group(3) or "").strip()
+        if said and len(context[label]) < SPEAKER_CONTEXT_LINES:
+            if len(said) > SPEAKER_CONTEXT_CHARS:
+                said = said[:SPEAKER_CONTEXT_CHARS].rstrip() + "…"
+            context[label].append(said)
+
+    for label in _SPEAKER_LABEL_RE.findall(text):
+        remember(label)
+
+    labels = [
+        {"label": label, "turns": turns[label], "context": context[label]}
+        for label in order
+    ]
+    return labels, truncated
+
+
+def _read_transcript_text(path: str) -> Tuple[Optional[str], Optional[str]]:
+    """Read a transcript exactly as the runner does. Returns ``(text, error)``.
+
+    ``encoding="utf-8"`` with no ``errors=`` policy, matching
+    :func:`webui.runner._read_transcript` byte for byte. Being forgiving here
+    would be worse than useless: replacing an undecodable byte would change the
+    text, change its fingerprint, and record a mapping against a transcript
+    that does not exist. A file the runner cannot read is reported, not
+    patched.
+    """
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            return handle.read(), None
+    except UnicodeDecodeError as exc:
+        return None, (
+            f"{os.path.basename(path)} is not valid UTF-8 ({exc}). The pipeline "
+            f"writes UTF-8, so this file was written by something else - a "
+            f"speakers run would fail on it too."
+        )
+    except OSError as exc:
+        return None, f"{os.path.basename(path)} could not be read: {exc}"
+
+
+def _speaker_state(request: Request, episode: Dict[str, Any]) -> Dict[str, Any]:
+    """Everything the editor and its API need, read from disk. Blocking.
+
+    Called through ``anyio.to_thread.run_sync``: it opens the transcript, which
+    is a megabyte of text on a long episode, and this app shares one event loop
+    with an open SSE job log.
+
+    The mapping is loaded **without** a fingerprint on purpose. Passing one
+    makes :func:`load_speaker_map_record` raise on a stale file, which is right
+    for the pipeline (do not apply names that were chosen for another
+    transcript) and exactly wrong for an editor whose job in that case is to
+    *show* those names so a person can check them. So: load it, then ask
+    :func:`mapping_is_stale` separately, and let the page say so.
+
+    ``next_run`` is the one field the page leads with. It answers "what happens
+    if I queue a speakers job right now", and it is the ADR-010 precedence
+    order spelled out for a reader:
+
+    ``saved``      the mapping applies; no model call, nothing to pay;
+    ``model``      no mapping, so the model decides and the answer is saved;
+    ``stale``      the mapping was made for a different transcript - the run
+                   fails until a person confirms or discards it;
+    ``malformed``  the file cannot be parsed - the run fails, loudly, rather
+                   than quietly paying a model to replace somebody's typing;
+    ``no_labels``  the transcript carries no ``SPEAKER_`` labels, so the step
+                   has nothing to do;
+    ``no_transcript`` there is no transcript on disk yet.
+    """
+    speakers_module = _speakers_module()
+    root = request.app.state.podcast_dir
+    base = episode["base_name"]
+    path = _speaker_map_target(request, episode)
+
+    state: Dict[str, Any] = {
+        "base_name": base,
+        "map_file": os.path.basename(path),
+        "map_path": path,
+        "exists": os.path.isfile(path),
+        "backup_file": None,
+        "speakers": {},
+        "source": None,
+        "updated_at": None,
+        "saved_fingerprint": None,
+        "mapping_error": None,
+        "transcript_file": None,
+        "transcript_kind": None,
+        "transcript_error": None,
+        "fingerprint": None,
+        "labels": [],
+        "labels_truncated": False,
+        "orphans": [],
+        "stale": False,
+        "next_run": "no_transcript",
+    }
+
+    backup = path + ".bak"
+    if os.path.isfile(backup):
+        state["backup_file"] = os.path.basename(backup)
+
+    record = None
+    if state["exists"]:
+        try:
+            record = speakers_module.load_speaker_map_record(base, root)
+        except WhycastError as exc:
+            # A malformed file. Reported as text, never repaired: the point of
+            # ADR-010 is that a typo stays visible.
+            state["mapping_error"] = str(exc)
+        except OSError as exc:  # pragma: no cover - defensive
+            state["mapping_error"] = f"{state['map_file']} could not be read: {exc}"
+
+    if record:
+        state["speakers"] = dict(record.get("speakers") or {})
+        state["source"] = record.get("source")
+        state["updated_at"] = record.get("updated_at")
+        state["saved_fingerprint"] = record.get("transcript_fingerprint")
+
+    artifact = _transcript_artifact(episode)
+    if artifact is not None:
+        transcript_path = _safe_file(root, artifact.get("path"))
+        if transcript_path is None:
+            state["transcript_error"] = (
+                "The transcript the index recorded is not where it says it is. "
+                "Rescan the podcast directory and try again."
+            )
+        else:
+            state["transcript_file"] = os.path.basename(transcript_path)
+            state["transcript_kind"] = artifact.get("kind")
+            text, error = _read_transcript_text(transcript_path)
+            if error:
+                state["transcript_error"] = error
+            else:
+                state["fingerprint"] = speakers_module.fingerprint_transcript(text)
+                state["labels"], state["labels_truncated"] = _labels_with_context(text)
+
+    if record and state["fingerprint"]:
+        state["stale"] = bool(
+            speakers_module.mapping_is_stale(record, state["fingerprint"])
+        )
+
+    known = {item["label"] for item in state["labels"]}
+    for item in state["labels"]:
+        item["name"] = state["speakers"].get(item["label"], "")
+    state["orphans"] = [
+        {"label": label, "name": name}
+        for label, name in sorted(state["speakers"].items())
+        if label not in known
+    ]
+
+    if state["mapping_error"]:
+        state["next_run"] = "malformed"
+    elif state["transcript_error"] or state["transcript_file"] is None:
+        state["next_run"] = "no_transcript"
+    elif state["stale"]:
+        state["next_run"] = "stale"
+    elif not known:
+        state["next_run"] = "no_labels"
+    elif record:
+        state["next_run"] = "saved"
+    else:
+        state["next_run"] = "model"
+    return state
+
+
+def _public_speaker_state(state: Dict[str, Any]) -> Dict[str, Any]:
+    """The API view of :func:`_speaker_state`: no absolute paths.
+
+    ``map_path`` is an absolute path on the operator's disk. It is useful on
+    the page (it is the file you would open in an editor) and pointless in a
+    JSON response, so the API reports the file *name* and nothing more - the
+    same instinct as :data:`META_KEYS`.
+    """
+    return {key: value for key, value in state.items() if key != "map_path"}
+
+
+def _speaker_apply_job() -> Optional[Dict[str, Any]]:
+    """The catalogue entry for the job that applies a mapping, or None.
+
+    Read from :func:`job_types_payload` rather than written out here, so the
+    cost badge this page shows is the flag the enqueue route validates against.
+    """
+    for spec in job_types_payload():
+        if spec["type"] == SPEAKER_APPLY_JOB:
+            return spec
+    return None
+
+
+async def _speaker_payload(request: Request) -> Dict[str, Any]:
+    """Read ``{label: name}`` from a JSON or form-encoded body.
+
+    JSON: ``{"speakers": {"SPEAKER_00": "Nancy"}}``. A bare ``{"SPEAKER_00":
+    "Nancy"}`` is accepted too - it is what the file itself may look like, so
+    refusing it here would be a gratuitous difference.
+
+    Form: one ``speaker:<LABEL>`` field per label (:data:`SPEAKER_FORM_PREFIX`),
+    which is what the page posts with and without JavaScript. Fields without
+    that prefix are form furniture and are ignored; a *prefixed* field naming a
+    label the transcript does not have is rejected, not dropped, so both body
+    shapes fail the same way on the same input.
+    """
+    body = await _read_capped_body(
+        request, MAX_JOB_BODY_BYTES, _SPEAKER_BODY_TOO_LARGE
+    )
+    if _is_form_request(request):
+        return {
+            key[len(SPEAKER_FORM_PREFIX):]: value
+            for key, value in _form_fields(body).items()
+            if key.startswith(SPEAKER_FORM_PREFIX)
+        }
+
+    if not body.strip():
+        raise HTTPException(
+            status_code=400,
+            detail='Body must be JSON: {"speakers": {"SPEAKER_00": "Nancy"}}',
+        )
+    try:
+        payload = json.loads(body)
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail='Body must be JSON: {"speakers": {"SPEAKER_00": "Nancy"}}',
+        ) from None
+    if not isinstance(payload, dict):
+        raise HTTPException(
+            status_code=400, detail="Body must be a JSON object, not a list or scalar"
+        )
+    if "speakers" in payload:
+        speakers = payload["speakers"]
+        if not isinstance(speakers, dict):
+            raise HTTPException(
+                status_code=400, detail='"speakers" must be an object of label: name'
+            )
+        return dict(speakers)
+    return payload
+
+
+def _validated_speaker_mapping(
+    payload: Dict[str, Any], state: Dict[str, Any]
+) -> Dict[str, str]:
+    """Turn a request body into a mapping worth writing, or raise 400.
+
+    Every label must be one the transcript actually contains. That is the whole
+    check: a mapping is applied by literal string replacement (ADR-004), so a
+    label that is not in the text does nothing at all, and accepting it would
+    quietly store a correction that can never take effect. It also means this
+    route cannot be used to write arbitrary keys into a file on disk.
+
+    A blank name is "leave this one as it is", not an error - it is how you back
+    out of a name you were unsure about. An entirely blank form is refused, with
+    the pointer to the one action that does mean "there should be no mapping".
+    """
+    known = {item["label"] for item in state["labels"]}
+    if not known:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "This transcript carries no SPEAKER_ labels, so there is "
+                "nothing to name."
+            ),
+        )
+
+    cleaned: Dict[str, str] = {}
+    for raw_label, raw_name in payload.items():
+        label = str(raw_label).strip()
+        if label.startswith("[") and label.endswith("]"):
+            label = label[1:-1].strip()
+        if label not in known:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"{label!r} is not a speaker label in "
+                    f"{state['transcript_file'] or 'this transcript'}. Labels "
+                    f"here: " + ", ".join(sorted(known))
+                ),
+            )
+        if not isinstance(raw_name, str):
+            raise HTTPException(
+                status_code=400,
+                detail=f"The name for {label} must be text, not "
+                f"{type(raw_name).__name__}",
+            )
+        name = raw_name.strip()
+        if not name:
+            continue
+        if len(name) > MAX_SPEAKER_NAME_CHARS:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"The name for {label} is {len(name)} characters; "
+                    f"{MAX_SPEAKER_NAME_CHARS} is the limit."
+                ),
+            )
+        if _CONTROL_CHARS.search(name):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"The name for {label} contains a control character. Names "
+                    f"are plain text."
+                ),
+            )
+        cleaned[label] = name
+
+    if not cleaned:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "No names were given, so there is nothing to save. To remove "
+                "the saved mapping and let the model decide again, use "
+                "discard."
+            ),
+        )
+    return cleaned
+
+
+def _write_speaker_mapping(
+    request: Request,
+    episode: Dict[str, Any],
+    mapping: Dict[str, str],
+    fingerprint: Optional[str],
+) -> str:
+    """Write the mapping with ``source="human"``. Blocking; run it in a thread.
+
+    ``backup=True`` is :func:`save_speaker_mapping`'s own doing and is the
+    ADR-009 exception that proves the rule: generated artifacts keep no ``.bak``
+    because the pipeline can make them again, and this file cannot be made again
+    by anything but a person.
+
+    The fingerprint of the transcript on screen is recorded with the names. It
+    is what lets a later re-transcription be recognised as having moved the
+    ground under them - and it is why "check the names and save again" is all it
+    takes to clear a stale mapping.
+    """
+    speakers_module = _speakers_module()
+    root = request.app.state.podcast_dir
+    base = episode["base_name"]
+    target = _speaker_map_target(request, episode)
+    # The writer builds its own path from (base, dir). Confirm it is the one
+    # this route just vetted, rather than assuming two spellings of the same
+    # join can never drift.
+    computed = os.path.realpath(speakers_module.speaker_map_path(base, root))
+    if os.path.normcase(computed) != os.path.normcase(target):
+        logger.error(
+            "Speaker mapping path mismatch: vetted %r, writer would use %r",
+            target,
+            computed,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="Refusing to write the speaker mapping: the path does not check out",
+        )
+    return speakers_module.save_speaker_mapping(
+        mapping,
+        base,
+        root,
+        transcript_fingerprint=fingerprint,
+        source="human",
+    )
+
+
+def _refresh_index(request: Request) -> None:
+    """Re-read ``podcasts/`` after a mapping changed. Blocking, best effort.
+
+    The index is a rebuildable cache (ADR-008), and it has just gone one file
+    out of date: the overview matrix and the episode's file table would keep
+    showing the old answer until something else triggered a scan. A failure here
+    is not the caller's problem - the file was written, and that is the part
+    that matters - so it is logged and swallowed.
+    """
+    try:
+        db.rescan(request.app.state.conn, request.app.state.podcast_dir)
+    except (WhycastError, OSError, sqlite3.Error) as exc:
+        logger.warning("Could not refresh the index after a mapping change: %s", exc)
+
+
+def _register_speaker_routes(app: FastAPI, templates: Jinja2Templates) -> None:
+    """The speaker mapping editor: one page and three API routes."""
+
+    @app.get(
+        "/episodes/{base_name}/speakers",
+        response_class=HTMLResponse,
+        name="speaker_editor",
+    )
+    async def speaker_editor(request: Request, base_name: str):
+        """Name every speaker in one episode.
+
+        Uses :func:`_conn`, not :func:`_queue_or_503`: reading and correcting
+        names is free, needs no worker, and must keep working when the queue is
+        down. The offer to apply them is what needs the queue, and it is
+        wrapped separately - same reasoning as the episode page.
+        """
+        conn = _conn(request)
+        episode = _get_episode_or_404(request, base_name)
+        state = await anyio.to_thread.run_sync(_speaker_state, request, episode)
+        try:
+            active = jobs.active_job(conn)
+            episode_jobs = _episode_jobs(conn, episode["base_name"])
+            apply_job = _speaker_apply_job()
+        except sqlite3.Error as exc:
+            logger.warning("Job queue unreadable on the speaker editor: %s", exc)
+            active, episode_jobs, apply_job = None, [], None
+        return templates.TemplateResponse(
+            request,
+            "speakers.html",
+            {
+                "episode": episode,
+                "state": state,
+                "apply_job": apply_job,
+                "active_job": active,
+                "episode_jobs": episode_jobs,
+                "meta": _public_meta(db.get_meta(conn)),
+            },
+        )
+
+    @app.get("/api/episodes/{base_name}/speakers", name="api_speakers")
+    async def api_speakers(request: Request, base_name: str):
+        """What the next speakers run will do, and the names it would use."""
+        _conn(request)
+        episode = _get_episode_or_404(request, base_name)
+        state = await anyio.to_thread.run_sync(_speaker_state, request, episode)
+        return _public_speaker_state(state)
+
+    @app.post("/api/episodes/{base_name}/speakers", name="api_speakers_save")
+    async def api_speakers_save(request: Request, base_name: str):
+        """Save the mapping for one episode as human input. Costs nothing.
+
+        Writes the file and stops. Applying it to the transcript is the
+        ``speakers`` job, which spends money; the response carries that job's
+        catalogue entry - cost flag and all - so the page can offer it, and the
+        caller still has to ask for it by name at ``POST /api/jobs``.
+        """
+        _conn(request)
+        episode = _get_episode_or_404(request, base_name)
+        payload = await _speaker_payload(request)
+        state = await anyio.to_thread.run_sync(_speaker_state, request, episode)
+
+        if state["transcript_error"]:
+            raise HTTPException(status_code=409, detail=state["transcript_error"])
+        if state["transcript_file"] is None:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"{episode['base_name']} has no transcript on disk, so there "
+                    f"are no speaker labels to name. Run the pipeline first."
+                ),
+            )
+
+        mapping = _validated_speaker_mapping(payload, state)
+        dropped = sorted(set(state["speakers"]) - set(mapping))
+        try:
+            path = await anyio.to_thread.run_sync(
+                _write_speaker_mapping,
+                request,
+                episode,
+                mapping,
+                state["fingerprint"],
+            )
+        except WhycastError as exc:
+            # The writer's own validation (an empty or non-string mapping).
+            # Everything it checks is checked above, so this is defence in
+            # depth rather than a path a request can reach.
+            raise HTTPException(status_code=400, detail=str(exc)) from None
+        except OSError as exc:
+            logger.error("Could not write the speaker mapping for %s: %s", base_name, exc)
+            raise HTTPException(
+                status_code=500,
+                detail=f"The speaker mapping could not be written: {exc}",
+            ) from None
+
+        await anyio.to_thread.run_sync(_refresh_index, request)
+        backup = path + ".bak"
+        logger.info(
+            "Saved speaker mapping for %s (%d names, source=human)",
+            episode["base_name"],
+            len(mapping),
+        )
+        return {
+            "saved": True,
+            "base_name": episode["base_name"],
+            "file": os.path.basename(path),
+            "speakers": mapping,
+            "source": "human",
+            "transcript_file": state["transcript_file"],
+            "dropped": dropped,
+            "backup_file": os.path.basename(backup)
+            if os.path.isfile(backup)
+            else None,
+            "next_run": "saved",
+            "apply_job": _speaker_apply_job(),
+        }
+
+    async def _discard(request: Request, base_name: str) -> Dict[str, Any]:
+        """Remove the saved mapping. The only route that deletes one."""
+        _conn(request)
+        episode = _get_episode_or_404(request, base_name)
+        path = _speaker_map_target(request, episode)
+        backup = path + ".bak"
+        existed = os.path.isfile(path)
+        if existed:
+            try:
+                await anyio.to_thread.run_sync(os.remove, path)
+            except OSError as exc:
+                logger.error("Could not discard the speaker mapping %s: %s", path, exc)
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"The speaker mapping could not be removed: {exc}",
+                ) from None
+            logger.info(
+                "Discarded the speaker mapping for %s at the operator's request",
+                episode["base_name"],
+            )
+            await anyio.to_thread.run_sync(_refresh_index, request)
+        # The .bak is deliberately left alone. Discard means "let the model
+        # decide again", not "destroy what was typed" (ADR-010: human work is
+        # not deleted by anything but a person's explicit instruction, and this
+        # instruction named the mapping, not its backup).
+        #
+        # What it is NOT is an undo of this discard, and the field name alone
+        # invites exactly that reading. The backup holds the version *before*
+        # the one just discarded: after a single save there is no .bak at all
+        # and nothing is recoverable; after two saves it holds v1 while v2 is
+        # the one that just went. It is also not refreshed by a later save,
+        # because io_utils._make_backup returns early when the target is
+        # absent - so it can outlive the mapping it belonged to and go on being
+        # reported as "the previous version" of a mapping typed weeks later.
+        # So it is reported under a name that says what it is, and described.
+        backup_name = os.path.basename(backup) if os.path.isfile(backup) else None
+        return {
+            "discarded": existed,
+            "base_name": episode["base_name"],
+            "file": os.path.basename(path),
+            "backup_file": backup_name,
+            "backup_is_older_version": bool(backup_name),
+            "next_run": "model",
+            "detail": (
+                "The saved mapping is gone. The next speakers run asks the "
+                "model, which costs money, and saves what it decides."
+                + (
+                    f" {backup_name} is left in place, but it holds the version "
+                    f"before the one you just discarded, not that one - it is "
+                    f"not an undo of this."
+                    if backup_name
+                    else " There was no backup, so the discarded names are not "
+                    "recoverable from here."
+                )
+                if existed
+                else "There was no saved mapping to discard; nothing changed."
+            ),
+        }
+
+    @app.post("/api/episodes/{base_name}/speakers/discard", name="api_speakers_discard")
+    async def api_speakers_discard(request: Request, base_name: str):
+        """Discard the saved mapping (the form path: a POST works without JS)."""
+        return await _discard(request, base_name)
+
+    @app.delete("/api/episodes/{base_name}/speakers", name="api_speakers_delete")
+    async def api_speakers_delete(request: Request, base_name: str):
+        """Discard the saved mapping (the REST spelling of the same action)."""
+        return await _discard(request, base_name)
 
 
 # ---------------------------------------------------------------------------
@@ -991,28 +1870,100 @@ def _queue_or_503(request: Request) -> sqlite3.Connection:
     return conn
 
 
-def _refuse_oversized_body(request: Request) -> None:
-    """Reject an over-large job request before its body is read into memory.
-
-    ``await request.body()`` buffers the whole thing, and whatever is in
-    ``params`` then gets serialised into the ``jobs`` table - which lives in the
-    same SQLite file as the episode index the UI depends on. A 32 MB parameter
-    string was accepted and grew the database to 41 MB. A job request is a job
-    type, an episode key and a handful of options; nothing legitimate comes
-    close to the cap.
-    """
+def _declared_length(request: Request) -> Optional[int]:
+    """``Content-Length`` as an int, or None when absent or unparseable."""
     raw = request.headers.get("content-length")
     if not raw:
-        return
+        return None
     try:
-        length = int(raw)
+        return int(raw)
     except ValueError:
-        return
-    if length > MAX_JOB_BODY_BYTES:
+        return None
+
+
+def _is_form_request(request: Request) -> bool:
+    """True for ``application/x-www-form-urlencoded``, whatever the parameters."""
+    content_type = (request.headers.get("content-type") or "").split(";")[0]
+    return content_type.strip().lower() == "application/x-www-form-urlencoded"
+
+
+async def _read_capped_body(request: Request, cap: int, detail: str) -> bytes:
+    """Read the whole request body, refusing anything over ``cap`` as it arrives.
+
+    Args:
+        request: The incoming request.
+        cap: Maximum body size in bytes.
+        detail: The 413 message for this route - the wording differs per editor
+            and is part of each one's contract, so it is passed in rather than
+            composed here.
+
+    Returns:
+        The body bytes, guaranteed to be ``cap`` or fewer.
+
+    Raises:
+        HTTPException: 413, as soon as the running total passes ``cap``, so an
+            enormous upload is refused mid-stream rather than after it has all
+            been buffered.
+
+    Every route that reads a body goes through this, form bodies included, and
+    that is the whole point of it existing. The caps used to be enforced in two
+    places that between them missed a case: a ``Content-Length`` header check
+    (which a chunked body simply does not have) and a ``len(body) > cap`` check
+    after ``await request.body()``, commented as "the check that always holds".
+    It did not hold: the form branch returned from ``await request.form()``
+    *before* reaching it, and ``request.form()`` reads the stream with no limit
+    at all. A chunked, form-encoded body therefore bypassed every cap. Measured:
+    an 8 MiB prompt written past a 512 KiB cap - and then sent verbatim to the
+    paid OpenAI API, once per chunk in the recursive summarisation path, since
+    :func:`whycast.pipeline.llm.process_with_openai` truncates the transcript
+    against MAX_INPUT_TOKENS but never the prompt - and an 8 MiB ``params``
+    string past a 64 KiB cap, growing the SQLite file the episode index shares
+    from 189 KB to 16 MB. Not a security hole (cross-origin is refused, and no
+    plain HTML form can send chunked), but exactly the regression
+    ``_refuse_oversized_body`` was written to fix, re-entering by another door.
+    """
+    declared = _declared_length(request)
+    if declared is not None and declared > cap:
+        # Cheap pre-check: refuse before a byte of it is read.
+        raise HTTPException(status_code=413, detail=detail)
+
+    chunks: List[bytes] = []
+    size = 0
+    async for chunk in request.stream():
+        size += len(chunk)
+        if size > cap:
+            raise HTTPException(status_code=413, detail=detail)
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def _form_fields(body: bytes) -> Dict[str, str]:
+    """Parse an ``application/x-www-form-urlencoded`` body into ``{key: value}``.
+
+    Parsed here rather than by ``await request.form()`` because that reads the
+    stream itself, with no size limit, and the body has already been read (and
+    capped) by :func:`_read_capped_body` before this is called.
+
+    ``keep_blank_values=True`` matters: an empty speaker-name field means "leave
+    this one as it is", and dropping it would make that unreachable from a
+    browser form while it kept working over JSON. Last-wins on a repeated key
+    matches what Starlette's ``FormData.items()`` did.
+
+    Raises:
+        HTTPException: 400 when the body is not UTF-8.
+    """
+    try:
+        text = body.decode("utf-8")
+    except UnicodeDecodeError:
         raise HTTPException(
-            status_code=413,
-            detail=f"Job request body is larger than {MAX_JOB_BODY_BYTES} bytes",
+            status_code=400, detail="The form body is not valid UTF-8."
+        ) from None
+    return {
+        key: value
+        for key, value in urllib.parse.parse_qsl(
+            text, keep_blank_values=True, encoding="utf-8"
         )
+    }
 
 
 async def _job_request_payload(request: Request) -> Dict[str, Any]:
@@ -1028,13 +1979,9 @@ async def _job_request_payload(request: Request) -> Dict[str, Any]:
         HTTPException: 400 when the body is not an object this route can read,
             413 when it is larger than :data:`MAX_JOB_BODY_BYTES`.
     """
-    _refuse_oversized_body(request)
-    content_type = (request.headers.get("content-type") or "").split(";")[0].strip()
-    if content_type.lower() == "application/x-www-form-urlencoded":
-        form = await request.form()
-        payload: Dict[str, Any] = {
-            key: value for key, value in form.items() if isinstance(value, str)
-        }
+    body = await _read_capped_body(request, MAX_JOB_BODY_BYTES, _JOB_BODY_TOO_LARGE)
+    if _is_form_request(request):
+        payload: Dict[str, Any] = dict(_form_fields(body))
         raw_params = payload.get("params")
         if isinstance(raw_params, str) and raw_params.strip():
             try:
@@ -1047,14 +1994,6 @@ async def _job_request_payload(request: Request) -> Dict[str, Any]:
             payload.pop("params", None)
         return payload
 
-    body = await request.body()
-    if len(body) > MAX_JOB_BODY_BYTES:
-        # A chunked body carries no Content-Length, so the header check above
-        # cannot see it; this is the one that always holds.
-        raise HTTPException(
-            status_code=413,
-            detail=f"Job request body is larger than {MAX_JOB_BODY_BYTES} bytes",
-        )
     if not body.strip():
         return {}
     try:
@@ -1666,6 +2605,828 @@ def _get_job_or_404(request: Request, job_id: str) -> Dict[str, Any]:
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
     return job
+
+
+# ---------------------------------------------------------------------------
+# Editors for the pipeline's INPUT files (ADR-008 phase 3, TASK-004)
+#
+# Two kinds of file here are written by a human and read by the pipeline:
+#
+#   vocabulary.json   the global correction map (ADR-006)
+#   prompts/*.txt     the instruction text each OpenAI step sends
+#
+# That they are *input* is what makes them editable here at all. ADR-009 drew
+# the line: a generated artifact is regenerable and is written with
+# backup=False; human input is not regenerable and is written with backup=True.
+# A correction made on this page therefore survives a re-run - the next run
+# reproduces it instead of overwriting it (TASK-004 AC #4 and #5). Nothing in
+# this section writes an episode artifact, and nothing in it starts a job: the
+# "apply it" forms post to /api/jobs like every other button in this app.
+#
+# ADR-004 stays intact too. Editing the vocabulary map edits *data* that
+# deterministic code applies; no prompt here rewrites a transcript wholesale.
+#
+# Security
+# --------
+# The editable set is a fixed allowlist derived from :mod:`whycast.config`. A
+# request names a *key* of that allowlist, never a path; the path comes from
+# the config constant. There is no traversal to defend against: an unknown key
+# is a 404 before any filesystem call happens at all. Same shape as ``kind``
+# and ``fmt`` on the artifact route.
+#
+# The constants are read through the module object, not imported by value.
+# ``whycast.config`` computes them at import time from the repository root and
+# offers no environment override, so a ``from ... import VOCABULARY_FILE``
+# would freeze the operator's real file into this module - and a test could not
+# point it anywhere else, which means the test suite would edit the live
+# vocabulary. Reading ``whycast_config.VOCABULARY_FILE`` per request costs one
+# attribute lookup and keeps these routes testable against a temp directory.
+#
+# No configuration *value* leaves this module. Paths are rendered relative to
+# the repository root (:func:`_display_path`), which drops the machine's
+# directory layout, and nothing here reads ``os.environ``.
+# ---------------------------------------------------------------------------
+
+#: Largest editor body accepted. A prompt is a few kilobytes and the vocabulary
+#: map a few hundred lines; half a megabyte is far past anything legitimate and
+#: well under what would be worth streaming. Same reasoning as
+#: :data:`MAX_JOB_BODY_BYTES`, a different number because prompts are prose.
+MAX_EDITOR_BODY_BYTES = 512 * 1024
+
+#: The 413 an editor answers with. See :data:`_JOB_BODY_TOO_LARGE`.
+_EDITOR_BODY_TOO_LARGE = f"That is larger than {MAX_EDITOR_BODY_BYTES} bytes."
+
+#: The allowlist. Each entry names a ``whycast.config`` attribute - never a
+#: path, never anything derived from a request - plus the job type that re-runs
+#: the step this prompt drives.
+#:
+#: ``speaker_analysis_prompt.txt`` exists on disk and is read by
+#: :mod:`whycast.pipeline.speakers`, but has no constant in
+#: :mod:`whycast.config`; it is resolved there from a directory name and a
+#: literal. It is therefore *not* in this list - adding it would mean building
+#: a path in this module, which is the one thing ADR-008 forbids here. The
+#: prompts page says so rather than implying the list is complete.
+#:
+#: ``speaker_unknown_attribution_prompt.txt`` used to belong in that sentence
+#: too. It no longer does: nothing reads it. The attribution step sent it to
+#: gpt-4o and then ignored the answer, deciding every case from
+#: ``previous_speaker == next_speaker`` instead, so the call was removed
+#: (:func:`whycast.pipeline.speakers.attribute_unknown_speakers`). The file is
+#: inert, which is the reason not to offer it here: an editable prompt that
+#: changes nothing is a worse lie than an absent one.
+PROMPT_SPECS: Tuple[Dict[str, str], ...] = (
+    {
+        "name": "cleanup",
+        "config_attr": "PROMPT_CLEANUP_FILE",
+        "label": "Cleanup",
+        "produces": "the cleaned transcript",
+        "description": (
+            "Turns the raw transcript into the cleaned one: filler words out, "
+            "punctuation and grammar fixed. Every later step reads its output, "
+            "so a change here moves the summary and the blog too."
+        ),
+        "job_type": "postprocess",
+    },
+    {
+        "name": "summary",
+        "config_attr": "PROMPT_SUMMARY_FILE",
+        "label": "Summary",
+        "produces": "the summary artifact",
+        "description": (
+            "Writes the summary from the cleaned transcript. Long episodes are "
+            "summarised in chunks with this same prompt."
+        ),
+        "job_type": "postprocess",
+    },
+    {
+        "name": "blog",
+        "config_attr": "PROMPT_BLOG_FILE",
+        "label": "Blog",
+        "produces": "the blog artifact",
+        "description": (
+            "Writes the blog post from the cleaned transcript and the summary "
+            "together."
+        ),
+        "job_type": "postprocess",
+    },
+    {
+        "name": "blog_alt1",
+        "config_attr": "PROMPT_BLOG_ALT1_FILE",
+        "label": "Blog (alternative)",
+        "produces": "the blog_alt1 artifact",
+        "description": (
+            "A second blog voice. The pipeline checks whether this file exists "
+            "and skips the step when it does not, so saving it here is what "
+            "switches the step on - and an empty file would switch it off again."
+        ),
+        "job_type": "postprocess",
+    },
+    {
+        "name": "history",
+        "config_attr": "PROMPT_HISTORY_EXTRACT_FILE",
+        "label": "History extract",
+        "produces": "the history artifact",
+        "description": (
+            "Pulls the historical references out of the cleaned transcript."
+        ),
+        "job_type": "postprocess",
+    },
+    {
+        "name": "speaker_assignment",
+        "config_attr": "PROMPT_SPEAKER_ASSIGN_FILE",
+        "label": "Speaker assignment",
+        "produces": "the speaker_assignment artifact",
+        "description": (
+            "Asks the model which real name belongs to each SPEAKER_xx label. "
+            "Per ADR-004 it only produces the judgement; deterministic code "
+            "applies the mapping to the transcript."
+        ),
+        "job_type": "speakers",
+    },
+)
+
+#: Names only, as a set, for the O(1) rejection of anything else.
+PROMPT_NAMES = tuple(spec["name"] for spec in PROMPT_SPECS)
+
+#: The job that makes an edited ``vocabulary.json`` take effect for one episode.
+#:
+#: It is the expensive one, and that is not a choice made here - it is what the
+#: file does. :mod:`whycast.pipeline.transcription` reads ``vocabulary.json``
+#: once, at the start of a transcription, and hands the terms to Whisper as a
+#: word list. It changes how the *audio is heard*; it does not rewrite text that
+#: has already been transcribed. So applying it to an episode that is already
+#: done means transcribing the audio again, which is ``force_episode``: GPU time
+#: plus every OpenAI step, paid. The page says this in those words rather than
+#: offering a cheap-looking button that would do nothing.
+VOCABULARY_APPLY_JOB = "force_episode"
+
+
+class _EditorRejected(Exception):
+    """A save this app refuses to write, with a message for the operator.
+
+    Separate from :class:`HTTPException` because the same rejection is rendered
+    two ways: as JSON for the API, and as the editor page with the text still
+    in the textarea for a browser. Raising it means *nothing was written* - the
+    file on disk is untouched.
+    """
+
+
+def _display_path(path: str) -> str:
+    """``path`` relative to the repository root, or just its filename.
+
+    What the UI shows instead of an absolute path. A repo-relative name
+    (``prompts/summary_prompt.txt``) identifies the file exactly without
+    publishing where this checkout lives, and a path outside the repository -
+    which is what a test's temp directory is - degrades to the bare filename
+    rather than leaking a machine path or raising ``ValueError`` on Windows
+    when the two are on different drives.
+    """
+    if not path:
+        return ""
+    try:
+        rel = os.path.relpath(path, REPO_ROOT)
+    except ValueError:
+        return os.path.basename(path)
+    if rel.startswith(".."):
+        return os.path.basename(path)
+    return rel.replace(os.sep, "/")
+
+
+def _file_state(path: str) -> Dict[str, Any]:
+    """What the editor knows about one file on disk.
+
+    Deliberately contains no absolute path: ``display_path`` is what the
+    templates and the API show. ``readable`` is false for a file that is not
+    valid UTF-8 - the editor refuses to show it rather than round-tripping
+    mojibake back onto disk through the textarea.
+    """
+    state: Dict[str, Any] = {
+        "display_path": _display_path(path),
+        "filename": os.path.basename(path),
+        "exists": False,
+        "size": None,
+        "mtime": None,
+        "has_backup": False,
+        "readable": True,
+        "text": "",
+        "error": None,
+    }
+    try:
+        stat = os.stat(path)
+    except OSError:
+        return state
+    state["exists"] = True
+    state["size"] = stat.st_size
+    state["mtime"] = stat.st_mtime
+    state["has_backup"] = os.path.isfile(path + BACKUP_SUFFIX)
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            state["text"] = handle.read()
+    except UnicodeDecodeError:
+        state["readable"] = False
+        state["error"] = (
+            f"{state['display_path']} is not valid UTF-8. Editing it here would "
+            f"rewrite the bytes it could not decode, so it is shown as empty "
+            f"and saving is refused until it is fixed outside this UI."
+        )
+    except OSError as exc:
+        state["readable"] = False
+        state["error"] = f"Could not read {state['display_path']}: {exc.strerror or exc}"
+    return state
+
+
+def _normalise_newlines(text: str) -> str:
+    """CRLF and bare CR to LF.
+
+    A ``<textarea>`` posts CRLF per the HTML spec, and ``atomic_write_text``
+    defaults to the platform translation - so on Windows a round-trip would
+    write ``\\r\\r\\n`` and grow a carriage return per save. Normalising here
+    and writing with ``newline="\\n"`` makes a save idempotent.
+    """
+    return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def _reject_duplicate_keys(pairs: List[Tuple[str, Any]]) -> Dict[str, Any]:
+    """``object_pairs_hook`` that refuses a repeated key.
+
+    ``json.loads`` keeps the last of a duplicate pair and says nothing, so a
+    vocabulary file with ``"WAI"`` twice silently loses one of the two
+    corrections and the operator has no way to see it. This is the only place
+    that can notice.
+    """
+    result: Dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise _EditorRejected(
+                f"The key {key!r} appears more than once. JSON keeps only the "
+                f"last one, so one of your corrections would be silently "
+                f"dropped. Remove the duplicate."
+            )
+        result[key] = value
+    return result
+
+
+def _validated_vocabulary(text: str) -> Tuple[Dict[str, str], str]:
+    """Check an edited ``vocabulary.json`` and return ``(mapping, canonical)``.
+
+    Nothing is written until this returns. The file is read at the start of
+    every transcription (:mod:`whycast.pipeline.transcription`), and the loader
+    answers a malformed file with an empty mapping and a log line - so a broken
+    save would quietly disable every correction on every later run. That is
+    what this refuses to allow.
+
+    What is rejected, and why each one matters:
+
+    * not valid JSON, or not an object - the loader would return ``{}``;
+    * a key that is empty or only whitespace - the correction step builds
+      ``re.escape(key)`` into ``\\b...\\b``, and an empty key gives the pattern
+      ``\\b\\b``, which matches at *every* word boundary and would splatter the
+      replacement through the entire transcript;
+    * a value that is not a string - the loader drops the entry;
+    * a duplicate key - JSON silently keeps the last.
+
+    Returns the parsed mapping and the canonical text to write: re-serialised
+    with two-space indent and a trailing newline, insertion order preserved so
+    the operator's grouping survives. Writing the canonical form rather than the
+    submitted bytes is what makes "the file on disk is always loadable" a
+    property of the code instead of a thing that was checked once.
+    """
+    if not text.strip():
+        raise _EditorRejected(
+            "The vocabulary is empty. An empty file is not valid JSON; write "
+            "{} if you really mean 'no corrections'."
+        )
+    try:
+        parsed = json.loads(text, object_pairs_hook=_reject_duplicate_keys)
+    except _EditorRejected:
+        raise
+    except json.JSONDecodeError as exc:
+        raise _EditorRejected(
+            f"This is not valid JSON: {exc.msg} (line {exc.lineno}, column "
+            f"{exc.colno}). Nothing was written; the file on disk is unchanged."
+        ) from None
+    except RecursionError:
+        # Deeply nested JSON. RecursionError is neither ValueError nor
+        # JSONDecodeError, so it used to escape this function entirely and the
+        # operator got "Internal Server Error" from the one editor that exists
+        # to tell them exactly what is wrong with their paste.
+        raise _EditorRejected(
+            "This JSON is nested too deeply to parse. The vocabulary is a flat "
+            "object mapping a wrong spelling to the right one; nothing was "
+            "written and the file on disk is unchanged."
+        ) from None
+    except ValueError as exc:  # pragma: no cover - json raises JSONDecodeError
+        raise _EditorRejected(f"This is not valid JSON: {exc}") from None
+
+    if not isinstance(parsed, dict):
+        raise _EditorRejected(
+            "The vocabulary must be a JSON object mapping a wrong spelling to "
+            f"the right one, like {{\"WAIcast\": \"WHYcast\"}} - this is "
+            f"{type(parsed).__name__}."
+        )
+
+    for key, value in parsed.items():
+        if not isinstance(key, str) or not key.strip():
+            raise _EditorRejected(
+                "One of the keys is empty. An empty key becomes a pattern that "
+                "matches at every word boundary, which would insert its "
+                "replacement throughout the whole transcript. Remove it."
+            )
+        if not isinstance(value, str):
+            raise _EditorRejected(
+                f"The value for {key!r} is {type(value).__name__}, not text. "
+                f"Every correction maps text to text; the pipeline drops "
+                f"anything else and the entry would silently do nothing."
+            )
+
+    mapping = {str(key): str(value) for key, value in parsed.items()}
+    canonical = json.dumps(mapping, indent=2, ensure_ascii=False) + "\n"
+    # The last thing that can still fail is turning it into bytes. A lone
+    # UTF-16 surrogate written as "\ud800" is legal JSON *source* and becomes a
+    # str that no validator here objects to - but there is no UTF-8 for it, so
+    # the write raised UnicodeEncodeError past every `except` on the way out.
+    # Checked on the canonical text rather than the submitted text because this
+    # is where the escape sequence has become the character.
+    try:
+        canonical.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise _EditorRejected(
+            f"This cannot be written as UTF-8: {exc.reason} at position "
+            f"{exc.start}. A lone surrogate escape such as \\ud800 is valid "
+            f"JSON but not a character any file can hold. Nothing was written; "
+            f"the file on disk is unchanged."
+        ) from None
+    return mapping, canonical
+
+
+def _validated_prompt(text: str, spec: Dict[str, str]) -> str:
+    """Check an edited prompt and return the text to write.
+
+    A prompt is free-form instruction text, so there is exactly one rule worth
+    enforcing: it may not be empty. Every step does ``if not prompt: skip``
+    (see :mod:`whycast.pipeline.postprocess`), so saving an empty file does not
+    produce a bad artifact - it silently produces no artifact at all, which is
+    much harder to notice.
+    """
+    cleaned = _normalise_newlines(text)
+    if not cleaned.strip():
+        raise _EditorRejected(
+            f"The {spec['label'].lower()} prompt is empty. The pipeline skips a "
+            f"step whose prompt file is empty, so this would not change "
+            f"{spec['produces']} - it would stop it being produced at all. "
+            f"Delete the file outside this UI if that is what you want."
+        )
+    control = _PROMPT_CONTROL_CHARS.search(cleaned)
+    if control:
+        raise _EditorRejected(
+            f"This prompt contains a control character (0x"
+            f"{ord(control.group()):02x}) at position {control.start()}. A "
+            f"prompt is plain text; a stray NUL from a paste is not visible "
+            f"here but is sent verbatim to the paid OpenAI API, where it "
+            f"fails - after a GPU transcription may already have been paid "
+            f"for. Nothing was written; the file on disk is unchanged."
+        )
+    if not cleaned.endswith("\n"):
+        cleaned += "\n"
+    return cleaned
+
+
+def _prompt_spec_or_404(name: str) -> Dict[str, Any]:
+    """The allowlist entry called ``name``, resolved to a path, or 404.
+
+    The whole path-safety story of the prompt editor is these four lines. The
+    request supplies a dictionary key; the path is whatever
+    :mod:`whycast.config` says it is. A name that is not in the allowlist never
+    reaches the filesystem.
+    """
+    for spec in PROMPT_SPECS:
+        if spec["name"] == name:
+            resolved = dict(spec)
+            resolved["path"] = getattr(whycast_config, spec["config_attr"])
+            return resolved
+    raise HTTPException(
+        status_code=404,
+        detail=(
+            f"Unknown prompt {name!r}. Editable prompts: " + ", ".join(PROMPT_NAMES)
+        ),
+    )
+
+
+def _prompt_overview() -> List[Dict[str, Any]]:
+    """Every allowlisted prompt with its file state, for the list page."""
+    catalogue = {entry["type"]: entry for entry in job_types_payload()}
+    out: List[Dict[str, Any]] = []
+    for spec in PROMPT_SPECS:
+        path = getattr(whycast_config, spec["config_attr"])
+        entry = dict(spec)
+        entry.update(_file_state(path))
+        entry["job"] = catalogue.get(spec["job_type"])
+        out.append(entry)
+    return out
+
+
+def _job_spec(job_type: str) -> Optional[Dict[str, Any]]:
+    """One entry of the job catalogue, with its ``cost`` and ``gpu`` flags.
+
+    Read from :func:`job_types_payload` - the same source the enqueue route
+    validates against - so a page cannot advertise a job as free that the API
+    charges for.
+    """
+    for entry in job_types_payload():
+        if entry["type"] == job_type:
+            return entry
+    return None
+
+
+def _apply_targets(conn: sqlite3.Connection, audio_only: bool) -> List[Dict[str, Any]]:
+    """Episodes offered in an "apply this to one episode" picker.
+
+    ``audio_only`` for the vocabulary: that edit only takes effect by
+    transcribing the audio again, so an episode without audio cannot be a
+    target and is not offered.
+    """
+    episodes = db.list_episodes(conn)
+    if audio_only:
+        return [ep for ep in episodes if ep.get("audio_path")]
+    return episodes
+
+
+async def _editor_payload(request: Request) -> Dict[str, Any]:
+    """Read ``{"text": ...}`` from a JSON or form-encoded body.
+
+    Both shapes for the same reason the job routes accept both: a plain
+    ``<form method="post">`` works with scripting off and posts
+    ``application/x-www-form-urlencoded``; anything scripted posts JSON.
+
+    Raises:
+        HTTPException: 413 when the body is over :data:`MAX_EDITOR_BODY_BYTES`,
+            400 when it is not an object with a ``text`` field.
+    """
+    body = await _read_capped_body(
+        request, MAX_EDITOR_BODY_BYTES, _EDITOR_BODY_TOO_LARGE
+    )
+    if _is_form_request(request):
+        return dict(_form_fields(body))
+
+    if not body.strip():
+        return {}
+    try:
+        payload = json.loads(body)
+    except ValueError:
+        raise HTTPException(
+            status_code=400, detail='Body must be JSON: {"text": "..."}'
+        ) from None
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Body must be a JSON object")
+    return payload
+
+
+def _submitted_text(payload: Dict[str, Any]) -> str:
+    """The ``text`` field of an editor save, or a 400.
+
+    "A string" is checked twice, because Python's idea of a string is wider
+    than a file's. ``json.loads`` happily produces a ``str`` containing a lone
+    UTF-16 surrogate from ``"\\ud800"``; it passes every validator, survives
+    ``json.dumps(ensure_ascii=False)``, and only fails at the very last step,
+    inside :func:`whycast.io_utils.atomic_write_text`, as a
+    ``UnicodeEncodeError`` that ``_write_input_file``'s ``except OSError`` does
+    not catch - so the operator got an opaque 500 and a traceback in the server
+    log, from an editor whose whole job is to answer a bad paste with the line
+    and column. Refusing it here keeps the promise the editors make: a rejected
+    save explains itself and leaves the file byte-identical.
+    """
+    text = payload.get("text")
+    if not isinstance(text, str):
+        raise HTTPException(
+            status_code=400,
+            detail='A "text" field is required and must be a string.',
+        )
+    try:
+        text.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"This text cannot be written as UTF-8: {exc.reason} at "
+                f"position {exc.start}. Nothing was written; the file on disk "
+                f"is unchanged."
+            ),
+        ) from None
+    return text
+
+
+def _wants_html(request: Request) -> bool:
+    """True for a browser form post, false for the API.
+
+    Same test the error handler uses. It decides how a save answers: a browser
+    gets a redirect back to the page it came from (so the Back button is not
+    the only way out of a JSON document), the API gets JSON.
+    """
+    return "text/html" in (request.headers.get("accept") or "")
+
+
+def _write_input_file(path: str, text: str) -> Dict[str, Any]:
+    """Write a human-authored input file, keeping the previous version.
+
+    ``backup=True`` is the ADR-009 rule for this side of the line: an artifact
+    is regenerable and is written without a backup, a file a person typed is
+    not. ``newline="\\n"`` pairs with :func:`_normalise_newlines`; without it the
+    platform translation would add a carriage return per save on Windows.
+
+    Raises:
+        HTTPException: 500 when the write fails. ``atomic_write_text`` writes a
+            temp file and renames, so a failure leaves the previous contents in
+            place rather than a half-written file.
+    """
+    try:
+        atomic_write_text(path, text, backup=True, newline="\n")
+    except OSError as exc:
+        logger.error("Could not write %s: %s", path, exc)
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                f"Could not write {_display_path(path)}: {exc.strerror or exc}. "
+                f"The previous contents are still on disk."
+            ),
+        ) from None
+    except UnicodeEncodeError as exc:
+        # Defence in depth: the validators refuse unencodable text with a 400
+        # long before this. If one ever misses a case, the operator should
+        # still get a sentence rather than a traceback. The encode fails before
+        # the temp file is committed, so the target and its backup are both
+        # untouched, which is what the message may safely promise.
+        logger.error("Could not encode %s as UTF-8: %s", path, exc)
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                f"Could not write {_display_path(path)}: the text is not "
+                f"encodable as UTF-8 ({exc.reason}). Nothing was written; the "
+                f"previous contents and their backup are both untouched."
+            ),
+        ) from None
+    logger.info("Wrote %s (backup kept as %s)", path, path + BACKUP_SUFFIX)
+    return _file_state(path)
+
+
+def _register_editor_routes(app: FastAPI, templates: Jinja2Templates) -> None:
+    """The vocabulary and prompt editors, and their JSON API.
+
+    Every route in here is either a read or a write of one allowlisted input
+    file. None of them runs a pipeline step; "apply it to an episode" is a form
+    that posts to ``/api/jobs`` exactly like the buttons on the episode page,
+    so cost stays a property of the job type and is warned about in one place.
+    """
+
+    # -- vocabulary ---------------------------------------------------------
+
+    def vocabulary_context(
+        request: Request,
+        text: Optional[str] = None,
+        error: Optional[str] = None,
+        saved: bool = False,
+    ) -> Dict[str, Any]:
+        conn = _conn(request)
+        state = _file_state(whycast_config.VOCABULARY_FILE)
+        if not state["exists"] and not state["text"]:
+            # No file yet. An empty textarea would be a trap: an empty save is
+            # refused (it is not valid JSON), so the first thing an operator
+            # could do here would fail. Seed the empty map instead.
+            state["text"] = "{}\n"
+        # On a rejected save the operator's own text goes back into the
+        # textarea, not the file's - losing an edit to a typo would be its own
+        # small betrayal.
+        state["text"] = state["text"] if text is None else text
+        entry_count: Optional[int] = None
+        if state["readable"]:
+            try:
+                parsed = json.loads(state["text"] or "{}")
+                if isinstance(parsed, dict):
+                    entry_count = len(parsed)
+            except ValueError:
+                entry_count = None
+        return {
+            "vocab": state,
+            "entry_count": entry_count,
+            "error": error or state["error"],
+            "saved": saved,
+            "apply_job": _job_spec(VOCABULARY_APPLY_JOB),
+            "episodes": _apply_targets(conn, audio_only=True),
+            "backup_suffix": BACKUP_SUFFIX,
+            "meta": _public_meta(db.get_meta(conn)),
+        }
+
+    @app.get("/vocabulary", response_class=HTMLResponse, name="vocabulary_editor")
+    async def vocabulary_editor(request: Request, saved: Optional[str] = Query(None)):
+        """Edit ``vocabulary.json``: the global correction map (ADR-006)."""
+        return templates.TemplateResponse(
+            request, "vocabulary.html", vocabulary_context(request, saved=saved == "1")
+        )
+
+    @app.get("/api/vocabulary", name="api_vocabulary")
+    async def api_vocabulary(request: Request):
+        """The vocabulary file as text, plus what is known about it on disk."""
+        state = _file_state(whycast_config.VOCABULARY_FILE)
+        entries: Optional[int] = None
+        if state["readable"] and state["text"].strip():
+            try:
+                parsed = json.loads(state["text"])
+            except ValueError:
+                parsed = None
+            if isinstance(parsed, dict):
+                entries = len(parsed)
+        return {
+            "file": state["display_path"],
+            "exists": state["exists"],
+            "readable": state["readable"],
+            "size": state["size"],
+            "mtime": state["mtime"],
+            "has_backup": state["has_backup"],
+            "entry_count": entries,
+            "text": state["text"],
+            "apply_job": _job_spec(VOCABULARY_APPLY_JOB),
+        }
+
+    @app.post("/api/vocabulary", name="api_vocabulary_save")
+    async def api_vocabulary_save(request: Request):
+        """Validate and write ``vocabulary.json``, keeping a ``.bak``.
+
+        Validation happens before anything is opened for writing, so a rejected
+        save leaves the file byte-identical. See :func:`_validated_vocabulary`
+        for what is refused and why each rule is there.
+        """
+        payload = await _editor_payload(request)
+        text = _submitted_text(payload)
+        try:
+            mapping, canonical = _validated_vocabulary(_normalise_newlines(text))
+        except _EditorRejected as exc:
+            message = str(exc)
+            logger.info("Refused a vocabulary save: %s", message)
+            if _wants_html(request):
+                return templates.TemplateResponse(
+                    request,
+                    "vocabulary.html",
+                    vocabulary_context(request, text=text, error=message),
+                    status_code=400,
+                )
+            raise HTTPException(status_code=400, detail=message) from None
+
+        state = _write_input_file(whycast_config.VOCABULARY_FILE, canonical)
+        if _wants_html(request):
+            return RedirectResponse("/vocabulary?saved=1", status_code=303)
+        return {
+            "saved": True,
+            "file": state["display_path"],
+            "entry_count": len(mapping),
+            "has_backup": state["has_backup"],
+            "next": (
+                "Nothing runs by itself. The terms are read at the start of the "
+                "next transcription and handed to Whisper as a word list."
+            ),
+        }
+
+    # -- prompts ------------------------------------------------------------
+
+    def prompts_context(
+        request: Request,
+        selected: Optional[Dict[str, Any]] = None,
+        text: Optional[str] = None,
+        error: Optional[str] = None,
+        saved: bool = False,
+    ) -> Dict[str, Any]:
+        conn = _conn(request)
+        state: Optional[Dict[str, Any]] = None
+        if selected is not None:
+            state = dict(selected)
+            state.update(_file_state(selected["path"]))
+            state["text"] = state["text"] if text is None else text
+            state["job"] = _job_spec(selected["job_type"])
+            # The absolute path is used to read the file and then dropped; the
+            # template only ever sees display_path.
+            state.pop("path", None)
+            state.pop("config_attr", None)
+        return {
+            "prompts": _prompt_overview(),
+            "prompt": state,
+            "error": error or (state or {}).get("error"),
+            "saved": saved,
+            "episodes": _apply_targets(conn, audio_only=False),
+            "backup_suffix": BACKUP_SUFFIX,
+            "meta": _public_meta(db.get_meta(conn)),
+        }
+
+    @app.get("/prompts", response_class=HTMLResponse, name="prompts_editor")
+    async def prompts_editor(request: Request):
+        """The prompts that can be edited here, and what each one drives."""
+        return templates.TemplateResponse(request, "prompts.html", prompts_context(request))
+
+    @app.get("/prompts/{name}", response_class=HTMLResponse, name="prompt_editor")
+    async def prompt_editor(
+        request: Request, name: str, saved: Optional[str] = Query(None)
+    ):
+        """One prompt file, open for editing.
+
+        ``name`` is an allowlist key. It is looked up, never joined onto a
+        directory; anything not in :data:`PROMPT_NAMES` is a 404 that never
+        touches the filesystem.
+        """
+        spec = _prompt_spec_or_404(name)
+        return templates.TemplateResponse(
+            request,
+            "prompts.html",
+            prompts_context(request, selected=spec, saved=saved == "1"),
+        )
+
+    @app.get("/api/prompts", name="api_prompts")
+    async def api_prompts():
+        """The editable prompt files. The list is fixed; a request cannot add to it."""
+        return {
+            "count": len(PROMPT_SPECS),
+            "prompts": [
+                {
+                    "name": entry["name"],
+                    "label": entry["label"],
+                    "description": entry["description"],
+                    "produces": entry["produces"],
+                    "file": entry["display_path"],
+                    "exists": entry["exists"],
+                    "readable": entry["readable"],
+                    "size": entry["size"],
+                    "mtime": entry["mtime"],
+                    "has_backup": entry["has_backup"],
+                    "job": entry["job"],
+                }
+                for entry in _prompt_overview()
+            ],
+        }
+
+    @app.get("/api/prompts/{name}", name="api_prompt")
+    async def api_prompt(request: Request, name: str):
+        """One prompt file's text and state."""
+        spec = _prompt_spec_or_404(name)
+        state = _file_state(spec["path"])
+        return {
+            "name": spec["name"],
+            "label": spec["label"],
+            "description": spec["description"],
+            "produces": spec["produces"],
+            "file": state["display_path"],
+            "exists": state["exists"],
+            "readable": state["readable"],
+            "size": state["size"],
+            "mtime": state["mtime"],
+            "has_backup": state["has_backup"],
+            "text": state["text"],
+            "job": _job_spec(spec["job_type"]),
+        }
+
+    @app.post("/api/prompts/{name}", name="api_prompt_save")
+    async def api_prompt_save(request: Request, name: str):
+        """Write one prompt file, keeping a ``.bak``.
+
+        The path comes from :mod:`whycast.config` via the allowlist; ``name``
+        selects an entry and is never part of a path.
+        """
+        spec = _prompt_spec_or_404(name)
+        payload = await _editor_payload(request)
+        text = _submitted_text(payload)
+        try:
+            cleaned = _validated_prompt(text, spec)
+        except _EditorRejected as exc:
+            message = str(exc)
+            logger.info("Refused a save of the %s prompt: %s", spec["name"], message)
+            if _wants_html(request):
+                return templates.TemplateResponse(
+                    request,
+                    "prompts.html",
+                    prompts_context(request, selected=spec, text=text, error=message),
+                    status_code=400,
+                )
+            raise HTTPException(status_code=400, detail=message) from None
+
+        state = _write_input_file(spec["path"], cleaned)
+        if _wants_html(request):
+            return RedirectResponse(f"/prompts/{spec['name']}?saved=1", status_code=303)
+        job = _job_spec(spec["job_type"])
+        nxt = (
+            "Nothing runs by itself. The next pipeline run that reaches this "
+            "step reads the file from disk."
+        )
+        if job is not None:
+            nxt += f' To apply it to one episode now, queue "{job["label"]}"'
+            nxt += (
+                " for that episode - it calls the paid OpenAI API."
+                if job["cost"]
+                else " for that episode."
+            )
+        return {
+            "saved": True,
+            "name": spec["name"],
+            "file": state["display_path"],
+            "size": state["size"],
+            "has_backup": state["has_backup"],
+            "job": job,
+            "next": nxt,
+        }
 
 
 def _register_error_handlers(app: FastAPI, templates: Jinja2Templates) -> None:

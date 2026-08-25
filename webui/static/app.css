@@ -400,3 +400,117 @@ button:disabled { opacity: .55; cursor: default; }
 .logline.lvl-critical .logmsg { color: var(--bad); }
 .logline.lvl-debug { color: var(--fg-muted); }
 .logline.meta .logmsg { color: var(--fg-muted); font-style: italic; }
+
+/* ---- the speaker mapping editor (ADR-010) -------------------------------
+ *
+ * One card per diarization label. The quoted lines are what makes the label
+ * recognisable, so they get room to breathe and a mono face - they are
+ * transcript text, and reading them is the task. The name field sits on the
+ * same line as the label so the eye goes label -> box -> evidence.
+ */
+
+.speaker-list { list-style: none; margin: .5rem 0; padding: 0; }
+
+.speaker-row {
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--bg-panel);
+  padding: .5rem .7rem;
+  margin-bottom: .5rem;
+  max-width: 60rem;
+}
+
+.speaker-head { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem; }
+.speaker-label { display: flex; align-items: baseline; gap: .4rem; min-width: 11rem; }
+.speaker-label .hint { margin: 0; }
+
+.speaker-head input[type="text"] {
+  flex: 1 1 14rem;
+  min-width: 10rem;
+  padding: .3rem .45rem;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+}
+.speaker-head input[type="text"]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.speaker-context {
+  margin: .45rem 0 0;
+  padding: 0 0 0 .8rem;
+  list-style: none;
+  border-left: 2px solid var(--line);
+  color: var(--fg-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.speaker-context li { margin: .2rem 0; overflow-wrap: anywhere; }
+
+.speaker-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem; }
+.speaker-actions .hint { margin: 0; }
+
+/* ---------------------------------------------------------------------------
+ * Input editors: vocabulary.json and the prompt files (TASK-004).
+ *
+ * A textarea inherits none of the page's type by default, so without this the
+ * vocabulary would be rendered in the browser's 13px Times. Everything else
+ * here is spacing.
+ * ------------------------------------------------------------------------ */
+.editor-form { margin: 0; }
+.editor-label {
+  display: block;
+  margin: .6rem 0 .25rem;
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+.editor-area {
+  display: block;
+  width: 100%;
+  padding: .55rem .65rem;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--bg-panel);
+  color: var(--fg);
+  font: 13px/1.5 var(--sans);
+  resize: vertical;
+  tab-size: 2;
+}
+.editor-area.mono { font-family: var(--mono); }
+.editor-area:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+.editor-actions {
+  display: flex;
+  gap: .8rem;
+  align-items: center;
+  margin: .6rem 0 0;
+}
+
+/* "What happens when you press Save" - the plain-words block that has to be
+   readable before the button is, so it sits directly under the form. */
+.whatnext {
+  margin-top: 1rem;
+  padding: .1rem .9rem .6rem;
+  border-left: 3px solid var(--line);
+  background: var(--bg-soft);
+  border-radius: 0 5px 5px 0;
+}
+.whatnext h3 { margin: .8rem 0 .4rem; font-size: 13px; }
+.whatnext ol { margin: 0; padding-left: 1.2rem; color: var(--fg-muted); }
+.whatnext li { margin: .3rem 0; }
+.whatnext strong { color: var(--fg); }
+.whatnext code, .banner code { font-family: var(--mono); }
+
+.action-list select {
+  margin-right: .5rem;
+  padding: .3rem .4rem;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  max-width: 22rem;
+}
+tr.current { background: var(--neutral-bg); }

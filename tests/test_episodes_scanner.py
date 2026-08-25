@@ -43,8 +43,11 @@ if str(REPO_ROOT) not in sys.path:
 from whycast.episodes import (  # noqa: E402
     ARTIFACT_FORMATS,
     ARTIFACT_KINDS,
+    INPUT_KINDS,
+    SPEAKER_MAP_SUFFIX,
     Episode,
     ScanResult,
+    formats_for_kind,
     parse_episode_number,
     scan_podcasts,
 )
@@ -74,6 +77,12 @@ REAL_PODCAST_DIR = REPO_ROOT / "podcasts"
 #:   episode_1.foo_summary.txt     dot-separated rest: belongs to episode_1, but
 #:                                 is not a recognised artifact of it
 #:   episode_13.mp3.ffmpeg...      the real directory's ffmpeg leftover shape
+#:   episode_13_speakers.json      the editable speaker mapping (ADR-010): an
+#:                                 input, the one kind that may be json
+#:   episode_1_summary.json        json is legal for speakers_map and nothing
+#:                                 else, so this is junk on a real base
+#:   random_summary.json           names a kind it cannot be: mints nothing
+#:   episode_70_speakers.json      an input for an episode that does not exist
 #:   extra_recordings/             a subdirectory; the scan is shallow
 SYNTHETIC_FILES = {
     # -- episode_1 vs episode_10: the collision the whole design turns on ----
@@ -92,6 +101,11 @@ SYNTHETIC_FILES = {
     "episode_13_speaker_assignment.txt": "old assignment",
     "episode_13_ts_speaker_assignment.txt": "new assignment",
     "episode_13.mp3.ffmpeg.16k_diarization.txt": "ffmpeg leftover",
+    # -- the speaker mapping: input, not output (ADR-010) --------------------
+    "episode_13_speakers.json": '{"SPEAKER_00": "Nancy", "SPEAKER_01": "Ad"}',
+    "episode_1_summary.json": '{"not": "a summary"}',
+    "random_summary.json": '{"mints": "nothing"}',
+    "episode_70_speakers.json": '{"SPEAKER_00": "Nobody"}',
     # -- two spellings of transcript ----------------------------------------
     "episode_7.mp3": "audio-7",
     "episode_7.txt": "bare transcript of seven",
@@ -141,9 +155,12 @@ EXPECTED_UNMATCHED_NAMES = {
     "LICENSE",
     "episode_1.foo_summary.txt",
     "episode_13.mp3.ffmpeg.16k_diarization.txt",
+    "episode_1_summary.json",
+    "episode_70_speakers.json",
     "extra_recordings",
     "notes.dat",
     "promo.mp4",
+    "random_summary.json",
 }
 
 
@@ -341,6 +358,180 @@ class TestNamingShapes:
         assert "episode_13.mp3.ffmpeg.16k_diarization.txt" not in _names(
             [a.path for a in episode.artifacts]
         )
+
+
+# ---------------------------------------------------------------------------
+# The speaker mapping: the one input file among the outputs
+# ---------------------------------------------------------------------------
+
+
+class TestSpeakerMappingInput:
+    """``<base>_speakers.json`` is a pipeline *input* (ADR-010).
+
+    A person edits it and every later run reproduces the correction, so the
+    scanner has to show it rather than bury it in ``unmatched``. Two things
+    follow, and both are asserted here: ``json`` is legal for this kind and no
+    other, and an input file mints no episode. The second is the sharper edge -
+    a generated file proves an episode existed, a hand-written one only claims
+    it does, and a typo in a hand-written name must therefore be visible in
+    ``unmatched`` instead of quietly becoming an episode.
+    """
+
+    def test_mapping_is_an_artifact_of_its_episode(self, synthetic_dir):
+        result = scan_podcasts(str(synthetic_dir))
+        episode = _episode(result, "episode_13")
+        assert _artifact_names(episode, "speakers_map") == {
+            "episode_13_speakers.json"
+        }
+        assert "episode_13_speakers.json" not in _names(result.unmatched)
+        assert episode.artifact("speakers_map").fmt == "json"
+
+    def test_mapping_is_marked_as_input_and_results_are_not(self, synthetic_dir):
+        """The web UI needs to offer an input for editing, not for download."""
+        result = scan_podcasts(str(synthetic_dir))
+        for episode in result.episodes:
+            for artifact in episode.artifacts:
+                assert artifact.is_input == (artifact.kind in INPUT_KINDS)
+                assert artifact.is_input == (artifact.kind == "speakers_map")
+
+    def test_json_is_not_a_format_for_generated_kinds(self, synthetic_dir):
+        """``episode_1_summary.json`` names a real base and a real kind.
+
+        It is still junk: only ``speakers_map`` is data. Admitting json for
+        every kind would file this as episode_1's summary and serve it.
+        """
+        result = scan_podcasts(str(synthetic_dir))
+        assert "episode_1_summary.json" in _names(result.unmatched)
+        one = _episode(result, "episode_1")
+        assert _artifact_names(one, "summary") == {"episode_1_summary.txt"}
+
+    def test_a_json_that_names_a_kind_it_cannot_be_mints_nothing(
+        self, synthetic_dir
+    ):
+        """``random_summary.json`` must not mint an episode ``random``.
+
+        The minting pass runs before any kind is attached, so it has to reject
+        an illegal (kind, format) pair itself. Before json was recognised at
+        all this file could not reach that pass; now it can.
+        """
+        result = scan_podcasts(str(synthetic_dir))
+        assert "random" not in {e.base_name for e in result.episodes}
+        assert "random_summary.json" in _names(result.unmatched)
+
+    def test_a_mapping_alone_mints_no_episode(self, synthetic_dir):
+        """``episode_70_speakers.json`` has no audio and no results behind it."""
+        result = scan_podcasts(str(synthetic_dir))
+        assert "episode_70" not in {e.base_name for e in result.episodes}
+        assert not [e for e in result.episodes if e.number == 70]
+        assert "episode_70_speakers.json" in _names(result.unmatched)
+
+    def test_a_mapping_joins_an_audio_less_episode_it_did_not_mint(self, tmp_path):
+        """Minting nothing must not mean detaching: ``_ts`` mints, json joins."""
+        root = tmp_path / "podcasts"
+        root.mkdir()
+        (root / "episode_71_ts.txt").write_text("ts", encoding="utf-8")
+        (root / "episode_71_speakers.json").write_text("{}", encoding="utf-8")
+
+        result = scan_podcasts(str(root))
+        assert len(result.episodes) == 1
+        episode = result.episodes[0]
+        assert episode.audio_path is None
+        assert episode.has("speakers_map")
+        assert result.unmatched == []
+
+    def test_the_mapping_obeys_the_longest_base_rule(self, tmp_path):
+        """``episode_10_speakers.json`` is episode_10's, never episode_1's."""
+        root = tmp_path / "podcasts"
+        root.mkdir()
+        (root / "episode_1.mp3").write_bytes(b"one")
+        (root / "episode_10.mp3").write_bytes(b"ten")
+        (root / "episode_1_speakers.json").write_text("{}", encoding="utf-8")
+        (root / "episode_10_speakers.json").write_text("{}", encoding="utf-8")
+
+        result = scan_podcasts(str(root))
+        one = _episode(result, "episode_1")
+        ten = _episode(result, "episode_10")
+        assert _artifact_names(one, "speakers_map") == {"episode_1_speakers.json"}
+        assert _artifact_names(ten, "speakers_map") == {"episode_10_speakers.json"}
+
+    def test_a_mapping_in_the_wrong_format_is_not_a_mapping(self, tmp_path):
+        """The suffix alone does not make it one: the mapping is JSON."""
+        root = tmp_path / "podcasts"
+        root.mkdir()
+        (root / "episode_72.mp3").write_bytes(b"audio")
+        (root / "episode_72_speakers.txt").write_text("Nancy", encoding="utf-8")
+
+        result = scan_podcasts(str(root))
+        episode = result.episodes[0]
+        assert not episode.has("speakers_map")
+        assert "episode_72_speakers.txt" in _names(result.unmatched)
+
+    def test_a_bare_json_on_a_real_base_is_not_a_transcript(self, tmp_path):
+        """``episode_73.json`` is the sharpest edge of admitting json at all.
+
+        The rest after the base is ``""``, and :func:`_kind_of_rest` answers
+        "transcript" for an empty rest without ever looking at the format - a
+        bare ``<base>.txt`` really is one. So the *only* thing standing between
+        a stray ``.json`` and being served as this episode's transcript is the
+        per-kind format check in sub-pass B. Every other json trap in this
+        class carries a suffix and is caught a step earlier; this one is not,
+        which is why it is pinned separately.
+        """
+        root = tmp_path / "podcasts"
+        root.mkdir()
+        (root / "episode_73.mp3").write_bytes(b"audio")
+        (root / "episode_73.json").write_text('{"n": 1}', encoding="utf-8")
+
+        result = scan_podcasts(str(root))
+        episode = result.episodes[0]
+        assert not episode.has("transcript")
+        assert episode.artifacts == []
+        assert "episode_73.json" in _names(result.unmatched)
+
+    def test_an_unrelated_json_belongs_to_no_episode(self, tmp_path):
+        """A json that names neither a base nor a kind stays junk.
+
+        ``json`` became a legal artifact format for ``speakers_map``; it must
+        not have become one for the directory at large.
+        """
+        root = tmp_path / "podcasts"
+        root.mkdir()
+        (root / "episode_74.mp3").write_bytes(b"audio")
+        (root / "foo.json").write_text('{"unrelated": true}', encoding="utf-8")
+
+        result = scan_podcasts(str(root))
+        assert len(result.episodes) == 1
+        assert result.episodes[0].artifacts == []
+        assert "foo" not in {e.base_name for e in result.episodes}
+        assert _names(result.unmatched) == {"foo.json"}
+
+    def test_the_suffix_matches_the_name_the_pipeline_writes(self):
+        """One constant, two halves: the scanner must track ADR-010's filename.
+
+        ``whycast.pipeline.speakers`` builds the path from
+        :data:`SPEAKER_MAP_SUFFIX`; the scanner splits the same constant into
+        the stem suffix it matches and the format it allows. Spelling either
+        half by hand would let them drift apart on a rename.
+        """
+        assert SPEAKER_MAP_SUFFIX == "_speakers.json"
+        stem, ext = os.path.splitext(SPEAKER_MAP_SUFFIX)
+        assert formats_for_kind("speakers_map") == (ext.lstrip("."),)
+        assert stem + ext == SPEAKER_MAP_SUFFIX
+
+    def test_the_vocabulary_lists_agree_with_the_per_kind_table(self):
+        """Every kind's formats must be inside ARTIFACT_FORMATS, and vice versa."""
+        assert "speakers_map" in ARTIFACT_KINDS
+        assert INPUT_KINDS <= set(ARTIFACT_KINDS)
+        covered = set()
+        for kind in ARTIFACT_KINDS:
+            formats = formats_for_kind(kind)
+            assert formats, f"{kind} has no legal format"
+            assert set(formats) <= set(ARTIFACT_FORMATS)
+            covered.update(formats)
+        assert covered == set(ARTIFACT_FORMATS), (
+            "ARTIFACT_FORMATS lists a format no kind can use"
+        )
+        assert "json" not in formats_for_kind("transcript")
 
 
 # ---------------------------------------------------------------------------

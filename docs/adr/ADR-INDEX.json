@@ -191,7 +191,7 @@
       "path": "ADR-004-hybrid-ai-analysis-plus-programmatic-speaker-assignment.md",
       "format": "madr",
       "status": "Accepted",
-      "date": "2026-08-23",
+      "date": "2026-08-25",
       "decision_summary": "Chosen option: Two-phase: LLM produces mapping, code applies it, because separating judgement (who is SPEAKER02) from...",
       "topics": [
         "attribution",
@@ -547,6 +547,73 @@
         "supersedes": [],
         "superseded_by": null
       }
+    },
+    {
+      "id": "ADR-010",
+      "title": "Persisted editable speaker mapping as pipeline input",
+      "path": "ADR-010-persisted-editable-speaker-mapping-as-pipeline-input.md",
+      "format": "madr",
+      "status": "Proposed",
+      "date": "2026-08-25",
+      "decision_summary": "Chosen option: Option A.",
+      "topics": [
+        "correction-workflow",
+        "pipeline-inputs",
+        "speaker-assignment"
+      ],
+      "aliases": [
+        "speaker editor",
+        "speaker mapping",
+        "speakers.json"
+      ],
+      "components": [
+        "whycast.episodes",
+        "whycast.pipeline.speakers"
+      ],
+      "symbols": [
+        "analyze_speakers_with_o4",
+        "load_speaker_mapping",
+        "save_speaker_mapping",
+        "speaker_assignment_step"
+      ],
+      "context_scope": "selective",
+      "decision_contract": {
+        "must": [
+          "The mapping lives at / speakers.json as a JSON object of {\"SPEAKER00\": \"Name\", ...}.",
+          "When that file exists and parses, it is the mapping; the paid analysis phase is skipped.",
+          "When it does not exist, the LLM-derived mapping is saved to it, so the next run can be corrected and re-run for free.",
+          "Writes to it use backup=True: it is human input, unlike generated artifacts (ADR-009).",
+          "The scanner recognises it as a distinct kind, so it does not appear as an unmatched file.",
+          "Deterministic code still applies the mapping (ADR-004 is unchanged in that respect).",
+          "Re-transcribing an episode marks its mapping stale rather than deleting it. The file records which transcript it was made for; when that no longer matches, the mapping is not applied automatically and the person is asked to check the nam..."
+        ],
+        "must_not": [
+          "Do not store speaker corrections in the web UI database or any other cache.",
+          "Do not delete a mapping automatically, on re-transcription or otherwise. It is human work; discarding it is a decision only a person makes.",
+          "Do not parse the mapping back out of speakeranalysis.txt; that report is prose for a human reader.",
+          "Do not let a malformed or unreadable mapping file silently fall back to the LLM - report it, so a typo in a hand-edited file is visible rather than expensively papered over."
+        ],
+        "exceptions": [
+          "None."
+        ],
+        "verification": []
+      },
+      "scope": {
+        "path_globs": []
+      },
+      "metadata": {
+        "binding": false,
+        "gate": null,
+        "documents_shipped": false,
+        "verified_in": [
+          "whycast/pipeline/speakers.py",
+          "whycast/episodes.py",
+          "tests/test_speaker_mapping_precedence.py",
+          "tests/test_webui_speakers_editor.py"
+        ],
+        "supersedes": [],
+        "superseded_by": null
+      }
     }
   ],
   "relationships": [
@@ -577,6 +644,12 @@
     {
       "source": "ADR-004",
       "target": "ADR-003",
+      "type": "related",
+      "resolved": true
+    },
+    {
+      "source": "ADR-004",
+      "target": "ADR-010",
       "type": "related",
       "resolved": true
     },
@@ -637,6 +710,30 @@
     {
       "source": "ADR-009",
       "target": "ADR-008",
+      "type": "related",
+      "resolved": true
+    },
+    {
+      "source": "ADR-009",
+      "target": "ADR-010",
+      "type": "related",
+      "resolved": true
+    },
+    {
+      "source": "ADR-010",
+      "target": "ADR-003",
+      "type": "related",
+      "resolved": true
+    },
+    {
+      "source": "ADR-010",
+      "target": "ADR-004",
+      "type": "related",
+      "resolved": true
+    },
+    {
+      "source": "ADR-010",
+      "target": "ADR-009",
       "type": "related",
       "resolved": true
     }

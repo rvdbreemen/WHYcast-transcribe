@@ -11,6 +11,7 @@ supersedes: []
 superseded_by: null
 related:
   - "ADR-008"
+  - "ADR-010"
 topics:
   - "artifact-writes"
   - "downloads"
@@ -55,6 +56,11 @@ status_history:
     status: Accepted
     changed_by: "User: Robert van den Breemen"
     reason: Accepted by Robert on request, 2026-08-25; grill settled the open question (human input goes to pipeline inputs, not artifacts)
+    changed_via: adr-kit lifecycle
+  - date: 2026-08-25
+    status: Accepted
+    changed_by: "User: Robert van den Breemen"
+    reason: Related to ADR-010
     changed_via: adr-kit lifecycle
 ```
 

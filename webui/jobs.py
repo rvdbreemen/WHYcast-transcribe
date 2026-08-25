@@ -227,8 +227,10 @@ JOB_TYPES: Dict[str, Dict[str, Any]] = {
         "label": "Reprocess episode (force)",
         "description": (
             "Deletes this episode's existing artifacts and runs the full "
-            "pipeline again from the audio. The most expensive job type: it "
-            "pays for both GPU time and every OpenAI step."
+            "pipeline again from the audio. The audio and the saved speaker "
+            "mapping are kept - the mapping is human input, not an artifact. "
+            "The most expensive job type: it pays for both GPU time and every "
+            "OpenAI step."
         ),
     },
     "postprocess": {

@@ -156,6 +156,12 @@ class TestBackupsArePublishedAtomically:
         Pinned deliberately. The outcome test above can be satisfied by a lucky
         copy; only a rename makes "the ``.bak`` is complete or it is the
         previous one" true for a kill at an arbitrary instant.
+
+        The *order* of the two renames is pinned here too, and it is the
+        opposite of what it used to be. The backup is published **after** the
+        target, so that a write which never gets published cannot spend the one
+        undo slot ADR-010 grants human input; see the test below for the
+        failure that ordering prevents.
         """
         target = tmp_path / "episode_42_summary.txt"
         atomic_write_text(target, "one\n")
@@ -173,7 +179,51 @@ class TestBackupsArePublishedAtomically:
         backup = str(target) + BACKUP_SUFFIX
         assert backup in destinations, "the backup must be published by os.replace"
         assert str(target) in destinations
-        assert destinations.index(backup) < destinations.index(str(target))
+        assert destinations.index(str(target)) < destinations.index(backup), (
+            "the target is published first: only once the new content is "
+            "actually the current version may the previous one be demoted to "
+            ".bak"
+        )
+
+    def test_a_failed_write_does_not_consume_the_backup(self, tmp_path, monkeypatch):
+        """A save that fails must leave *both* the file and its ``.bak`` alone.
+
+        The regression this pins cost the one undo a human input gets. The
+        backup used to be published before ``os.replace``, so a rename that
+        then failed - no space, a Windows sharing violation from any process
+        holding the file open, a permissions change - left the target correctly
+        untouched and the ``.bak`` already overwritten with content that was
+        never published. The editor answered HTTP 500 with "The previous
+        contents are still on disk", true of the file and false of its backup,
+        and the version before it was recoverable from nowhere.
+        """
+        target = tmp_path / "vocabulary.json"
+        atomic_write_text(target, "V0-old-human-work\n", backup=True)
+        atomic_write_text(target, "V1-current\n", backup=True)
+        backup = tmp_path / ("vocabulary.json" + BACKUP_SUFFIX)
+        assert backup.read_text(encoding="utf-8") == "V0-old-human-work\n"
+
+        real_replace = os.replace
+
+        def fail_on_the_target(src, dst, *args, **kwargs):
+            if str(dst) == str(target):
+                raise OSError(28, "No space left on device")
+            return real_replace(src, dst, *args, **kwargs)
+
+        monkeypatch.setattr(os, "replace", fail_on_the_target)
+        with pytest.raises(OSError):
+            atomic_write_text(target, "V2-never-published\n", backup=True)
+
+        monkeypatch.undo()
+        assert target.read_text(encoding="utf-8") == "V1-current\n", (
+            "the failed write must leave the current version in place"
+        )
+        assert backup.read_text(encoding="utf-8") == "V0-old-human-work\n", (
+            "and must not spend the .bak on content that was never published"
+        )
+        assert [p.name for p in tmp_path.iterdir()] == sorted(
+            [target.name, backup.name]
+        ), "the staged backup and the new content must both be cleaned up"
 
     def test_the_backup_keeps_the_previous_versions_mtime(self, tmp_path):
         """``copy2`` used to carry the metadata; ``copystat`` has to keep doing it."""

@@ -437,6 +437,95 @@
     });
   }
 
+  /* =====================================================================
+     The speaker mapping editor (ADR-010, TASK-004)
+
+     Two forms on /episodes/{base}/speakers, and the difference between them
+     is the whole point:
+
+     * saving names writes one small JSON file. It is free, it is reversible
+       (the writer keeps a .bak), and it therefore gets NO confirmation - a
+       prompt on a harmless action is how people learn to dismiss prompts.
+     * discarding deletes a person's work, so it confirms first, with text
+       the server rendered naming the file and what is in it.
+
+     Neither runs anything. Applying the names is the "speakers" job, which is
+     a data-enqueue form handled above with the same cost warning as every
+     other paid action.
+
+     Both post the plain form body, so the page works identically with
+     scripting off - it just lands on the API's JSON instead of updating in
+     place.
+     ===================================================================== */
+
+  function handleSpeakerSave(event, form) {
+    event.preventDefault();
+    var box = resultBox(form);
+    var button = form.querySelector('button[type="submit"]');
+    if (button) { button.disabled = true; }
+    say(box, 'Saving...', '');
+    postForm(form).then(function (res) {
+      if (!res.ok || !res.body || !res.body.saved) {
+        say(box, 'Could not save these names: ' + describeError(res), 'bad');
+        return;
+      }
+      showSaved(box, res.body);
+    }).catch(function (err) {
+      say(box, 'Could not reach the server: ' + (err && err.message ? err.message : 'request failed'), 'bad');
+    }).then(function () {
+      if (button) { button.disabled = false; }
+    });
+  }
+
+  /* textContent throughout: a speaker name is whatever somebody typed, and
+     this is the layer where "no |safe in the templates" would otherwise be
+     undone. */
+  function showSaved(box, saved) {
+    if (!box) { return; }
+    box.className = 'job-result';
+    var names = saved.speakers || {};
+    var count = Object.keys(names).length;
+    var text = 'Saved ' + count + (count === 1 ? ' name to ' : ' names to ')
+      + String(saved.file || 'the mapping file')
+      + '. The next speakers run uses them instead of asking the model.';
+    if (saved.dropped && saved.dropped.length) {
+      text += ' Dropped ' + saved.dropped.length + ' name'
+        + (saved.dropped.length === 1 ? '' : 's')
+        + ' for labels this transcript does not have: '
+        + saved.dropped.join(', ') + '.';
+    }
+    if (saved.backup_file) {
+      text += ' The previous version is in ' + String(saved.backup_file) + '.';
+    }
+    box.textContent = text;
+  }
+
+  function handleSpeakerDiscard(event, form) {
+    event.preventDefault();
+    var message = form.getAttribute('data-confirm');
+    if (message && !window.confirm(message)) { return; }
+    var box = resultBox(form);
+    var button = form.querySelector('button[type="submit"]');
+    if (button) { button.disabled = true; }
+    say(box, 'Discarding...', '');
+    postForm(form).then(function (res) {
+      if (!res.ok || !res.body) {
+        say(box, 'Could not discard the mapping: ' + describeError(res), 'bad');
+        if (button) { button.disabled = false; }
+        return;
+      }
+      /* The page is now wrong about itself - the editor would still offer to
+         discard a file that is gone, and the banner would still promise the
+         saved names. Reloading is the honest, boring fix; the server re-reads
+         the directory and says what is true now. */
+      say(box, String(res.body.detail || 'Discarded.') + ' Reloading...', '');
+      window.setTimeout(function () { window.location.reload(); }, 600);
+    }).catch(function (err) {
+      say(box, 'Could not reach the server: ' + (err && err.message ? err.message : 'request failed'), 'bad');
+      if (button) { button.disabled = false; }
+    });
+  }
+
   /* Delegated from the document so htmx swaps (the dashboard replaces its own
      live region every few seconds) need no re-wiring. */
   function wireJobForms() {
@@ -447,6 +536,10 @@
         handleEnqueue(event, form);
       } else if (form.matches('form[data-cancel]')) {
         handleCancel(event, form);
+      } else if (form.matches('form[data-speaker-save]')) {
+        handleSpeakerSave(event, form);
+      } else if (form.matches('form[data-speaker-discard]')) {
+        handleSpeakerDiscard(event, form);
       }
     });
   }
