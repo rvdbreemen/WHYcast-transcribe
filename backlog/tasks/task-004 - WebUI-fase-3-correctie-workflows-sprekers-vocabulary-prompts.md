@@ -1,11 +1,11 @@
 ---
 id: TASK-004
 title: 'WebUI fase 3: correctie-workflows (sprekers, vocabulary, prompts)'
-status: In Progress
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-08-24 19:59'
-updated_date: '2026-08-25 18:45'
+updated_date: '2026-08-25 21:34'
 labels:
   - webui
   - frontend
@@ -26,11 +26,11 @@ Correctie-workflows die de losse batch-scripts vervangen: speaker-editor op mapp
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Speaker-mapping aanpasbaar in de UI en programmatisch toegepast op de artefacten van een aflevering
-- [ ] #2 Vocabulary bewerken en toepassen op een gekozen aflevering werkt vanuit de UI
-- [ ] #3 Prompts bewerkbaar en losse pipelinestap opnieuw uitvoerbaar per aflevering
-- [ ] #4 Handmatige correcties gaan naar de INPUT van de pipeline (spreker-mapping, vocabulary.json, promptbestand), nooit naar een gegenereerd artefact - een her-run reproduceert de correctie in plaats van hem te overschrijven (ADR-009)
-- [ ] #5 Bewerkte inputbestanden krijgen een .bak-backup bij overschrijven (dit is mensenwerk, in tegenstelling tot artefacten die altijd regenereerbaar zijn)
+- [x] #1 Speaker-mapping aanpasbaar in de UI en programmatisch toegepast op de artefacten van een aflevering
+- [x] #2 Vocabulary bewerken en toepassen op een gekozen aflevering werkt vanuit de UI
+- [x] #3 Prompts bewerkbaar en losse pipelinestap opnieuw uitvoerbaar per aflevering
+- [x] #4 Handmatige correcties gaan naar de INPUT van de pipeline (spreker-mapping, vocabulary.json, promptbestand), nooit naar een gegenereerd artefact - een her-run reproduceert de correctie in plaats van hem te overschrijven (ADR-009)
+- [x] #5 Bewerkte inputbestanden krijgen een .bak-backup bij overschrijven (dit is mensenwerk, in tegenstelling tot artefacten die altijd regenereerbaar zijn)
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -49,4 +49,12 @@ Correctie-workflows die de losse batch-scripts vervangen: speaker-editor op mapp
 
 <!-- SECTION:NOTES:BEGIN -->
 2026-08-25 (ADR-009, beslissing Robert): artefacten krijgen geen .bak meer, dus mag menselijk werk daar niet in landen. De spreker-editor bewerkt de mapping, niet het gegenereerde _speaker_assignment-bestand. Sluit aan op ADR-004 (oordeel gescheiden van toepassing). Oorspronkelijke AC#4 ('elk overschreven bestand krijgt .bak') vervangen door twee criteria die dit onderscheid maken. Bekende beperking, expliciet geaccepteerd: een correctie die niet als mapping uit te drukken is (losse zin herschrijven) past niet in dit model en valt buiten fase 3.
+
+Gebouwd via workflow (8 agents). Zelf geverifieerd op de draaiende server: alle vier voorrangstakken (opgeslagen mapping past toe zonder enige betaalde aanroep - bewezen door analyze_speakers_with_o4 te vervangen door iets dat gooit; stale weigert met bruikbare melding; kapot bestand weigert; ontbrekend bestand valt terug op LLM en persisteert). Editor vond 5 SPEAKER-labels in episode_13, opslaan gaf .bak bij tweede keer, next_run sprong van 'model' naar 'saved', scanner toonde speakers_map als invoer, discard verwijderde de mapping. Traversal -> 404, geen secrets in prompts-API. Testdata daarna opgeruimd zodat podcasts/ ongewijzigd bleef. 790 passed / 1 skipped (volledig). Twee losse eindjes uit de review zelf gefixt: json-mediatype ontbrak in webui/app.py en de fmt-validatie gebruikte de globale ARTIFACT_FORMATS in plaats van formats_for_kind.
 <!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Correctie-workflows opgeleverd. Spreker-mapping is nu een persistente pipeline-invoer (<base>_speakers.json, ADR-010): aanwezig wint van het model en slaat de betaalde analyse over, ontbrekend laat het model draaien en bewaart het antwoord, kapot of verouderd weigert met een melding die het bestand noemt en beide uitwegen geeft. Nooit automatisch verwijderd. Vocabulary- en prompt-editor volgen dezelfde regel: bewerk wat de pipeline leest, atomisch met .bak, promptlijst als vaste allowlist. Geverifieerd met 790 passed/1 skipped en een handmatige end-to-end sessie op de draaiende server.
+<!-- SECTION:FINAL_SUMMARY:END -->

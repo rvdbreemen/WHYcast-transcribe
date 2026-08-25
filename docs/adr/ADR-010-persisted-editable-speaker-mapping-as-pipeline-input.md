@@ -1,7 +1,7 @@
 ---
 id: "ADR-010"
 title: "Persisted editable speaker mapping as pipeline input"
-status: "Proposed"
+status: "Accepted"
 date: "2026-08-25"
 binding: false
 gate: null
@@ -42,7 +42,7 @@ format: "madr"
 
 ## Status
 
-Proposed, 2026-08-25.
+Accepted, 2026-08-25.
 
 **Decision Maker:** User: Robert van den Breemen (chose the approach on 2026-08-25 while grilling ADR-009: "Mapping bewerken, niet output").
 
@@ -64,6 +64,11 @@ status_history:
     status: Proposed
     changed_by: "User: Robert van den Breemen"
     reason: Related to ADR-009
+    changed_via: adr-kit lifecycle
+  - date: 2026-08-25
+    status: Accepted
+    changed_by: "User: Robert van den Breemen"
+    reason: Accepted by Robert on request, 2026-08-25; implemented and verified in phase 3
     changed_via: adr-kit lifecycle
 ```
 

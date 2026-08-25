@@ -553,7 +553,7 @@
       "title": "Persisted editable speaker mapping as pipeline input",
       "path": "ADR-010-persisted-editable-speaker-mapping-as-pipeline-input.md",
       "format": "madr",
-      "status": "Proposed",
+      "status": "Accepted",
       "date": "2026-08-25",
       "decision_summary": "Chosen option: Option A.",
       "topics": [
