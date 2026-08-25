@@ -524,3 +524,22 @@ def test_sweep_on_a_missing_directory_is_a_no_op(tmp_path):
     from whycast.io_utils import sweep_stale_temps
 
     assert sweep_stale_temps(tmp_path / "does-not-exist") == []
+
+
+def test_sweep_with_zero_age_removes_a_just_written_temp(tmp_path):
+    """min_age_seconds=0 means no age guard, whatever the clock granularity.
+
+    Regression: comparing mtime against a cutoff of "now" made this depend on
+    filesystem timestamp resolution, so the sweep the worker runs right after a
+    kill spared the very file it was called to remove - intermittently, which
+    is the worst kind.
+    """
+    from whycast.io_utils import sweep_stale_temps
+
+    just_written = tmp_path / (".episode_42_summary.txt.fresh999" + TEMP_SUFFIX)
+    just_written.write_text("killed mid-write")
+
+    removed = sweep_stale_temps(tmp_path, min_age_seconds=0.0)
+
+    assert [os.path.basename(p) for p in removed] == [just_written.name]
+    assert not just_written.exists()

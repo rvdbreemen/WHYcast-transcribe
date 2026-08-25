@@ -68,6 +68,7 @@ __all__ = [
     "Artifact",
     "Episode",
     "ScanResult",
+    "belongs_to_base",
     "scan_podcasts",
 ]
 
@@ -438,13 +439,39 @@ def _sorted_bases(episodes: Dict[str, Episode]) -> Tuple[str, ...]:
     return tuple(sorted(episodes, key=lambda b: (-len(b), b)))
 
 
+def belongs_to_base(stem: str, base: str) -> bool:
+    """True when the filename stem ``stem`` belongs to episode base ``base``.
+
+    The scanner's rule 3, as a predicate, so that everything which has to
+    decide "is this file part of that episode?" decides it the same way. The
+    stem is the filename without its extension; the match is case-insensitive,
+    because the directory is NTFS and holds ``Episode_28.mp3`` next to
+    ``episode_28_summary.txt``.
+
+    A base matches when the stem is that base followed by a ``rest`` that is
+    either empty or starts with a separator (``_`` or ``.``). The boundary
+    check is the whole point: ``episode_1`` and ``episode_10`` both exist here,
+    and a plain prefix test would claim ``episode_10_blog`` for ``episode_1``.
+
+    Deleting an episode's files (``whycast.pipeline.feed.delete_episode_files``)
+    is the second caller, and it must agree with the scanner exactly: a file the
+    scanner attributes to ``episode_10`` must never be deleted by a re-run of
+    ``episode_1``.
+    """
+    stem_lower = stem.lower()
+    base_lower = base.lower()
+    if not stem_lower.startswith(base_lower):
+        return False
+    rest = stem_lower[len(base_lower):]
+    return not rest or rest[0] in "_."
+
+
 def _matching_base(stem_lower: str, bases: Tuple[str, ...]) -> Optional[str]:
     """The longest known base ``stem_lower`` belongs to, or None.
 
-    A base matches when the stem is that base followed by a ``rest`` that is
-    either empty or starts with a separator. Both halves matter: without
-    longest-first, ``episode_10_blog`` would land on ``episode_1``; without the
-    boundary check, ``episode_100_blog`` would too.
+    ``bases`` arrives longest-first, and that ordering matters as much as
+    :func:`belongs_to_base`'s boundary check: without it ``episode_10_blog``
+    would land on ``episode_1``.
 
     ``.`` is a separator alongside ``_`` even though no suffix in
     :data:`_SUFFIX_KINDS` begins with one, so a dot-form rest never resolves to
@@ -454,12 +481,8 @@ def _matching_base(stem_lower: str, bases: Tuple[str, ...]) -> Optional[str]:
     and mint a phantom episode ``episode_1.foo`` beside the real one.
     """
     for base in bases:
-        if not stem_lower.startswith(base):
-            continue
-        rest = stem_lower[len(base):]
-        if rest and rest[0] not in "_.":
-            continue
-        return base
+        if belongs_to_base(stem_lower, base):
+            return base
     return None
 
 

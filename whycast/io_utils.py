@@ -269,6 +269,15 @@ def sweep_stale_temps(directory: PathLike, min_age_seconds: float = 60.0) -> Lis
     ``min_age_seconds`` is a second safety net: a temp file younger than this is
     left alone even if the caller got the timing wrong.
 
+    The web UI worker is the only caller, so a killed *CLI* download leaves its
+    temp file behind for good - one per kill. That is deliberate. The leftovers
+    are inert (``TEMP_SUFFIX`` is not an artifact format, so the scanner reports
+    them as unmatched and never as an episode), and sweeping from the CLI
+    download path would be the more dangerous half of the trade: an episode
+    download takes far longer than ``min_age_seconds``, so a sweep racing a live
+    download in another process could unlink the temp file being written into.
+    Litter beats deleting someone's download.
+
     Returns the paths that were removed.
     """
     directory = os.fspath(directory)
@@ -276,13 +285,21 @@ def sweep_stale_temps(directory: PathLike, min_age_seconds: float = 60.0) -> Lis
     if not os.path.isdir(directory):
         return removed
 
-    cutoff = time.time() - min_age_seconds
+    # min_age_seconds <= 0 means "no age guard": the caller knows nothing can be
+    # writing here (the worker, right after killing the process tree). Comparing
+    # against a cutoff of "now" would not express that - a file written moments
+    # ago can carry an mtime at or just past it, because filesystem timestamp
+    # granularity is coarser than time.time(), so the sweep would spare exactly
+    # the temp file it was called to remove, and only sometimes.
+    cutoff = None if min_age_seconds <= 0 else time.time() - min_age_seconds
     for name in os.listdir(directory):
         if not (name.startswith(".") and name.endswith(TEMP_SUFFIX)):
             continue
         candidate = os.path.join(directory, name)
         try:
-            if not os.path.isfile(candidate) or os.path.getmtime(candidate) > cutoff:
+            if not os.path.isfile(candidate):
+                continue
+            if cutoff is not None and os.path.getmtime(candidate) > cutoff:
                 continue
             os.unlink(candidate)
         except OSError as e:
@@ -306,6 +323,19 @@ def _make_temp(path: str):
     ``mkstemp`` creates the file with mode 0600 and O_EXCL, so two concurrent
     writers of the same artifact each get their own temp file and the last
     ``os.replace`` wins cleanly - no interleaved bytes.
+
+    Known limitation, measured and left alone on purpose: if ``directory``
+    exists but denies this process write access (an ACL-restricted share, a
+    read-only mount), ``mkstemp`` does not fail fast. Its inner loop treats a
+    ``PermissionError`` on an existing directory as a name collision and
+    retries up to ``TMP_MAX`` (10000) times, so the call takes minutes instead
+    of raising, and the caller's error handling is never reached. Nothing is
+    written and the target is untouched, so it is slow, not unsafe.
+    ``os.access(directory, os.W_OK)`` is not the fix - measured on exactly such
+    a directory it returns True while ``open()`` raises. A real fix means
+    replacing ``mkstemp`` with a hand-rolled bounded O_EXCL loop, which is a
+    lot of new surface in the one function every write in the package goes
+    through, for a failure mode nobody has hit outside a test.
     """
     directory = os.path.dirname(os.path.abspath(path))
     prefix = "." + os.path.basename(path)[:_TEMP_NAME_LIMIT] + "."
@@ -353,7 +383,25 @@ def _make_backup(path: str) -> None:
         logger.warning("Could not back up %s before overwriting it: %s", path, e)
         return
     try:
-        with open(path, "rb") as source, os.fdopen(fd, "wb") as target:
+        target = os.fdopen(fd, "wb")
+    except OSError as e:
+        # fdopen did not take ownership of the descriptor; close it here or it
+        # leaks for the lifetime of the process. Failing to back up is never
+        # fatal (see above), so this is logged like every other backup failure.
+        os.close(fd)
+        _discard(tmp_path)
+        logger.warning("Could not back up %s before overwriting it: %s", path, e)
+        return
+    try:
+        # The descriptor goes into the `with` FIRST, and the source is opened
+        # inside it. The other way round - `with open(path, "rb") as source,
+        # os.fdopen(fd, "wb") as target:` - Python evaluates the source open
+        # first, so a source that cannot be read (a Windows sharing violation
+        # while a rename holds the file, an ACL error, a file that vanished)
+        # never reaches the fdopen and leaks the descriptor. On Windows the
+        # leak is visible: `_discard` below cannot unlink a file this very
+        # process still has open, and the `.bak.tmp` stray stays there for good.
+        with target, open(path, "rb") as source:
             shutil.copyfileobj(source, target)
             target.flush()
             os.fsync(target.fileno())

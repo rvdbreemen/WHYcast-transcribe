@@ -124,6 +124,16 @@ def write_merged_transcript(transcript_text: str, base_path: str) -> str:
         # stays True): a re-run would leave a .bak beside every artifact. The
         # atomic replace already guarantees no partial file; the backup only
         # kept the previous version.
+        #
+        # Worth being blunt about, because this file invites hand editing more
+        # than any other: <base>_merged.txt is a GENERATED ARTIFACT. Any full
+        # run rewrites it, there is no .bak (by decision, ADR-009) and
+        # podcasts/ is gitignored, so an edit made here is gone the next run.
+        # It is also the first file webui/runner.py:_read_transcript picks up
+        # as the input for a cheap re-run, which makes a hand edit *look* like
+        # it stuck - the speaker and postprocess jobs honour it right up until
+        # the next full run overwrites it. Corrections belong in a pipeline
+        # INPUT (the speaker mapping, vocabulary.json, a prompt), never here.
         atomic_write_text(merged_file, merged_text, backup=False)
 
         logging.info(f"Merged transcript written to: {merged_file}")

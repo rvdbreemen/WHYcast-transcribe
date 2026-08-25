@@ -466,8 +466,15 @@ def test_stream_is_not_buffered(live_server):
     progress while it runs, not arrive as a single burst at the end.
 
     So: a real uvicorn, a real socket, real ``httpx`` streaming, and arrival
-    times recorded per chunk. Five lines 0.3 s apart span about 1.2 s; a
+    times recorded per chunk. Five lines 0.6 s apart span about 2.4 s; a
     buffered response delivers all five at the same instant and fails here.
+
+    The spacing is deliberately four times the margin asserted below. At 0.3 s
+    this test failed intermittently on a loaded machine: the writer thread
+    stalls, several events land in one server-side poll, and they then arrive
+    together - which looks exactly like buffering without being it. The wide
+    gap keeps the real property (progress arrives while the job runs) provable
+    without the clock deciding the verdict.
     """
     base_url, app = live_server
     created = httpx.post(
@@ -482,7 +489,7 @@ def test_stream_is_not_buffered(live_server):
 
     def write():
         time.sleep(0.3)
-        write_events(path, [event_record(i, f"line {i}") for i in range(1, 6)], delay=0.3)
+        write_events(path, [event_record(i, f"line {i}") for i in range(1, 6)], delay=0.6)
         jobs_module.finish(conn, job["id"], "succeeded", exit_code=0)
 
     writer = threading.Thread(target=write, daemon=True)
