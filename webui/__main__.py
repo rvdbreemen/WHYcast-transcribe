@@ -111,10 +111,45 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _ensure_output_streams() -> Optional[str]:
+    """Give the process real stdout/stderr when Windows gave it none.
+
+    ``pythonw.exe`` started by Task Scheduler has no console, and CPython then
+    sets ``sys.stdout`` and ``sys.stderr`` to ``None``. uvicorn logs through a
+    ``StreamHandler`` on stdout, so the first log line raises and the server
+    exits before it ever binds - which is exactly how it fails: the scheduled
+    task reports result 1 and leaves nothing behind to explain it.
+
+    Running the same command from a shell does *not* reproduce this: the shell
+    hands over a pipe, so stdout exists and everything works. The difference is
+    the console, not the interpreter.
+
+    So when the streams are missing, point them at a log file and say where it
+    is. Returns that path, or None when the process already had streams.
+    """
+    if sys.stdout is not None and sys.stderr is not None:
+        return None
+
+    log_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs")
+    os.makedirs(log_dir, exist_ok=True)
+    log_path = os.path.join(log_dir, "webui-server.log")
+    # line_buffering so a crash does not take the last few lines with it - this
+    # file is the only witness a headless start has.
+    handle = open(log_path, "a", encoding="utf-8", buffering=1)
+    if sys.stdout is None:
+        sys.stdout = handle
+    if sys.stderr is None:
+        sys.stderr = handle
+    return log_path
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     """Run the server. Returns a process exit code."""
+    log_path = _ensure_output_streams()
     parser = build_parser()
     args = parser.parse_args(argv)
+    if log_path:
+        logging.getLogger(__name__).info("No console; logging to %s", log_path)
 
     # Flags win over the environment; both feed the same variables, which the
     # app reads when uvicorn imports it (including in a --reload child).

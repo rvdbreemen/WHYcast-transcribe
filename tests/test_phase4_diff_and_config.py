@@ -9,6 +9,7 @@ Two properties matter most here and both are about not lying to the reader:
   allowlist, because a denylist fails open the day someone adds a new key.
 """
 
+import io
 import json
 import os
 import sys
@@ -238,3 +239,42 @@ def test_config_page_renders(client):
     response = client.get("/config")
     assert response.status_code == 200
     assert "Configuration" in response.text
+
+
+# ---------------------------------------------------------------------------
+# Headless start (Task Scheduler)
+# ---------------------------------------------------------------------------
+
+
+def test_the_server_survives_having_no_console(tmp_path, monkeypatch):
+    """pythonw.exe under Task Scheduler gets sys.stdout is None.
+
+    Regression for a real failure: the scheduled task exited with result 1 and
+    left nothing behind, because uvicorn's StreamHandler wrote to a stdout that
+    did not exist. Running the same command from a shell could not reproduce it
+    - a shell hands over a pipe. The console is the difference, so the test has
+    to remove the streams rather than the terminal.
+    """
+    from webui.__main__ import _ensure_output_streams
+
+    monkeypatch.setattr(sys, "stdout", None)
+    monkeypatch.setattr(sys, "stderr", None)
+
+    log_path = _ensure_output_streams()
+
+    assert sys.stdout is not None and sys.stderr is not None
+    assert log_path and log_path.endswith("webui-server.log")
+    # Writable, because a stream that raises on write is no better than None.
+    sys.stdout.write("probe\n")
+
+
+def test_a_process_that_has_streams_is_left_alone(monkeypatch):
+    """Never replace a working stdout: that would swallow console output."""
+    from webui.__main__ import _ensure_output_streams
+
+    marker = io.StringIO()
+    monkeypatch.setattr(sys, "stdout", marker)
+    monkeypatch.setattr(sys, "stderr", marker)
+
+    assert _ensure_output_streams() is None
+    assert sys.stdout is marker

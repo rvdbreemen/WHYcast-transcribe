@@ -209,3 +209,6 @@ transcribe.log
 
 # Generated knowledge graph (graphify). Regenerate with /graphify; not source.
 graphify-out/
+
+# Server log written when the web UI starts without a console (Task Scheduler)
+logs/webui-server.log
