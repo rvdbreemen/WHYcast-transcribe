@@ -4,6 +4,7 @@ title: 'WebUI fase 4: afwerking (diff-weergave, config-viewer, autostart)'
 status: To Do
 assignee: []
 created_date: '2026-08-24 19:59'
+updated_date: '2026-08-25 21:58'
 labels:
   - webui
 dependencies:
@@ -24,7 +25,20 @@ Optionele afwerking na fase 3, op volgorde van nut: diff-weergave oud/nieuw arte
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Diff-weergave toont verschillen tussen vorige en nieuwe versie van een artefact na her-run
-- [ ] #2 Config-viewer toont uitsluitend allowlisted keys; OPENAI_API_KEY en HF-token komen in geen enkele API-response voor
+- [x] #1 Diff-weergave toont verschillen tussen vorige en nieuwe versie van een artefact na her-run
+- [x] #2 Config-viewer toont uitsluitend allowlisted keys; OPENAI_API_KEY en HF-token komen in geen enkele API-response voor
 - [ ] #3 Server en worker starten automatisch mee met Windows indien geconfigureerd
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Zelf gebouwd (geen workflow). Diff werkt via een before-snapshot in logs/jobs/<id>/before/ in plaats van .bak - ADR-009 haalde die weg uit podcasts/ en dit brengt ze niet terug. Snapshot is best-effort: een job mag nooit falen omdat de kopie voor latere inspectie misging. Config-viewer is read-only met allowlist; twee tests bewijzen dat er geen secret in komt, ook niet wanneer er een nieuwe in whycast.config wordt geplant. 16 nieuwe tests, volledige suite 806 passed / 1 skipped. Config-pagina op de draaiende server opgevraagd: 200, host 127.0.0.1, 23 settings en 7 padverwijzingen, geen sleutels.
+AC #3 NIET afgevinkt: scripts/install-autostart.ps1 is geschreven en syntactisch gecontroleerd, maar ik heb de scheduled tasks niet geregistreerd - dat is een wijziging aan de machine-instellingen en die hoort Robert zelf te draaien. Pas na 'scripts\install-autostart.ps1' plus een herstart is dit criterium echt aantoonbaar.
+<!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Afwerking opgeleverd: diff-weergave per job tegen een before-snapshot in de job-logmap (niet via .bak, ADR-009), read-only config-viewer met allowlist die geen secrets kan tonen, en een autostart-script voor server en worker als twee losse logon-taken. Geverifieerd met 806 passed/1 skipped en een sessie op de draaiende server. Autostart is bewust niet geinstalleerd: dat wijzigt machine-instellingen en is aan de eigenaar.
+<!-- SECTION:FINAL_SUMMARY:END -->
