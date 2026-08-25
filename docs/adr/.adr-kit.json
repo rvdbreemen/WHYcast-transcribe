@@ -1,0 +1,12 @@
+{
+  "judge": {
+    "backend": "host",
+    "llm_enabled": true
+  },
+  "suggest": {
+    "enabled": true
+  },
+  "guardian": {
+    "enabled": true
+  }
+}
