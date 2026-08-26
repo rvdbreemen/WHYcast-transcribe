@@ -3,8 +3,9 @@ Optional-dependency shims for the WHYcast pipeline (ADR-008).
 
 Mirrors the legacy top-of-transcribe.py try/except import blocks, but without
 sys.exit() and without logging at import time. Modules that need an optional
-dependency import its shim from here; a hard requirement that is missing
-raises DependencyError at *use* time, not at import time.
+dependency import its shim from here and check the matching
+``*_available`` flag before use, so a missing one degrades the step that
+needs it rather than failing the whole run at import time.
 """
 
 openai_available = False

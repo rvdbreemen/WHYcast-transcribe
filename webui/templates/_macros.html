@@ -62,19 +62,15 @@
 {%- endmacro %}
 
 
-{# Both macros read episode.formats (kind -> list of formats on disk), which
-   webui.db puts on EVERY episode dict. They must not reach for
-   episode.artifacts: the overview calls db.list_episodes(), which does not
-   nest artifact rows, and Jinja resolves a missing key to Undefined - falsy,
-   never an error - so a selectattr over it yields nothing and silently draws
-   the whole matrix as "missing" while the page still returns 200. #}
-{% macro formats_of(episode, kind) -%}
-{{ (episode.formats.get(kind) or [])|join(', ') }}
-{%- endmacro %}
-
-
 {# One matrix cell: filled when the episode has this kind, with the available
-   formats in the tooltip. #}
+   formats in the tooltip.
+
+   It reads episode.formats (kind -> list of formats on disk), which webui.db
+   puts on EVERY episode dict. It must not reach for episode.artifacts: the
+   overview calls db.list_episodes(), which does not nest artifact rows, and
+   Jinja resolves a missing key to Undefined - falsy, never an error - so a
+   selectattr over it yields nothing and silently draws the whole matrix as
+   "missing" while the page still returns 200. #}
 {% macro cell(episode, kind) -%}
 {% set formats = episode.formats.get(kind) or [] %}
 {% if formats %}<td class="cell on" title="{{ kind }}: {{ formats|join(', ') }}">&#9679;</td>{% else %}<td class="cell off" title="{{ kind }}: missing">&middot;</td>{% endif %}
