@@ -70,6 +70,7 @@ from whycast.events import ProgressEvent, emit, use_sink
 
 from webui import db as webui_db
 from webui import jobs
+from webui.jobs import STEP_JOBS
 from webui import snapshots
 
 __all__ = [
@@ -450,58 +451,10 @@ def _job_fetch_latest(ctx: _Context) -> None:
     full_workflow(audio_file=None, rssfeed=feed, output_dir=ctx.output_dir)
 
 
-#: One post-processing step, re-runnable on its own (TASK-004 follow-up).
-#:
-#: ``needs`` names the artifact kinds the step reads. They have to be on disk,
-#: which is the whole reason ``<base>_cleaned.txt`` is written again: without
-#: it, nothing downstream of cleanup could be repeated without redoing cleanup
-#: too, and paying for it.
-#:
-#: ``writes`` is what the step replaces, and therefore what is moved aside
-#: before it runs (ADR-011).
-_STEP_JOBS = {
-    "cleanup": {
-        "label": "Cleanup only",
-        "needs": (),          # starts from the transcript, like a full run
-        "writes": ("cleaned",),
-        "description": (
-            "Cleans the transcript again and writes <base>_cleaned.txt. Every "
-            "step below reads that file, so re-run this one after editing the "
-            "cleanup prompt."
-        ),
-    },
-    "summary": {
-        "label": "Summary only",
-        "needs": ("cleaned",),
-        "writes": ("summary",),
-        "description": "Rewrites the summary from the cleaned transcript.",
-    },
-    "blog": {
-        "label": "Blog only",
-        "needs": ("cleaned", "summary"),
-        "writes": ("blog",),
-        "description": "Rewrites the blog post from the cleaned transcript and the summary.",
-    },
-    "blog_alt1": {
-        "label": "Alternative blog only",
-        "needs": ("cleaned", "summary"),
-        "writes": ("blog_alt1",),
-        "description": (
-            "Rewrites the alternative blog post. Needs prompts/blog_alt1_prompt.txt, "
-            "which is currently renamed to .bk, so this step does nothing until that "
-            "is put back."
-        ),
-    },
-    "history": {
-        "label": "History extraction only",
-        "needs": ("cleaned",),
-        "writes": ("history",),
-        "description": "Rewrites the history extraction from the cleaned transcript.",
-    },
-}
-
-#: ``step_summary`` and friends, in the order the pipeline runs them.
-STEP_JOB_TYPES = tuple(f"step_{name}" for name in _STEP_JOBS)
+#: ``step_summary`` and friends, in the order the pipeline runs them. The
+#: table itself lives in :mod:`webui.jobs`, which knows nothing about the
+#: pipeline - the dependency runs that way and not the other.
+STEP_JOB_TYPES = tuple(f"step_{name}" for name in STEP_JOBS)
 
 
 def _read_artifact(ctx: _Context, episode: Dict[str, Any], kind: str) -> str:
@@ -543,7 +496,7 @@ def _read_artifact(ctx: _Context, episode: Dict[str, Any], kind: str) -> str:
 
 def _make_step_handler(step_name: str):
     """Build the runner handler for one post-processing step."""
-    spec = _STEP_JOBS[step_name]
+    spec = STEP_JOBS[step_name]
 
     def handler(ctx: _Context) -> None:
         from whycast.pipeline import postprocess
@@ -735,7 +688,7 @@ _HANDLERS: Dict[str, Callable[[_Context], None]] = {
 # One handler per post-processing step, built from the same table the job
 # catalogue and the backup rules read, so the three cannot drift apart.
 _HANDLERS.update(
-    {f"step_{name}": _make_step_handler(name) for name in _STEP_JOBS}
+    {f"step_{name}": _make_step_handler(name) for name in STEP_JOBS}
 )
 
 
@@ -1060,7 +1013,7 @@ _JOB_OUTPUT_KINDS = {
 # Each single-step job replaces exactly what its step writes, and nothing else.
 # That is the point of running one step: everything around it stays put.
 _JOB_OUTPUT_KINDS.update(
-    {f"step_{name}": frozenset(spec["writes"]) for name, spec in _STEP_JOBS.items()}
+    {f"step_{name}": frozenset(spec["writes"]) for name, spec in STEP_JOBS.items()}
 )
 
 

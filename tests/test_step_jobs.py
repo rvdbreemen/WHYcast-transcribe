@@ -23,7 +23,7 @@ if REPO_ROOT not in sys.path:
 
 from webui import jobs as jobs_module  # noqa: E402
 from webui import runner as runner_module  # noqa: E402
-from webui.runner import STEP_JOB_TYPES, _STEP_JOBS  # noqa: E402
+from webui.runner import STEP_JOB_TYPES, STEP_JOBS  # noqa: E402
 from whycast.errors import WhycastError  # noqa: E402
 
 
@@ -46,7 +46,7 @@ def test_a_step_replaces_only_its_own_output():
     This is the whole point: the summary you were happy with survives a blog
     re-run, so it is neither regenerated nor moved to the backup.
     """
-    for name, spec in _STEP_JOBS.items():
+    for name, spec in STEP_JOBS.items():
         moved = runner_module._JOB_OUTPUT_KINDS[f"step_{name}"]
         assert moved == frozenset(spec["writes"])
         assert len(moved) == 1, "a single step writes a single kind"
@@ -74,11 +74,11 @@ def test_the_steps_are_offered_in_pipeline_order():
 
 def test_the_dependency_chain_is_declared_honestly():
     """What each step reads has to match what the step function needs."""
-    assert _STEP_JOBS["cleanup"]["needs"] == ()
-    assert _STEP_JOBS["summary"]["needs"] == ("cleaned",)
-    assert _STEP_JOBS["blog"]["needs"] == ("cleaned", "summary")
-    assert _STEP_JOBS["blog_alt1"]["needs"] == ("cleaned", "summary")
-    assert _STEP_JOBS["history"]["needs"] == ("cleaned",)
+    assert STEP_JOBS["cleanup"]["needs"] == ()
+    assert STEP_JOBS["summary"]["needs"] == ("cleaned",)
+    assert STEP_JOBS["blog"]["needs"] == ("cleaned", "summary")
+    assert STEP_JOBS["blog_alt1"]["needs"] == ("cleaned", "summary")
+    assert STEP_JOBS["history"]["needs"] == ("cleaned",)
 
 
 # ---------------------------------------------------------------------------
@@ -211,3 +211,54 @@ def test_the_cleanup_step_writes_the_cleaned_transcript(tmp_path, monkeypatch):
 
     written = tmp_path / "episode_42_cleaned.txt"
     assert written.read_text(encoding="utf-8") == "opgeschoond\n"
+
+
+# ---------------------------------------------------------------------------
+# Import order
+# ---------------------------------------------------------------------------
+
+
+def test_the_runner_imports_on_its_own(tmp_path):
+    """``import webui.runner`` must work without webui.jobs being loaded first.
+
+    Regression for a circular import: the step table lived in the runner and
+    webui.jobs imported it back, so webui.jobs depended on webui.runner and
+    webui.runner on webui.jobs. Importing either one first was fine; importing
+    the runner *first* raised ImportError.
+
+    ``python -m webui.runner`` - how the worker starts it - survived that by
+    accident: ``-m`` loads the file as ``__main__`` and then imports the module
+    a second time under its real name, which completes. So the broken import
+    was invisible from the one entry point that mattered, and surfaced only
+    when something did a plain import.
+
+    Run in a subprocess with an empty module cache, because by the time this
+    test runs the package is long since imported.
+    """
+    import subprocess
+
+    result = subprocess.run(
+        [sys.executable, "-c",
+         "import sys; sys.path.insert(0, r'%s');"
+         "import webui.runner as r;"
+         "print(len(r.STEP_JOB_TYPES))" % REPO_ROOT],
+        capture_output=True, text=True, timeout=300, cwd=REPO_ROOT,
+    )
+
+    assert result.returncode == 0, (
+        f"importing webui.runner first failed:\n{result.stderr[-1500:]}"
+    )
+    assert result.stdout.strip() == "5"
+
+
+def test_the_step_table_lives_below_the_runner():
+    """The table is in webui.jobs, which knows nothing about the pipeline.
+
+    Direction matters: webui.jobs is imported by the web server, which must not
+    pull in torch. Keeping the table there is what lets the runner depend on
+    jobs and not the other way round.
+    """
+    from webui import jobs as jobs_mod
+
+    assert hasattr(jobs_mod, "STEP_JOBS")
+    assert runner_module.STEP_JOBS is jobs_mod.STEP_JOBS
