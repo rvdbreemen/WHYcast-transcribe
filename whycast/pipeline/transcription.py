@@ -18,16 +18,21 @@ import torch
 # CTranslate2 (behind faster_whisper) loads the CUDA 12 runtime at import time;
 # register the pip-installed CUDA libs first or it cannot find cublas64_12.dll.
 from whycast.cuda_setup import ensure_cuda_libs
+from whycast.logging_setup import quiet_torch_logging
 
 ensure_cuda_libs()
 
 from faster_whisper import WhisperModel  # noqa: E402  (must follow ensure_cuda_libs)
 
-from whycast._deps import tqdm
-from whycast.config import BEAM_SIZE, MODEL_SIZE, USE_CUSTOM_VOCABULARY, VOCABULARY_FILE
-from whycast.events import emit
-from whycast.io_utils import atomic_write_text
-from whycast.pipeline.gpu import force_cuda_device
+# torch is loaded by now, and importing it reset the logger levels that
+# setup_logging() had already set. Re-apply them here, where they stick.
+quiet_torch_logging()
+
+from whycast._deps import tqdm  # noqa: E402
+from whycast.config import BEAM_SIZE, MODEL_SIZE, USE_CUSTOM_VOCABULARY, VOCABULARY_FILE  # noqa: E402
+from whycast.events import emit  # noqa: E402
+from whycast.io_utils import atomic_write_text  # noqa: E402
+from whycast.pipeline.gpu import force_cuda_device  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
