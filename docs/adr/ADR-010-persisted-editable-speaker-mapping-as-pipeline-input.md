@@ -16,6 +16,7 @@ superseded_by: null
 related:
   - "ADR-004"
   - "ADR-009"
+  - "ADR-011"
 topics:
   - "speaker-assignment"
   - "correction-workflow"
@@ -69,6 +70,11 @@ status_history:
     status: Accepted
     changed_by: "User: Robert van den Breemen"
     reason: Accepted by Robert on request, 2026-08-25; implemented and verified in phase 3
+    changed_via: adr-kit lifecycle
+  - date: 2026-08-26
+    status: Accepted
+    changed_by: "User: Robert van den Breemen"
+    reason: Related to ADR-011
     changed_via: adr-kit lifecycle
 ```
 

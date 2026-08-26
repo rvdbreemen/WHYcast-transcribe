@@ -12,6 +12,7 @@ superseded_by: null
 related:
   - "ADR-008"
   - "ADR-010"
+  - "ADR-011"
 topics:
   - "artifact-writes"
   - "downloads"
@@ -61,6 +62,11 @@ status_history:
     status: Accepted
     changed_by: "User: Robert van den Breemen"
     reason: Related to ADR-010
+    changed_via: adr-kit lifecycle
+  - date: 2026-08-26
+    status: Accepted
+    changed_by: "User: Robert van den Breemen"
+    reason: Related to ADR-011
     changed_via: adr-kit lifecycle
 ```
 

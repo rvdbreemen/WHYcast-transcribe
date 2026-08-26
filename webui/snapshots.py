@@ -137,6 +137,52 @@ def take_snapshot(
     return manifest
 
 
+def record_backup(
+    job_id: str,
+    base_name: str,
+    artifacts: List[Dict[str, Any]],
+    moved: List,
+    backup_dir: str,
+) -> Optional[Dict[str, Any]]:
+    """Record where a run's previous artifacts went (ADR-011).
+
+    The files themselves now live in the backup tree rather than being copied
+    here, so this writes only the manifest: which artifact, and the path it was
+    moved to. That is what the diff view reads to find the previous version.
+    """
+    relocated = {os.path.abspath(src): dst for src, dst in moved}
+    entries = []
+    for artifact in artifacts:
+        path = artifact.get("path")
+        destination = relocated.get(os.path.abspath(path)) if path else None
+        entries.append(
+            {
+                "kind": artifact.get("kind"),
+                "fmt": artifact.get("fmt"),
+                "filename": os.path.basename(path) if path else None,
+                "source": path,
+                "backup": destination,
+                "copied": bool(destination),
+                "reason": None if destination else "was not on disk when the job started",
+            }
+        )
+
+    manifest = {
+        "job_id": job_id,
+        "base_name": base_name,
+        "backup_dir": backup_dir,
+        "artifacts": entries,
+    }
+    try:
+        os.makedirs(snapshot_dir(job_id), exist_ok=True)
+        with open(manifest_path(job_id), "w", encoding="utf-8") as handle:
+            json.dump(manifest, handle, indent=2, sort_keys=True)
+    except OSError as exc:
+        logger.warning("Could not write the backup manifest for %s: %s", job_id, exc)
+        return None
+    return manifest
+
+
 def load_manifest(job_id: str) -> Optional[Dict[str, Any]]:
     """Read a job's snapshot manifest, or None when it has none."""
     try:

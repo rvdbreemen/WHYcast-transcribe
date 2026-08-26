@@ -14,6 +14,7 @@ related:
   - "ADR-002"
   - "ADR-007"
   - "ADR-009"
+  - "ADR-011"
 topics:
   - "web-ui"
   - "pipeline-architecture"
@@ -80,6 +81,11 @@ status_history:
     status: Accepted
     changed_by: "User: Robert van den Breemen"
     reason: Related to ADR-009
+    changed_via: adr-kit lifecycle
+  - date: 2026-08-26
+    status: Accepted
+    changed_by: "User: Robert van den Breemen"
+    reason: Related to ADR-011
     changed_via: adr-kit lifecycle
 ```
 

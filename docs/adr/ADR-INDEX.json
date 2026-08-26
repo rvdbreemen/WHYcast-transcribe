@@ -426,7 +426,7 @@
       "path": "ADR-008-web-ui-as-fastapi-layer-over-extracted-pipeline-library.md",
       "format": "madr",
       "status": "Accepted",
-      "date": "2026-08-25",
+      "date": "2026-08-26",
       "decision_summary": "Chosen option: Option A, because only library extraction gives the web layer structured progress, typed errors, and p...",
       "topics": [
         "job-orchestration",
@@ -496,7 +496,7 @@
       "path": "ADR-009-discard-partial-downloads-and-drop-per-artifact-backups.md",
       "format": "madr",
       "status": "Accepted",
-      "date": "2026-08-25",
+      "date": "2026-08-26",
       "decision_summary": "Chosen option: Option A, because it removes the noise where it is generated without weakening the primitive: whycast....",
       "topics": [
         "artifact-writes",
@@ -554,7 +554,7 @@
       "path": "ADR-010-persisted-editable-speaker-mapping-as-pipeline-input.md",
       "format": "madr",
       "status": "Accepted",
-      "date": "2026-08-25",
+      "date": "2026-08-26",
       "decision_summary": "Chosen option: Option A.",
       "topics": [
         "correction-workflow",
@@ -610,6 +610,74 @@
           "whycast/episodes.py",
           "tests/test_speaker_mapping_precedence.py",
           "tests/test_webui_speakers_editor.py"
+        ],
+        "supersedes": [],
+        "superseded_by": null
+      }
+    },
+    {
+      "id": "ADR-011",
+      "title": "Versioned artifact backups moved aside before every run",
+      "path": "ADR-011-versioned-artifact-backups-moved-aside-before-every-run.md",
+      "format": "madr",
+      "status": "Proposed",
+      "date": "2026-08-26",
+      "decision_summary": "Chosen option: Option A.",
+      "topics": [
+        "artifact-writes",
+        "data-durability",
+        "job-orchestration"
+      ],
+      "aliases": [
+        "backups directory",
+        "move aside",
+        "run stamp"
+      ],
+      "components": [
+        "webui.runner",
+        "whycast.backups"
+      ],
+      "symbols": [
+        "copy_to_backup",
+        "move_artifacts",
+        "move_to_backup",
+        "run_stamp"
+      ],
+      "context_scope": "selective",
+      "decision_contract": {
+        "must": [
+          "Before a job runs, every artifact kind it will write is moved into backups/ / /.",
+          "A kind the job also reads is copied there instead, so the job still finds its input.",
+          "A backup path that already exists gets a counter; an existing backup is never overwritten or removed.",
+          "Anything moved aside that the run did not rewrite is restored when the job finishes.",
+          "The run stamp is fixed once per process, so one run produces one directory.",
+          "Pipeline inputs - vocabulary.json, prompts/.txt, speakers.json - are never moved. They are read, not written (ADR-010)."
+        ],
+        "must_not": [
+          "Do not reintroduce .bak files beside artifacts in podcasts/ (ADR-009 stands).",
+          "Do not delete anything from the backup tree automatically. Pruning it is the owner's decision, taken with the files in front of them.",
+          "Do not let a failure to back up be silent: a job that cannot preserve what it is about to replace must refuse to start."
+        ],
+        "exceptions": [
+          "Audio downloads are not backed up: the source recording is not something a run replaces, and a 20-100 MB copy per download buys nothing."
+        ],
+        "verification": [
+          "tests/testartifactbackups.py, tests/teststepjobs.py.",
+          "whycast/backups.py - movetobackup, copytobackup, unique.",
+          "webui/runner.py - backupbefore, restoreunwritten, JOBOUTPUTKINDS, JOBINPUTKINDS."
+        ]
+      },
+      "scope": {
+        "path_globs": []
+      },
+      "metadata": {
+        "binding": false,
+        "gate": null,
+        "documents_shipped": false,
+        "verified_in": [
+          "whycast/backups.py",
+          "webui/runner.py",
+          "tests/test_artifact_backups.py"
         ],
         "supersedes": [],
         "superseded_by": null
@@ -708,6 +776,12 @@
       "resolved": true
     },
     {
+      "source": "ADR-008",
+      "target": "ADR-011",
+      "type": "related",
+      "resolved": true
+    },
+    {
       "source": "ADR-009",
       "target": "ADR-008",
       "type": "related",
@@ -716,6 +790,12 @@
     {
       "source": "ADR-009",
       "target": "ADR-010",
+      "type": "related",
+      "resolved": true
+    },
+    {
+      "source": "ADR-009",
+      "target": "ADR-011",
       "type": "related",
       "resolved": true
     },
@@ -734,6 +814,30 @@
     {
       "source": "ADR-010",
       "target": "ADR-009",
+      "type": "related",
+      "resolved": true
+    },
+    {
+      "source": "ADR-010",
+      "target": "ADR-011",
+      "type": "related",
+      "resolved": true
+    },
+    {
+      "source": "ADR-011",
+      "target": "ADR-008",
+      "type": "related",
+      "resolved": true
+    },
+    {
+      "source": "ADR-011",
+      "target": "ADR-009",
+      "type": "related",
+      "resolved": true
+    },
+    {
+      "source": "ADR-011",
+      "target": "ADR-010",
       "type": "related",
       "resolved": true
     }
