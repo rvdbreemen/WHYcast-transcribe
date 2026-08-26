@@ -244,6 +244,20 @@ JOB_TYPES: Dict[str, Dict[str, Any]] = {
             "transcription and no GPU."
         ),
     },
+    "retranscribe": {
+        "gpu": True,
+        "cost": False,
+        "requires_base_name": True,
+        "label": "Re-transcribe (no AI steps)",
+        "description": (
+            "Diarizes and transcribes the audio again, and stops there. The one "
+            "GPU job that costs nothing: no OpenAI calls at all. Use it after "
+            "changing the Whisper model, the vocabulary or the diarization "
+            "settings. The summary, blog and history already on disk are left "
+            "alone and will describe the previous transcript until you re-run "
+            "post-processing."
+        ),
+    },
     "speakers": {
         "gpu": False,
         "cost": True,
@@ -255,6 +269,29 @@ JOB_TYPES: Dict[str, Dict[str, Any]] = {
         ),
     },
 }
+
+#: One job per post-processing step, so a single step can be repeated on its own
+#: instead of paying for the four that were already right. Editing one prompt
+#: and re-running the whole chain costs four model calls to see one change.
+#:
+#: The catalogue is generated from :data:`webui.runner._STEP_JOBS`, which also
+#: drives the handlers and the backup rules, so a step cannot exist in one of
+#: the three and be missing from another. Imported lazily: this module must stay
+#: importable without the runner, which pulls in the pipeline.
+def _register_step_jobs() -> None:
+    from webui.runner import _STEP_JOBS
+
+    for name, spec in _STEP_JOBS.items():
+        JOB_TYPES[f"step_{name}"] = {
+            "gpu": False,
+            "cost": True,
+            "requires_base_name": True,
+            "label": spec["label"],
+            "description": spec["description"],
+        }
+
+
+_register_step_jobs()
 
 
 class JobQueueError(WhycastError):

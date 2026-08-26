@@ -57,6 +57,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import sqlite3
 import sys
 import time
@@ -64,6 +65,7 @@ import traceback
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from whycast.errors import PipelineError, SecurityError, WhycastError
+from whycast import backups
 from whycast.events import ProgressEvent, emit, use_sink
 
 from webui import db as webui_db
@@ -448,6 +450,164 @@ def _job_fetch_latest(ctx: _Context) -> None:
     full_workflow(audio_file=None, rssfeed=feed, output_dir=ctx.output_dir)
 
 
+#: One post-processing step, re-runnable on its own (TASK-004 follow-up).
+#:
+#: ``needs`` names the artifact kinds the step reads. They have to be on disk,
+#: which is the whole reason ``<base>_cleaned.txt`` is written again: without
+#: it, nothing downstream of cleanup could be repeated without redoing cleanup
+#: too, and paying for it.
+#:
+#: ``writes`` is what the step replaces, and therefore what is moved aside
+#: before it runs (ADR-011).
+_STEP_JOBS = {
+    "cleanup": {
+        "label": "Cleanup only",
+        "needs": (),          # starts from the transcript, like a full run
+        "writes": ("cleaned",),
+        "description": (
+            "Cleans the transcript again and writes <base>_cleaned.txt. Every "
+            "step below reads that file, so re-run this one after editing the "
+            "cleanup prompt."
+        ),
+    },
+    "summary": {
+        "label": "Summary only",
+        "needs": ("cleaned",),
+        "writes": ("summary",),
+        "description": "Rewrites the summary from the cleaned transcript.",
+    },
+    "blog": {
+        "label": "Blog only",
+        "needs": ("cleaned", "summary"),
+        "writes": ("blog",),
+        "description": "Rewrites the blog post from the cleaned transcript and the summary.",
+    },
+    "blog_alt1": {
+        "label": "Alternative blog only",
+        "needs": ("cleaned", "summary"),
+        "writes": ("blog_alt1",),
+        "description": (
+            "Rewrites the alternative blog post. Needs prompts/blog_alt1_prompt.txt, "
+            "which is currently renamed to .bk, so this step does nothing until that "
+            "is put back."
+        ),
+    },
+    "history": {
+        "label": "History extraction only",
+        "needs": ("cleaned",),
+        "writes": ("history",),
+        "description": "Rewrites the history extraction from the cleaned transcript.",
+    },
+}
+
+#: ``step_summary`` and friends, in the order the pipeline runs them.
+STEP_JOB_TYPES = tuple(f"step_{name}" for name in _STEP_JOBS)
+
+
+def _read_artifact(ctx: _Context, episode: Dict[str, Any], kind: str) -> str:
+    """Read one artifact this step needs, or say precisely what is missing.
+
+    A single step can only be repeated when its input is on disk. When it is
+    not, the message names the file *and* the job that produces it, because
+    "summary not found" leaves the reader to work out that post-processing or
+    the summary step would create one.
+    """
+    artifacts = [a for a in (episode.get("artifacts") or []) if a["kind"] == kind]
+    candidates = _sorted_by_format(artifacts)
+    if not candidates:
+        produced_by = {
+            "cleaned": "'Cleanup only', or the full post-processing run",
+            "summary": "'Summary only', or the full post-processing run",
+        }.get(kind, "the full post-processing run")
+        raise JobInputError(
+            f"This step reads the {kind} of {episode['base_name']}, and there is "
+            f"none on disk. Run {produced_by} first."
+        )
+
+    path = candidates[0]["path"]
+    _require_inside(path, ctx.output_dir, f"{kind} for {episode['base_name']}")
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            text = handle.read()
+    except OSError as exc:
+        raise JobInputError(f"Could not read {path}: {exc}") from exc
+    except UnicodeDecodeError as exc:
+        raise JobInputError(
+            f"{path} is not valid UTF-8 ({exc}); the pipeline writes UTF-8, so "
+            f"this file was written by something else."
+        ) from exc
+    if not text.strip():
+        raise JobInputError(f"{path} is empty, so this step has nothing to work from.")
+    return text
+
+
+def _make_step_handler(step_name: str):
+    """Build the runner handler for one post-processing step."""
+    spec = _STEP_JOBS[step_name]
+
+    def handler(ctx: _Context) -> None:
+        from whycast.pipeline import postprocess
+
+        if step_name == "cleanup":
+            episode, transcript, path = _read_transcript(ctx)
+            emit(
+                "postprocess",
+                f"Cleanup only, from {os.path.basename(path)}.",
+                base_name=episode["base_name"],
+            )
+            cleaned = postprocess.cleanup_step(transcript)
+            postprocess._save_cleaned(
+                cleaned, transcript, episode["base_name"], ctx.output_dir
+            )
+            return
+
+        episode = _resolve_episode(ctx)
+        inputs = {kind: _read_artifact(ctx, episode, kind) for kind in spec["needs"]}
+        emit(
+            "postprocess",
+            f"{spec['label']} for {episode['base_name']}, from "
+            f"{', '.join(spec['needs'])}.",
+            base_name=episode["base_name"],
+        )
+        base, out = episode["base_name"], ctx.output_dir
+
+        if step_name == "summary":
+            postprocess.summary_step(inputs["cleaned"], base, out)
+        elif step_name == "blog":
+            postprocess.blog_step(inputs["cleaned"], inputs["summary"], base, out)
+        elif step_name == "blog_alt1":
+            postprocess.alt_blog_step(inputs["cleaned"], inputs["summary"], base, out)
+        elif step_name == "history":
+            postprocess.history_step(inputs["cleaned"], base, out)
+
+    handler.__name__ = f"_job_step_{step_name}"
+    handler.__doc__ = f"Re-run only the {step_name} step."
+    return handler
+
+
+def _job_retranscribe(ctx: _Context) -> None:
+    """Diarize and transcribe again, and stop before anything paid.
+
+    The only GPU job that spends nothing. It exists because the reasons to want
+    a fresh transcript - a different Whisper model, an edited vocabulary
+    (ADR-006), changed diarization settings (ADR-002) - have nothing to do with
+    the language-model steps, and paying for a new summary to see whether a
+    vocabulary fix landed is a poor trade.
+    """
+    from whycast.pipeline.workflow import full_workflow
+
+    episode, audio = _resolve_audio(ctx)
+    emit(
+        "workflow",
+        f"Re-transcribing {episode['base_name']} from {os.path.basename(audio)}; "
+        f"no OpenAI calls will be made.",
+        base_name=episode["base_name"],
+        audio_path=audio,
+        output_dir=ctx.output_dir,
+    )
+    full_workflow(audio_file=audio, output_dir=ctx.output_dir, skip_postprocess=True)
+
+
 def _job_full_episode(ctx: _Context) -> None:
     """Run the full pipeline on one episode's existing audio."""
     from whycast.pipeline.workflow import full_workflow
@@ -565,11 +725,18 @@ _HANDLERS: Dict[str, Callable[[_Context], None]] = {
     "selftest": _job_selftest,
     "fetch_all": _job_fetch_all,
     "fetch_latest": _job_fetch_latest,
+    "retranscribe": _job_retranscribe,
     "full_episode": _job_full_episode,
     "force_episode": _job_force_episode,
     "postprocess": _job_postprocess,
     "speakers": _job_speakers,
 }
+
+# One handler per post-processing step, built from the same table the job
+# catalogue and the backup rules read, so the three cannot drift apart.
+_HANDLERS.update(
+    {f"step_{name}": _make_step_handler(name) for name in _STEP_JOBS}
+)
 
 
 # ---------------------------------------------------------------------------
@@ -827,7 +994,7 @@ def _run_job_row(conn: sqlite3.Connection, job_id: str, started: float) -> int:
             # twenty minutes.
             _require_api_key(ctx)
         ctx.check_cancel("before starting")
-        _snapshot_before(ctx)
+        _backup_before(ctx)
         handler(ctx)
     except JobCancelled as exc:
         return _finish_cancelled(conn, job_id, str(exc), started)
@@ -839,6 +1006,8 @@ def _run_job_row(conn: sqlite3.Connection, job_id: str, started: float) -> int:
         # Everything else - whycast.errors.* and anything the library did not
         # anticipate - is "the pipeline ran and failed": exit code 1.
         return _finish_failed(conn, job_id, exc, EXIT_PIPELINE_ERROR, started)
+
+    _restore_unwritten(ctx)
 
     elapsed = time.time() - started
     emit(
@@ -854,37 +1023,170 @@ def _run_job_row(conn: sqlite3.Connection, job_id: str, started: float) -> int:
     return EXIT_OK
 
 
-def _snapshot_before(ctx: _Context) -> None:
-    """Copy the episode's current artifacts aside so the run can be diffed.
+#: What each job type writes, and therefore what has to be moved out of the way
+#: before it starts (ADR-011). Kinds absent from a set are that job's *input*:
+#: a post-processing run reads the transcript it would otherwise be deprived of.
+#:
+#: ``speakers_map`` is in no set at all. It is human input (ADR-010), the one
+#: file here a person edits, and a re-run must reproduce their correction rather
+#: than file it away.
+_JOB_OUTPUT_KINDS = {
+    "fetch_latest": frozenset({
+        "transcript", "ts", "cleaned", "summary", "blog", "blog_alt1",
+        "history", "speaker_assignment", "analysis", "merged",
+    }),
+    "full_episode": frozenset({
+        "transcript", "ts", "cleaned", "summary", "blog", "blog_alt1",
+        "history", "speaker_assignment", "analysis", "merged",
+    }),
+    "force_episode": frozenset({
+        "transcript", "ts", "cleaned", "summary", "blog", "blog_alt1",
+        "history", "speaker_assignment", "analysis", "merged",
+    }),
+    # Rewrites the transcript and everything derived from the audio, and stops
+    # there. The summary and its siblings are deliberately left where they are:
+    # they belong to the previous transcript, and moving them aside would delete
+    # the only description of the episode this run does not replace.
+    "retranscribe": frozenset({"transcript", "ts", "merged"}),
+    # Reads the transcript and the timestamped transcript; rewrites the rest.
+    "postprocess": frozenset({
+        "cleaned", "summary", "blog", "blog_alt1", "history",
+        "speaker_assignment", "analysis", "merged",
+    }),
+    # Reads the transcript; rewrites only what speaker assignment produces.
+    "speakers": frozenset({"speaker_assignment", "analysis", "merged"}),
+}
 
-    Only for jobs that target one episode: a feed download writes no artifact to
-    compare against. Best-effort throughout - a job must never fail because the
-    copy it was making for later inspection did not work out (see
-    :mod:`webui.snapshots` for why the copy lives with the job rather than
-    beside the artifact).
+# Each single-step job replaces exactly what its step writes, and nothing else.
+# That is the point of running one step: everything around it stays put.
+_JOB_OUTPUT_KINDS.update(
+    {f"step_{name}": frozenset(spec["writes"]) for name, spec in _STEP_JOBS.items()}
+)
+
+
+#: What each job type *reads* from the artifacts already on disk. A kind that
+#: is in both this and :data:`_JOB_OUTPUT_KINDS` is copied to the backup rather
+#: than moved, because the job needs to find it where it is.
+#:
+#: The full-pipeline jobs read nothing here: they start from the audio and make
+#: everything again. Only the partial re-runs consume what an earlier run left.
+_JOB_INPUT_KINDS = {
+    "postprocess": frozenset({"merged", "transcript", "ts", "speakers_map"}),
+    "speakers": frozenset({"merged", "transcript", "speakers_map"}),
+}
+
+
+def _restore_unwritten(ctx: _Context) -> None:
+    """Put back anything the run moved aside but never replaced.
+
+    Moving an artifact out of the way is only safe when the run definitely
+    writes it again, and several steps decide at runtime that they will not:
+
+    * the speaker analysis is skipped entirely when a saved mapping exists
+      (ADR-010), so ``<base>_speaker_analysis.txt`` is moved and never remade;
+    * ``alt_blog_step`` returns early when its prompt file is absent, which it
+      is in this corpus - ``blog_alt1_prompt.txt.bk``;
+    * any step whose model call comes back empty writes nothing.
+
+    Both were observed: a post-processing run reported success and left the
+    episode without its analysis report, which had been there for a year. The
+    file was safe in the backup, but the episode had quietly lost it.
+
+    So after the run, whatever is missing from ``podcasts/`` is copied back from
+    this run's backup. The backup keeps its copy either way, so it stays a
+    complete record of the state before the run.
     """
     if not ctx.base_name:
         return
-    try:
-        episode = webui_db.get_episode(ctx.conn, ctx.base_name)
-        if not episode:
-            return
-        artifacts = [a for a in episode.get("artifacts", []) if a.get("path")]
-        if not artifacts:
-            return
-        manifest = snapshots.take_snapshot(ctx.job_id, ctx.base_name, artifacts)
-    except Exception as exc:  # pragma: no cover - defensive
-        logger.warning("No before-snapshot for job %s: %s", ctx.job_id, exc)
+    manifest = snapshots.load_manifest(ctx.job_id)
+    if not manifest:
         return
-    if manifest:
-        copied = sum(1 for a in manifest["artifacts"] if a.get("copied"))
+
+    restored = []
+    for entry in manifest.get("artifacts", []):
+        source, backup = entry.get("source"), entry.get("backup")
+        if not (source and backup):
+            continue
+        if os.path.exists(source) or not os.path.exists(backup):
+            continue
+        try:
+            shutil.copy2(backup, source)
+        except OSError as exc:  # pragma: no cover - defensive
+            logger.warning("Could not restore %s: %s", source, exc)
+            continue
+        restored.append(os.path.basename(source))
+
+    if restored:
         emit(
             "job",
-            f"Recorded {copied} artifact(s) as they were, so this run can be "
-            f"compared against them afterwards.",
+            f"This run did not rewrite {len(restored)} artifact(s) it had moved "
+            f"aside, so they were put back: {', '.join(sorted(restored))}.",
             job_id=ctx.job_id,
-            snapshot_count=copied,
+            restored=len(restored),
         )
+
+
+def _backup_before(ctx: _Context) -> None:
+    """Move everything this run will overwrite into a dated backup first.
+
+    Before the run starts, not as each file is written (ADR-011, decided by the
+    owner on 2026-08-26). Afterwards ``podcasts/`` holds only what this run
+    produced, so a run that dies halfway leaves an unambiguous state rather than
+    a mix of old and new output with nothing to tell them apart.
+
+    A manifest of what moved goes in the job's log directory, which is what
+    ``/jobs/<id>/diff`` reads to show what the run changed.
+
+    A failure here stops the job. Losing the previous version silently is the
+    one outcome this exists to prevent, so refusing to start beats running.
+    """
+    if not ctx.base_name:
+        return
+    kinds = _JOB_OUTPUT_KINDS.get(ctx.job_type)
+    if not kinds:
+        return
+
+    episode = webui_db.get_episode(ctx.conn, ctx.base_name)
+    if not episode:
+        return
+    doomed = [
+        artifact
+        for artifact in episode.get("artifacts", [])
+        if artifact.get("path") and artifact.get("kind") in kinds
+    ]
+    if not doomed:
+        emit(
+            "job",
+            "Nothing to back up: this episode has none of the files this job writes.",
+            job_id=ctx.job_id,
+        )
+        return
+
+    # A kind this job also *reads* is copied, not moved. ``merged`` is why:
+    # speaker assignment writes it, and post-processing then prefers it over the
+    # raw transcript as its input (see _read_transcript). Moving it away, right
+    # for a pure output, left the job with nothing to read and it failed before
+    # writing a thing. Copying keeps the previous version safe and leaves the
+    # input where the job looks for it.
+    also_read = _JOB_INPUT_KINDS.get(ctx.job_type, frozenset())
+    moved = backups.move_artifacts(
+        [a["path"] for a in doomed if a.get("kind") not in also_read], ctx.base_name
+    )
+    for artifact in doomed:
+        if artifact.get("kind") in also_read:
+            destination = backups.copy_to_backup(artifact["path"], ctx.base_name)
+            if destination:
+                moved.append((artifact["path"], destination))
+    destination = backups.backup_dir_for(doomed[0]["path"], ctx.base_name)
+    snapshots.record_backup(ctx.job_id, ctx.base_name, doomed, moved, destination)
+    emit(
+        "job",
+        f"Moved {len(moved)} existing artifact(s) to {destination} before starting. "
+        f"Nothing there is ever overwritten.",
+        job_id=ctx.job_id,
+        backup_dir=destination,
+        moved=len(moved),
+    )
 
 
 def _require_api_key(ctx: _Context) -> None:
