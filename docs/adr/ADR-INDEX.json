@@ -620,7 +620,7 @@
       "title": "Versioned artifact backups moved aside before every run",
       "path": "ADR-011-versioned-artifact-backups-moved-aside-before-every-run.md",
       "format": "madr",
-      "status": "Proposed",
+      "status": "Accepted",
       "date": "2026-08-26",
       "decision_summary": "Chosen option: Option A.",
       "topics": [

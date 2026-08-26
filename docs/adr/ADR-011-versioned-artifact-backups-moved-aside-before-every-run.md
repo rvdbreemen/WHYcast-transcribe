@@ -1,7 +1,7 @@
 ---
 id: "ADR-011"
 title: "Versioned artifact backups moved aside before every run"
-status: "Proposed"
+status: "Accepted"
 date: "2026-08-26"
 binding: false
 gate: null
@@ -41,7 +41,7 @@ context_scope: "selective"
 
 ## Status
 
-Proposed, 2026-08-26.
+Accepted, 2026-08-26.
 
 **Decision Maker:** User: Robert van den Breemen ("Ik wil dat je alle bestaande artefacten altijd in een backup directory zet, verplaats ze, en zorg dat backups nooit overschreven worden", followed by "Het verplaatsen moet gebeuren voordat je echt gaat beginnen").
 
@@ -68,6 +68,11 @@ status_history:
     status: Proposed
     changed_by: "User: Robert van den Breemen"
     reason: Related to ADR-008
+    changed_via: adr-kit lifecycle
+  - date: 2026-08-26
+    status: Accepted
+    changed_by: "User: Robert van den Breemen"
+    reason: Accepted by Robert on request, 2026-08-26; implemented and verified against the real corpus
     changed_via: adr-kit lifecycle
 ```
 
@@ -179,7 +184,7 @@ Option B was rejected because it recreates exactly the noise ADR-009 removed, an
 
 ## Open Questions
 
-- [ ] When and how does `backups/` get pruned? Nothing removes anything today, on purpose. A retention rule - by age, by count per episode, or by hand - is a decision to take once the tree has grown enough to be worth measuring.
+- [x] When and how does `backups/` get pruned? Nothing removes anything today, on purpose. A retention rule - by age, by count per episode, or by hand - is a decision to take once the tree has grown enough to be worth measuring. — **Answered 2026-08-26 by User: Robert van den Breemen:** Nothing prunes it, and that is the decision rather than a gap. Automatic deletion of preserved versions is precisely what this ADR exists to prevent, so no retention rule ships with it: the tree grows, and the owner removes what they no longer want with the files in front of them - the same way the 543 MB of duplicate audio was handled on 2026-08-25. Revisit when the tree is large enough to measure, which needs a real number rather than a guess; a full re-run of the corpus is roughly the size of the corpus, so that moment is foreseeable but not here. Decided by Robert van den Breemen, 2026-08-26.
 
 ## Related Decisions
 

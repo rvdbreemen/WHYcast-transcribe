@@ -16,4 +16,4 @@ One row per Architecture Decision Record. Scope is the Enforcement `path_glob` s
 | ADR-008 | Accepted | `whycast/**/*.py`, `whycast/pipeline/**/*.py` | Chosen option: Option A, because only library extraction gives the web layer structured progress, typed errors, and p... |
 | ADR-009 | Accepted | `whycast/pipeline/feed.py` | Chosen option: Option A, because it removes the noise where it is generated without weakening the primitive: whycast.... |
 | ADR-010 | Accepted | - | Chosen option: Option A. |
-| ADR-011 | Proposed | - | Chosen option: Option A. |
+| ADR-011 | Accepted | - | Chosen option: Option A. |
