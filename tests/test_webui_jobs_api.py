@@ -510,11 +510,21 @@ def test_stream_is_not_buffered(live_server):
     assert [f[1] for f in frames if f[0] == "progress"] == [1, 2, 3, 4, 5]
     assert frames[-1][0] == "end"
 
-    first = next(t for t, chunk in arrivals if '"line 1"' in chunk)
-    last = next(t for t, chunk in arrivals if '"line 5"' in chunk)
-    assert last - first > 0.5, (
-        f"the stream looks buffered: line 1 arrived at {first:.2f}s, "
-        f"line 5 at {last:.2f}s"
+    # Which chunk each line arrived in, not when.
+    #
+    # This used to assert a gap in wall-clock arrival times, and it failed on a
+    # loaded machine twice: the writer thread stalls, several events land in one
+    # server-side poll, and they arrive together - which looks exactly like
+    # buffering without being it. Widening the margin only moved the threshold.
+    #
+    # Separate chunks is the property itself. A buffered response arrives as one
+    # read no matter how fast or slow the machine is, so this cannot pass for a
+    # buffered stream and cannot fail for a busy one.
+    first = next(i for i, (_, chunk) in enumerate(arrivals) if '"line 1"' in chunk)
+    last = next(i for i, (_, chunk) in enumerate(arrivals) if '"line 5"' in chunk)
+    assert last > first, (
+        f"the stream looks buffered: line 1 and line 5 arrived in the same read "
+        f"(chunk {first} of {len(arrivals)})"
     )
 
 
