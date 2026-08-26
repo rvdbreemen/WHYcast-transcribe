@@ -38,7 +38,17 @@
         var placeholder = document.getElementById('artifact-placeholder');
         if (placeholder) { placeholder.hidden = true; }
         var frame = document.getElementById('artifact-frame');
-        if (frame) { frame.hidden = false; }
+        if (frame) {
+          frame.hidden = false;
+          /* Carry the tab's light-page marker onto the frame. Generated HTML
+             writes dark text and no background, so it needs a light page;
+             plain text follows the app's theme. See app.css. */
+          if (tab.hasAttribute('data-light')) {
+            frame.setAttribute('data-light', '1');
+          } else {
+            frame.removeAttribute('data-light');
+          }
+        }
       });
     });
   }

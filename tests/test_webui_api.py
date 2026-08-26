@@ -492,12 +492,31 @@ class TestArtifactApi:
     def test_unknown_kind_is_404(self, client):
         response = client.get("/api/episodes/episode_1/artifacts/definitely_not_a_kind")
         assert response.status_code == 404
-        assert response.json()["detail"] == "Unknown artifact kind"
+        assert "artifact kind" in response.text
 
     def test_known_kind_the_episode_does_not_have_is_404(self, client):
         response = client.get("/api/episodes/episode_1/artifacts/merged")
         assert response.status_code == 404
-        assert response.json()["detail"] == "Artifact not found"
+        assert "merged" in response.text and "episode_1" in response.text
+
+    def test_a_missing_artifact_says_so_inside_the_frame(self, client):
+        """These 404s are read in an iframe, so they must be framable.
+
+        A JSON HTTPException got the *page* headers - ``X-Frame-Options: DENY``
+        and ``frame-ancestors 'none'`` - so the browser refused to render it in
+        the artifact frame and showed its own "can't open this page" instead.
+        The reader was told a security policy had intervened when a job had
+        simply moved the file aside a moment earlier.
+        """
+        response = client.get("/api/episodes/episode_1/artifacts/merged")
+
+        assert response.status_code == 404
+        assert "x-frame-options" not in {k.lower() for k in response.headers}
+        policy = response.headers["content-security-policy"]
+        assert "frame-ancestors 'none'" not in policy
+        assert response.headers["content-type"].startswith("text/plain")
+        # Says what to do, not just that something is missing.
+        assert "rescan" in response.text.lower()
 
     def test_unknown_format_is_404(self, client):
         response = client.get(
