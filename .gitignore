@@ -208,7 +208,10 @@ logs/transcribe.log
 transcribe.log
 
 # Generated knowledge graph (graphify). Regenerate with /graphify; not source.
-graphify-out/
+# The report is the exception: 70 KB of readable text worth reviewing in a diff,
+# where graph.html and graph.json are 4 MB of machine-readable blob.
+graphify-out/*
+!graphify-out/GRAPH_REPORT.md
 
 # Server log written when the web UI starts without a console (Task Scheduler)
 logs/webui-server.log
