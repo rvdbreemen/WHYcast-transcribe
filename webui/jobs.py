@@ -270,28 +270,77 @@ JOB_TYPES: Dict[str, Dict[str, Any]] = {
     },
 }
 
-#: One job per post-processing step, so a single step can be repeated on its own
-#: instead of paying for the four that were already right. Editing one prompt
-#: and re-running the whole chain costs four model calls to see one change.
+#: One post-processing step, re-runnable on its own (TASK-004 follow-up).
 #:
-#: The catalogue is generated from :data:`webui.runner._STEP_JOBS`, which also
-#: drives the handlers and the backup rules, so a step cannot exist in one of
-#: the three and be missing from another. Imported lazily: this module must stay
-#: importable without the runner, which pulls in the pipeline.
-def _register_step_jobs() -> None:
-    from webui.runner import _STEP_JOBS
+#: ``needs`` names the artifact kinds the step reads. They have to be on disk,
+#: which is the whole reason ``<base>_cleaned.txt`` is written again: without
+#: it, nothing downstream of cleanup could be repeated without redoing cleanup
+#: too, and paying for it.
+#:
+#: ``writes`` is what the step replaces, and therefore what is moved aside
+#: before it runs (ADR-011).
+STEP_JOBS = {
+    "cleanup": {
+        "label": "Cleanup only",
+        "needs": (),          # starts from the transcript, like a full run
+        "writes": ("cleaned",),
+        "description": (
+            "Cleans the transcript again and writes <base>_cleaned.txt. Every "
+            "step below reads that file, so re-run this one after editing the "
+            "cleanup prompt."
+        ),
+    },
+    "summary": {
+        "label": "Summary only",
+        "needs": ("cleaned",),
+        "writes": ("summary",),
+        "description": "Rewrites the summary from the cleaned transcript.",
+    },
+    "blog": {
+        "label": "Blog only",
+        "needs": ("cleaned", "summary"),
+        "writes": ("blog",),
+        "description": "Rewrites the blog post from the cleaned transcript and the summary.",
+    },
+    "blog_alt1": {
+        "label": "Alternative blog only",
+        "needs": ("cleaned", "summary"),
+        "writes": ("blog_alt1",),
+        "description": (
+            "Rewrites the alternative blog post. Needs prompts/blog_alt1_prompt.txt, "
+            "which is currently renamed to .bk, so this step does nothing until that "
+            "is put back."
+        ),
+    },
+    "history": {
+        "label": "History extraction only",
+        "needs": ("cleaned",),
+        "writes": ("history",),
+        "description": "Rewrites the history extraction from the cleaned transcript.",
+    },
+}
 
-    for name, spec in _STEP_JOBS.items():
-        JOB_TYPES[f"step_{name}"] = {
-            "gpu": False,
-            "cost": True,
-            "requires_base_name": True,
-            "label": spec["label"],
-            "description": spec["description"],
-        }
 
 
-_register_step_jobs()
+#: One job per post-processing step, so a single step can be repeated on its own
+#: instead of paying for the four that were already right.
+#:
+#: Registered from the table above, which :mod:`webui.runner` also reads for its
+#: handlers and backup rules. The table lives here because this module imports
+#: nothing from the pipeline: putting it in the runner and importing it back
+#: made webui.jobs depend on webui.runner and webui.runner depend on webui.jobs,
+#: so `import webui.runner` failed outright. `python -m webui.runner` survived it
+#: by accident - `-m` loads the file as __main__ and imports the module a second
+#: time - which is exactly the kind of luck that hides a broken import.
+for _name, _spec in STEP_JOBS.items():
+    JOB_TYPES[f"step_{_name}"] = {
+        "gpu": False,
+        "cost": True,
+        "requires_base_name": True,
+        "label": _spec["label"],
+        "description": _spec["description"],
+    }
+del _name, _spec
 
 
 class JobQueueError(WhycastError):
