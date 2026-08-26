@@ -509,8 +509,18 @@ def test_the_catalogue_flags_every_type_that_spends_money(client):
         "force_episode",
         "postprocess",
         "speakers",
+        # Every single-step re-run is one model call, so each one spends.
+        # Listed rather than derived: this assertion exists to notice a new
+        # paying type, and deriving it from the catalogue would notice nothing.
+        "step_cleanup",
+        "step_summary",
+        "step_blog",
+        "step_blog_alt1",
+        "step_history",
     }
     assert "selftest" not in paying, "the one type the tests run must be free"
+    # retranscribe is the exception worth stating: GPU work, no API calls.
+    assert "retranscribe" not in paying
 
 
 def test_a_created_job_carries_the_cost_flag_everywhere_it_appears(client):

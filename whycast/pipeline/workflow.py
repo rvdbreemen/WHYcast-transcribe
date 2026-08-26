@@ -22,7 +22,7 @@ from whycast.pipeline.transcription import setup_model, transcribe_audio, write_
 logger = logging.getLogger(__name__)
 
 
-def full_workflow(audio_file=None, output_dir=None, rssfeed=None, force: bool = False):
+def full_workflow(audio_file=None, output_dir=None, rssfeed=None, force: bool = False, skip_postprocess: bool = False):
     """
     Complete workflow:
     1. If no audio_file, fetch latest episode from RSS feed.
@@ -150,6 +150,21 @@ def full_workflow(audio_file=None, output_dir=None, rssfeed=None, force: bool = 
                 merged_transcript_text = None
 
     # Step 4: Process transcript
+    if skip_postprocess:
+        # A transcript-only run: new audio handling, new diarization, new
+        # transcript, and none of the paid language-model steps. What is on disk
+        # from an earlier run - summary, blog, history - is left exactly as it
+        # was, which means it now describes a transcript that no longer exists.
+        # Saying so is the point; the caller decides whether to follow up.
+        emit(
+            "workflow",
+            "[4/4] Skipped: transcript only. The summary, blog and history on "
+            "disk still describe the previous transcript - re-run post-processing "
+            "to bring them in line.",
+            progress=1.0,
+        )
+        _cleanup_prepared_audio(prepared_audio, audio_file)
+        return
     emit("workflow", "[4/4] Processing transcript workflow (summary, blog, history, etc.) ...")
     # Use merged transcript if available, otherwise use original
     text_for_processing = merged_transcript_text if merged_transcript_text else transcript_text
@@ -159,7 +174,16 @@ def full_workflow(audio_file=None, output_dir=None, rssfeed=None, force: bool = 
         process_transcript_workflow(text_for_processing, base_name, output_dir)
     else:
         emit("workflow", "Transcript text is empty, skipping transcript workflow.")
-    # Delete temp audio file if it was created (prepared_audio != audio_file)
+    _cleanup_prepared_audio(prepared_audio, audio_file)
+
+
+def _cleanup_prepared_audio(prepared_audio, audio_file) -> None:
+    """Remove the normalised copy diarization needed, if one was made.
+
+    Pulled out of the tail of :func:`full_workflow` so the transcript-only path,
+    which returns earlier, cleans up the same way. Failing to delete a temp file
+    is worth a message and nothing more.
+    """
     try:
         if os.path.abspath(prepared_audio) != os.path.abspath(str(audio_file)) and os.path.exists(prepared_audio):
             os.remove(prepared_audio)

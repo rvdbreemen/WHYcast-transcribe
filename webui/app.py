@@ -143,6 +143,7 @@ from fastapi.responses import (
     FileResponse,
     HTMLResponse,
     JSONResponse,
+    PlainTextResponse,
     RedirectResponse,
     Response,
     StreamingResponse,
@@ -289,14 +290,33 @@ _AUDIO_MEDIA_TYPES = {
 #: without it a hostile artifact could still exfiltrate through a plain
 #: ``<img src="https://attacker/?...">``. Inline styles stay allowed so that
 #: generated blog HTML still renders as it was written.
+#: ``frame-ancestors`` names this server's own origin literally, and must not be
+#: ``'self'``. ``sandbox`` puts the artifact in an *opaque* origin, and ``'self'``
+#: means "the same origin as this resource" - which an opaque origin can never
+#: match, so the two directives together forbid every embedder including us.
+#: Firefox enforces that to the letter ("Firefox Can't Open This Page ... if
+#: another site has embedded it") while Chrome lets it through, which is how it
+#: passed review and still broke in the browser the owner actually uses. A host
+#: source is matched against the *embedder's* URL instead, so naming the origin
+#: works where ``'self'`` cannot.
+_ARTIFACT_CSP = (
+    "sandbox; default-src 'none'; img-src data:; style-src 'unsafe-inline'; "
+    "base-uri 'none'; form-action 'none'; frame-ancestors {origin}"
+)
+
 _ARTIFACT_HEADERS = {
-    "Content-Security-Policy": (
-        "sandbox; default-src 'none'; img-src data:; style-src 'unsafe-inline'; "
-        "base-uri 'none'; form-action 'none'; frame-ancestors 'self'"
-    ),
     "X-Content-Type-Options": "nosniff",
     "Referrer-Policy": "no-referrer",
 }
+
+
+def _artifact_headers(request: Request) -> Dict[str, str]:
+    """Artifact response headers, with this server's origin in the policy."""
+    headers = dict(_ARTIFACT_HEADERS)
+    headers["Content-Security-Policy"] = _ARTIFACT_CSP.format(
+        origin=_own_origin(request)
+    )
+    return headers
 
 #: Sent with every response this app renders itself. No ``'unsafe-inline'`` for
 #: scripts: all script is in ``/static/app.js`` so that this can hold. Inline
@@ -381,6 +401,23 @@ _SSE_HEADERS = {
     "X-Accel-Buffering": "no",
     "Connection": "keep-alive",
 }
+
+def _artifact_problem(request: Request, message: str) -> PlainTextResponse:
+    """A 404 the artifact frame can actually display.
+
+    Raising HTTPException here produced a JSON error carrying the *page*
+    headers - ``X-Frame-Options: DENY`` and ``frame-ancestors 'none'`` - so the
+    browser refused to render it inside the artifact frame and showed its own
+    "Firefox Can't Open This Page" instead. The reader was told a security
+    policy had intervened, when the truth was simply that a job had moved the
+    file aside a moment earlier.
+
+    So the error is served like an artifact: same framable headers, plain text,
+    saying what happened and what to do about it.
+    """
+    return PlainTextResponse(
+        message, status_code=404, headers=_artifact_headers(request)
+    )
 
 
 def podcast_dir_from_env() -> str:
@@ -756,6 +793,18 @@ def _register_guards(app: FastAPI) -> None:
         if "content-security-policy" not in response.headers:
             for header, value in _PAGE_HEADERS.items():
                 response.headers.setdefault(header, value)
+
+        # Make the browser revalidate /static instead of guessing.
+        #
+        # StaticFiles sends ETag and Last-Modified but no Cache-Control, which
+        # leaves the browser free to apply heuristic caching. Firefox kept
+        # serving a stale app.css after a fix, so a corrected stylesheet looked
+        # like a stylesheet that did not work. "no-cache" does not mean "do not
+        # cache" - it means "ask first", and the ETag turns that question into a
+        # 304 costing nothing. This app is served from localhost; there is no
+        # bandwidth argument for guessing.
+        if request.url.path.startswith("/static/"):
+            response.headers.setdefault("Cache-Control", "no-cache")
         return response
 
 
@@ -834,6 +883,7 @@ def _register_routes(app: FastAPI, templates: Jinja2Templates) -> None:
                 "kinds": ARTIFACT_KINDS,
                 "meta": _public_meta(db.get_meta(conn)),
                 "episode_actions": actions,
+                "step_actions": _step_actions(),
                 "job_types": job_types_payload(),
                 "episode_jobs": episode_jobs,
                 "active_job": active,
@@ -894,21 +944,32 @@ def _register_routes(app: FastAPI, templates: Jinja2Templates) -> None:
         the index recorded, re-verified against the podcast directory.
         """
         if kind not in ARTIFACT_KINDS:
-            raise HTTPException(status_code=404, detail="Unknown artifact kind")
+            return _artifact_problem(request, "This is not an artifact kind this app knows.")
         # Per kind, not the global set: json is legal for speakers_map alone
         # (ADR-010), so kind=summary&fmt=json is rejected here rather than
         # passed through to miss in the index.
         if fmt is not None and fmt not in formats_for_kind(kind):
-            raise HTTPException(status_code=404, detail="Unknown artifact format")
+            return _artifact_problem(request, f"{kind} is never stored as {fmt}.")
 
         episode = _get_episode_or_404(request, base_name)
         artifact = _pick_artifact(episode, kind, fmt)
         if artifact is None:
-            raise HTTPException(status_code=404, detail="Artifact not found")
+            return _artifact_problem(
+                request,
+                f"There is no {kind} for {base_name} right now.\n\n"
+                "If a job is running, this file may have been moved to the backup "
+                "and not written again yet. The index also lags until the next "
+                "rescan.",
+            )
 
         path = _safe_file(request.app.state.podcast_dir, artifact.get("path"))
         if path is None:
-            raise HTTPException(status_code=404, detail="Artifact not available")
+            return _artifact_problem(
+                request,
+                f"The index lists a {kind} for {base_name}, but it is not on disk.\n\n"
+                "A running job may have moved it aside. Rescan once the job has "
+                "finished.",
+            )
 
         media_type = _ARTIFACT_MEDIA_TYPES.get(
             artifact.get("fmt"), "text/plain; charset=utf-8"
@@ -919,7 +980,7 @@ def _register_routes(app: FastAPI, templates: Jinja2Templates) -> None:
         return FileResponse(
             path,
             media_type=media_type,
-            headers=dict(_ARTIFACT_HEADERS),
+            headers=_artifact_headers(request),
             content_disposition_type="inline",
             filename=os.path.basename(path),
         )
@@ -1840,13 +1901,31 @@ def job_types_payload() -> List[Dict[str, Any]]:
 #: ``force_episode`` throws the artifacts away and pays for transcription, GPU
 #: time and every OpenAI step again. Listing the expensive one last is the
 #: cheapest safety measure available.
-EPISODE_ACTION_TYPES = ("postprocess", "speakers", "force_episode")
+# Cheapest and least destructive first, so the expensive full re-run is the
+# last thing the eye lands on rather than the first.
+EPISODE_ACTION_TYPES = ("postprocess", "speakers", "retranscribe", "force_episode")
 
 
 def _episode_actions() -> List[Dict[str, Any]]:
     """The enqueue actions the episode page offers, in :data:`EPISODE_ACTION_TYPES` order."""
     catalogue = {spec["type"]: spec for spec in job_types_payload()}
     return [catalogue[name] for name in EPISODE_ACTION_TYPES if name in catalogue]
+
+
+def _step_actions() -> List[Dict[str, Any]]:
+    """The single-step re-runs, in the order the pipeline runs them.
+
+    Kept apart from :func:`_episode_actions` because they answer a different
+    question. The actions above are "redo this episode"; these are "redo this
+    one step, the rest was fine" - which is what you want after editing one
+    prompt, and what saves paying for the four calls that were already right.
+    """
+    # Imported here, not at module scope: webui.runner pulls in the pipeline,
+    # and this module must stay importable without loading torch.
+    from webui.runner import STEP_JOB_TYPES
+
+    catalogue = {spec["type"]: spec for spec in job_types_payload()}
+    return [catalogue[name] for name in STEP_JOB_TYPES if name in catalogue]
 
 
 def _queue_or_503(request: Request) -> sqlite3.Connection:
@@ -2671,7 +2750,10 @@ def _job_diff_payload(job: Dict[str, Any]) -> Dict[str, Any]:
         if not filename:
             continue
         current_path = _safe_file(podcast_dir_from_env(), entry.get("source"))
-        before_path = snapshots.snapshot_file(job["id"], filename)
+        # The previous version now lives in the backup tree the job moved it to
+        # (ADR-011); older manifests, written when the copy sat in the job's own
+        # directory, still resolve through snapshot_file.
+        before_path = entry.get("backup") or snapshots.snapshot_file(job["id"], filename)
         entries.append(
             _diff_entry(entry, filename, before_path, current_path)
         )

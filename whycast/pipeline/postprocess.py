@@ -27,6 +27,8 @@ from whycast.pipeline.llm import (
     process_with_openai,
     summarize_large_transcript,
 )
+from whycast.events import emit
+from whycast.io_utils import atomic_write_text
 from whycast.pipeline.outputs import write_all_format
 from whycast.pipeline.speakers import speaker_assignment_step
 
@@ -53,11 +55,52 @@ def process_transcript_workflow(transcript: str, output_basename: str = None, ou
     cleaned = cleanup_step(transcript_for_cleanup)
 
     results['cleaned_transcript'] = cleaned
+    _save_cleaned(cleaned, transcript_for_cleanup, output_basename, output_dir)
     results['summary'] = summary_step(cleaned, output_basename, output_dir)
     results['blog'] = blog_step(cleaned, results['summary'], output_basename, output_dir)
     results['blog_alt1'] = alt_blog_step(cleaned, results['summary'], output_basename, output_dir)
     results['history_extract'] = history_step(cleaned, output_basename, output_dir)
     return results
+
+def _save_cleaned(
+    cleaned: str,
+    source: str,
+    output_basename: Optional[str],
+    output_dir: Optional[str],
+) -> Optional[str]:
+    """Write ``<base>_cleaned.txt``, the text every later step actually reads.
+
+    The cleaned transcript was produced and then thrown away: summary, blog and
+    history were all written from it, but the text itself was never saved, so
+    there was no way to see what they were made from. Older runs did write this
+    file - ``episode_0_cleaned.txt`` from 2025 is still in the corpus - and it
+    went missing somewhere along the way.
+
+    Not written when cleanup changed nothing. :func:`cleanup_step` returns its
+    input unchanged when the prompt is missing or the result came back too short
+    to trust, and a file called *cleaned* that is a byte-for-byte copy of the
+    transcript claims work that did not happen.
+
+    A single ``.txt``: this is the pipeline's own intermediate, not something
+    anyone publishes, so it gets no html/wiki siblings.
+    """
+    if not (output_basename and output_dir):
+        return None
+    if cleaned == source:
+        emit("postprocess", "Cleanup changed nothing, so no cleaned transcript was written.")
+        return None
+    path = os.path.join(output_dir, f"{output_basename}_cleaned.txt")
+    try:
+        # backup=False like every artifact (ADR-009); a re-run's previous copy
+        # is moved aside before the job starts (ADR-011).
+        atomic_write_text(path, cleaned, backup=False)
+    except OSError as exc:
+        logging.error("Could not write the cleaned transcript %s: %s", path, exc)
+        emit("postprocess", f"Could not write the cleaned transcript: {exc}", level="error")
+        return None
+    emit("postprocess", f"✅ Cleaned transcript saved: {os.path.basename(path)}")
+    return path
+
 
 def cleanup_step(transcript: str) -> str:
     """

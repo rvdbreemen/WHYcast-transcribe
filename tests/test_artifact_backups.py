@@ -262,6 +262,39 @@ def test_saving_a_speaker_mapping_keeps_the_previous_one(tmp_path):
     }, "the previous names must survive one overwrite - that is the whole point"
 
 
+
+def test_the_cleaned_transcript_leaves_no_backup(tmp_path):
+    """``<base>_cleaned.txt`` is an artifact like any other: regenerable, no .bak.
+
+    It is the text summary, blog and history are actually written from, so it is
+    worth keeping on disk - but a re-run makes it again, which is exactly the
+    case ADR-009 says gets no backup and ADR-011 says gets moved aside first.
+    """
+    from whycast.pipeline.postprocess import _save_cleaned
+
+    _save_cleaned("eerste opschoning\n", "ruwe tekst\n", "episode_42", str(tmp_path))
+    _save_cleaned("tweede opschoning\n", "ruwe tekst\n", "episode_42", str(tmp_path))
+
+    assert os.listdir(tmp_path) == ["episode_42_cleaned.txt"]
+    assert stray(tmp_path) == []
+    assert (tmp_path / "episode_42_cleaned.txt").read_text(encoding="utf-8") == (
+        "tweede opschoning\n"
+    )
+
+
+def test_no_cleaned_transcript_when_cleanup_changed_nothing(tmp_path):
+    """A file called *cleaned* that copies its input claims work nobody did.
+
+    ``cleanup_step`` hands back its input unchanged when the prompt is missing
+    or the model's answer came back too short to trust. Writing that would put a
+    plausible-looking artifact on disk with nothing behind it.
+    """
+    from whycast.pipeline.postprocess import _save_cleaned
+
+    assert _save_cleaned("zelfde tekst", "zelfde tekst", "episode_42", str(tmp_path)) is None
+    assert os.listdir(tmp_path) == []
+
+
 def test_the_writers_this_suite_covers_are_all_of_them():
     """Keeps the three writer tests above honest as the package grows.
 
@@ -277,6 +310,7 @@ def test_the_writers_this_suite_covers_are_all_of_them():
         os.path.join("pipeline", "diarization.py"),
         os.path.join("pipeline", "feed.py"),
         os.path.join("pipeline", "outputs.py"),
+        os.path.join("pipeline", "postprocess.py"),
         os.path.join("pipeline", "speakers.py"),
         os.path.join("pipeline", "transcription.py"),
     ], (

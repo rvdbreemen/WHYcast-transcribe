@@ -212,7 +212,32 @@ tbody tr:last-child td { border-bottom: none; }
   border-radius: 3px;
   width: 100%;
   height: 70vh;
-  background: var(--bg);
+  /* The framed document is not ours to style, so the frame decides for it.
+   *
+   * Plain text - .txt, .wiki, .md, .json, which is nearly everything here - is
+   * drawn by the browser's own text/plain view. Told the frame is a dark
+   * context, it draws light text on a dark page and the artifact matches the
+   * app instead of glaring out of it. Canvas is the system surface colour, so
+   * it follows whichever half of light dark applies.
+   *
+   * Painting this with var(--bg) is what broke it before: the app's dark
+   * background with the document's default black text on top. Setting the
+   * background without color-scheme only moves the problem. */
+  color-scheme: light dark;
+  background: Canvas;
+}
+
+/* Generated HTML is the exception, and it has to be.
+ *
+ * whycast/pipeline/outputs.py writes `color: #333` into every blog and history
+ * page but never a background, on the assumption that pages are white. In a
+ * dark frame that is dark grey on near-black. Until those artifacts carry a
+ * theme of their own, the frame gives them the light page they were written
+ * for - set on the tab, because only the tab knows which format will be
+ * served. */
+.artifact-body iframe[data-light] {
+  color-scheme: light;
+  background: #fff;
 }
 .artifact-body iframe[hidden] { display: none; }
 /* Marked by app.js on click; purely presentational. */

@@ -140,6 +140,52 @@
     {% endfor %}
   </ul>
 
+  {# Single steps, kept in their own group.
+     Nine buttons in one list is a wall; these five are a different kind of
+     thing anyway - you reach for them when one prompt changed and the other
+     four outputs are still right. Collapsed by default so the common actions
+     above stay the ones you see first. #}
+  {% if step_actions %}
+  <details class="action step-group">
+    <summary>Re-run a single step <span class="badge">{{ step_actions|length }}</span></summary>
+    <p class="hint">
+      Each step reads what the one before it wrote, so it needs those files on
+      disk: the summary needs the cleaned transcript, the blog needs both. A
+      step that cannot find its input says which job produces it rather than
+      guessing.
+    </p>
+    <ul class="action-list">
+      {% for spec in step_actions %}
+      <li>
+        <details class="action{{ ' costly' if spec.cost else '' }}">
+          <summary>
+            {{ spec.label }}
+            {{ m.cost_badge(spec) }}
+            {{ m.gpu_badge(spec) }}
+          </summary>
+          <p class="hint">{{ spec.description }}</p>
+          <form method="post" action="/api/jobs"
+                data-enqueue
+                data-result="episode-job-result"
+                data-confirm="{{ spec.label }} for episode {{ episode.base_name }}
+
+{{ spec.description }}
+
+{% if spec.cost %}This calls the paid OpenAI API - it will spend money.
+{% endif %}Queue it now?">
+            <input type="hidden" name="type" value="{{ spec.type }}">
+            <input type="hidden" name="base_name" value="{{ episode.base_name }}">
+            <button type="submit" class="{{ 'danger' if spec.cost else 'plain' }}">
+              Queue {{ spec.label|lower }}
+            </button>
+          </form>
+        </details>
+      </li>
+      {% endfor %}
+    </ul>
+  </details>
+  {% endif %}
+
   {# app.js writes the created job's link here. #}
   <p id="episode-job-result" class="job-result" role="status" aria-live="polite"></p>
 
@@ -216,6 +262,10 @@
          href="/api/episodes/{{ episode.base_name|urlencode }}/artifacts/{{ kind|urlencode }}"
          target="artifact-frame"
          rel="noopener noreferrer"
+         {# The API serves txt when there is one, so html only reaches the frame
+            for a kind that has no txt. That is the only case needing a light
+            page: generated html hardcodes dark text (see app.css). #}
+         {% if 'txt' not in formats and 'html' in formats %}data-light="1"{% endif %}
          title="{{ kind }}: {{ formats|join(', ') }}">
         {{ kind }}<span class="fmts">{{ formats|join('/') }}</span>
       </a>

@@ -17,6 +17,32 @@ import sys
 from whycast.config import base_dir
 
 
+#: torch loggers that are chatty at INFO and say nothing an operator needs.
+_NOISY_TORCH_LOGGERS = (
+    "torch._inductor",
+    "torch._dynamo",
+    "torch._functorch",
+    "torch._subclasses",
+)
+
+
+def quiet_torch_logging() -> None:
+    """Turn down torch's inductor and dynamo chatter.
+
+    Call this *after* ``import torch``. Importing torch configures its own
+    logging, which resets whatever levels were set before, so a call from
+    :func:`setup_logging` only sticks when torch was already imported - which
+    is how it worked in the pre-extraction monolith, where ``import torch`` sat
+    at the top of the file and ``setup_logging()`` ran below it. In the library
+    the runner calls ``setup_logging()`` first, so the modules that import torch
+    call this again afterwards.
+
+    Idempotent, and safe to call when torch is not installed at all.
+    """
+    for name in _NOISY_TORCH_LOGGERS:
+        logging.getLogger(name).setLevel(logging.ERROR)
+
+
 # Set up logging to both console and file
 def setup_logging():
     # Enhanced log format with line numbers and function names
@@ -111,8 +137,21 @@ def setup_logging():
     warnings.filterwarnings("ignore", category=UserWarning, module="torch._inductor")
     warnings.filterwarnings("ignore", message=".*Cache Metrics.*")
 
-    # Disable torch inductor and dynamo INFO messages
-    os.environ["TORCH_LOGS"] = "ERROR"
+    # Quieten torch's inductor and dynamo chatter.
+    #
+    # This used to be os.environ["TORCH_LOGS"] = "ERROR", which torch rejects:
+    # that variable takes module names ("dynamo", "inductor"), never log level
+    # names, and torch raises ValueError while parsing it. In the pre-extraction
+    # monolith the assignment was dead code - setup_logging() ran at import time
+    # *after* `import torch`, so torch had already read the variable and never
+    # looked again. Extracting the function verbatim (ADR-008) kept the line but
+    # changed when it runs: the job runner calls setup_logging() before the
+    # pipeline imports torch, so torch finally parsed it and every GPU job died
+    # at startup with "Invalid log settings: ERROR".
+    #
+    # The intent is reachable through Python's own logging, which is where these
+    # messages come from anyway.
+    quiet_torch_logging()
     os.environ["TORCH_INDUCTOR_VERBOSE"] = "0"
 
     # Suppress PyTorch Inductor compile_threads warnings
