@@ -20,7 +20,10 @@ looks like from here.
 Four corrections stand between what the tooling produced and what this graph
 holds. Each is listed so a later reader can tell them apart.
 
-1. **159 internal dependency edges, reconnected.** graphify's AST pass names a
+1. **159 internal dependency edges, reconnected.** *(Defect fixed upstream in graphify
+   0.9.50, which made node ids path-qualified. This graph was built with 0.7.19 and
+   needed the repair; a rebuild on 0.9.50 would not. Verified 2026-08-27.)*
+   graphify's AST pass names a
    module node `whycast_events_py` but emits its import edges to `whycast_events`,
    and collapses `from webui import runner` to a bare `webui`. Neither target
    exists as a node, and `build()` drops an edge with a missing endpoint.
@@ -61,7 +64,8 @@ because those libraries are not part of this corpus.
 
 Its `calls` edges resolve by name, not by module. `webui.jobs.enqueue` carries no
 incoming call edge at all, while the unrelated `enqueue` helper in
-`tests/test_jobs_api.py` collects fifteen. Do not use this graph to decide whether
+`tests/test_jobs_api.py` collects fifteen. This one is *not* fixed by upgrading:
+re-measured on graphify 0.9.50 on 2026-08-27, the counts are unchanged. Do not use this graph to decide whether
 a symbol is dead - it will tell you `create_app()` and `init_db()` are unreachable.
 The dead-code sweep that preceded this rebuild used a separate name-resolving pass
 over the Python AST, plus a template scan for Jinja macros, for exactly that reason.
