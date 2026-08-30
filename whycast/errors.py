@@ -18,10 +18,6 @@ class ConfigurationError(WhycastError):
     """Raised when configuration is missing or invalid (e.g. missing API key)."""
 
 
-class DependencyError(WhycastError):
-    """Raised when a required optional dependency is not installed."""
-
-
 class PipelineError(WhycastError):
     """Raised when a pipeline step fails in a way that ends the run."""
 

@@ -374,17 +374,6 @@ def _commit(tmp_path: str, path: str, backup: bool) -> None:
         _publish_backup(staged, path + BACKUP_SUFFIX)
 
 
-def _make_backup(path: str) -> None:
-    """Back up ``path`` to ``path + ".bak"``, immediately. Best effort.
-
-    Retained as the standalone spelling of stage-then-publish for callers that
-    want a backup taken now rather than as part of a write.
-    """
-    staged = _stage_backup(path)
-    if staged is not None:
-        _publish_backup(staged, path + BACKUP_SUFFIX)
-
-
 def _publish_backup(staged: str, backup: str) -> None:
     """Move a staged copy onto the ``.bak``. Best effort, like the copy."""
     try:

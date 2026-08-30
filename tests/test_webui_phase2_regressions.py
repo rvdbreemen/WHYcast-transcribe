@@ -117,7 +117,7 @@ def _running_row(conn, job_id, pid, cancel_requested=False, started_at=None):
 
 
 class TestBackupsArePublishedAtomically:
-    """``_make_backup`` used ``shutil.copy2`` straight onto ``<path>.bak``.
+    """Publishing a backup used ``shutil.copy2`` straight onto ``<path>.bak``.
 
     On Windows that pre-sizes the destination and then fills it, so a process
     killed mid-copy left a ``.bak`` of exactly the right size, with the right

@@ -1809,7 +1809,7 @@ def _register_speaker_routes(app: FastAPI, templates: Jinja2Templates) -> None:
         # the one just discarded: after a single save there is no .bak at all
         # and nothing is recoverable; after two saves it holds v1 while v2 is
         # the one that just went. It is also not refreshed by a later save,
-        # because io_utils._make_backup returns early when the target is
+        # because io_utils._stage_backup returns None when the target is
         # absent - so it can outlive the mapping it belonged to and go on being
         # reported as "the previous version" of a mapping typed weeks later.
         # So it is reported under a name that says what it is, and described.
