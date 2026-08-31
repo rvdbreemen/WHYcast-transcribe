@@ -11,6 +11,8 @@ verified_in:
   - "transcribe.py"
 supersedes: []
 superseded_by: null
+related:
+  - "ADR-012"
 topics:
   - "summarization"
   - "chunking"
@@ -56,6 +58,11 @@ status_history:
     status: Accepted
     changed_by: "User: Robert van den Breemen"
     reason: Auto-accepted already-shipped ADR with verified evidence
+    changed_via: adr-kit lifecycle
+  - date: 2026-08-31
+    status: Accepted
+    changed_by: "User: Robert van den Breemen"
+    reason: Related to ADR-012
     changed_via: adr-kit lifecycle
 ```
 

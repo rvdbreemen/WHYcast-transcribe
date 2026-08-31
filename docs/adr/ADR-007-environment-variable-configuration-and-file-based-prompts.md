@@ -13,6 +13,7 @@ supersedes: []
 superseded_by: null
 related:
   - "ADR-008"
+  - "ADR-012"
 topics:
   - "configuration"
   - "prompts"
@@ -62,6 +63,11 @@ status_history:
     status: Accepted
     changed_by: "User: Robert van den Breemen"
     reason: Related to ADR-008
+    changed_via: adr-kit lifecycle
+  - date: 2026-08-31
+    status: Accepted
+    changed_by: "User: Robert van den Breemen"
+    reason: Related to ADR-012
     changed_via: adr-kit lifecycle
 ```
 

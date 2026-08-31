@@ -7,7 +7,7 @@ status: Done
 assignee:
   - '@robert'
 created_date: '2026-08-30 22:12'
-updated_date: '2026-08-31 08:29'
+updated_date: '2026-08-31 16:56'
 labels: []
 dependencies: []
 documentation:
@@ -75,6 +75,21 @@ Ook gerepareerd: tegenstrijdige min/max sprekersgrenzen worden gemeld in plaats 
 Mutatietest als bewijs dat de tests niet hol zijn: met de None-controle uitgeschakeld falen test_the_fallback_also_fires_when_pyannote_returns_none en test_a_none_return_with_no_fallback_names_the_gated_repository, met exact de oude melding 'NoneType object has no attribute to'. De eerste versie van die tweede test toetste alleen 'result is None' en was daarmee waar met en zonder fix; hij toetst nu de logmelding.
 
 AC 5 blijft ONgevinkt: meten wat max_speakers doet met het aantal labels op aflevering 1 vraagt een echte GPU-run op die aflevering, en die is niet gedaan.
+
+AC5 gemeten op 2026-08-31, aflevering 1 (1772s audio), drie diarizationruns op dezelfde waveform:
+
+  geen grens : 6 sprekers, 399 turns, 83s
+               spreektijd 575, 433, 231, 223, 133, 23 seconden
+  max 4      : 4 sprekers, 400 turns, 38s
+               spreektijd 594, 435, 365, 225 seconden
+  max 5      : 5 sprekers, 397 turns, 38s
+               spreektijd 575, 433, 364, 223, 23 seconden
+
+De grondwaarheid uit de sprekersanalyse is vier mensen: Nancy, Ad, Dani, Dave. Zonder grens splitst pyannote er zes uit, waarvan twee duidelijk artefact: een spreker met 23 seconden en een met 133 seconden. Met max 4 verdwijnen beide en wordt de spreektijd plausibel verdeeld over vier mensen. Met max 5 blijft het 23-secondenfragment staan, dus de grens moet echt op vier.
+
+Bijvangst: begrenzen halveert ook de rekentijd, 83s naar 38s.
+
+Aanbeveling, niet doorgevoerd: de default DIARIZATION_MAX_SPEAKERS blijft 10, want die geldt voor alle afleveringen en gasten varieren. Voor deze show is 4 de juiste waarde en die hoort in .env, niet in de code.
 <!-- SECTION:NOTES:END -->
 
 ## Final Summary

@@ -214,13 +214,10 @@ def diarize_audio(waveform=None, sample_rate=None, audio_file_path=None, hf_toke
         except Exception as primary_error:
             # ADR-002 names DIARIZATION_ALTERNATIVE_MODEL as the mitigation for
             # pyannote drifting against torch. Nothing read it, so the mitigation
-            # the ADR claims did not exist. It does now - but be blunt about its
-            # limit: the shipped default is pyannote/segmentation-3.0, a
-            # segmentation MODEL. Pipeline.from_pretrained reads
-            # config["pipeline"]["name"], which a model config does not have, so
-            # that value raises KeyError. The fallback is only useful once the
-            # setting points at a real pipeline; until then this logs the attempt
-            # and re-raises the ORIGINAL error, which is the one worth reading.
+            # the ADR claims did not exist. It does now, and ships unset: the
+            # value must name a diarization PIPELINE, and anything else (a
+            # segmentation model, say) can only raise. When it is unset this
+            # re-raises the ORIGINAL error, which is the one worth reading.
             if not DIARIZATION_ALTERNATIVE_MODEL or DIARIZATION_ALTERNATIVE_MODEL == DIARIZATION_MODEL:
                 raise
             logging.warning(
@@ -232,8 +229,9 @@ def diarize_audio(waveform=None, sample_rate=None, audio_file_path=None, hf_toke
                 pipeline = _load(DIARIZATION_ALTERNATIVE_MODEL)
             except Exception as fallback_error:
                 logging.error(
-                    "DIARIZATION_ALTERNATIVE_MODEL %s also failed (%s). Note that a "
-                    "segmentation model cannot serve as a diarization pipeline.",
+                    "DIARIZATION_ALTERNATIVE_MODEL %s also failed (%s). It must name a "
+                    "diarization PIPELINE - a repo whose config.yaml has a 'pipeline' "
+                    "key - not a segmentation model such as pyannote/segmentation-3.0.",
                     DIARIZATION_ALTERNATIVE_MODEL, fallback_error,
                 )
                 raise primary_error

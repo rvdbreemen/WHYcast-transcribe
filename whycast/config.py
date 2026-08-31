@@ -52,8 +52,16 @@ CHUNK_OVERLAP = int(os.environ.get("CHUNK_OVERLAP", "1000"))  # Overlap between 
 # Speaker diarization settings
 USE_SPEAKER_DIARIZATION = os.environ.get("USE_SPEAKER_DIARIZATION", "True").lower() in ("true", "1", "yes")
 DIARIZATION_MODEL = os.environ.get("DIARIZATION_MODEL", "pyannote/speaker-diarization-3.1")
-# Alternative model if the primary one is not available or fails
-DIARIZATION_ALTERNATIVE_MODEL = os.environ.get("DIARIZATION_ALTERNATIVE_MODEL", "pyannote/segmentation-3.0")
+# Fallback pipeline for when DIARIZATION_MODEL cannot be loaded (ADR-002).
+# Empty by default, deliberately: this must name a diarization PIPELINE, and the
+# value shipped here before ("pyannote/segmentation-3.0") is a segmentation
+# MODEL. Verified against the Hub: its config.yaml holds ['task', 'model'] where
+# Pipeline.from_pretrained reads config["pipeline"]["name"], so it could only
+# ever raise KeyError. pyannote/speaker-diarization-3.0 is the natural
+# candidate, but it is gated - accept its conditions on the Hub first, then set
+# this. An unset value simply means "no fallback", which the code reports
+# plainly instead of pretending to have one.
+DIARIZATION_ALTERNATIVE_MODEL = os.environ.get("DIARIZATION_ALTERNATIVE_MODEL", "")
 DIARIZATION_MIN_SPEAKERS = int(os.environ.get("DIARIZATION_MIN_SPEAKERS", "1"))
 DIARIZATION_MAX_SPEAKERS = int(os.environ.get("DIARIZATION_MAX_SPEAKERS", "10"))
 
