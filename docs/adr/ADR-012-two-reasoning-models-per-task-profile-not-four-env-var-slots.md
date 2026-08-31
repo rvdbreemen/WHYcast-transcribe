@@ -1,7 +1,7 @@
 ---
 id: "ADR-012"
 title: "Two reasoning models per task profile, not four env-var slots"
-status: "Proposed"
+status: "Accepted"
 date: "2026-08-31"
 binding: false
 gate: null
@@ -44,7 +44,7 @@ format: "madr"
 
 ## Status
 
-Proposed, 2026-08-31.
+Accepted, 2026-08-31.
 
 **Decision Maker:** User: Robert van den Breemen
 
@@ -76,6 +76,11 @@ status_history:
     status: Proposed
     changed_by: "User: Robert van den Breemen"
     reason: Related to ADR-007
+    changed_via: adr-kit lifecycle
+  - date: 2026-08-31
+    status: Accepted
+    changed_by: "User: Robert van den Breemen"
+    reason: Accepted by Robert in session; supersedes ADR-003 with the measured GPT-5.6 parameter contract and cost
     changed_via: adr-kit lifecycle
 ```
 
@@ -246,8 +251,8 @@ paths.
 
 ## Open Questions
 
-- [ ] Should `OPENAI_MODEL` and `OPENAI_LARGE_CONTEXT_MODEL` ever diverge again, or should `choose_appropriate_model()` and the large-context slot be removed outright once a model handles every episode length this project sees?
-- [ ] Is `reasoning_effort=high` the right default for the four text steps, given it is 2.4x the wall-clock and the quality difference has not been adjudicated?
+- [x] Should `OPENAI_MODEL` and `OPENAI_LARGE_CONTEXT_MODEL` ever diverge again, or should `choose_appropriate_model()` and the large-context slot be removed outright once a model handles every episode length this project sees? — **Answered 2026-08-31 by User: Robert van den Breemen:** Deferred, not decided. The slot is kept for now because removing it is irreversible in a way keeping it is not: an env-var that nobody sets costs nothing, while deleting choose_appropriate_model() throws away the only place a length-based switch could be reinstated without touching call sites. Revisit when an episode is measured that gpt-5.6-luna handles worse than a differentiated model would, or when the slot has gone a full release unused on every machine that runs this pipeline.
+- [x] Is `reasoning_effort=high` the right default for the four text steps, given it is 2.4x the wall-clock and the quality difference has not been adjudicated? — **Answered 2026-08-31 by User: Robert van den Breemen:** Deferred, and knowingly so. high was chosen before there was anything to compare it against, and the A/B measured tokens, latency and truncation rather than quality, so there is no evidence that lowering it would cost anything. What is measured is the price: 46 percent more output tokens and 2.4 times the wall-clock. The honest next step is a run at medium on the same episode with the outputs placed side by side for a human read, which nobody has done. Until then high stays because it is the setting the current measurements were taken at, not because it is known to be right.
 
 ## Related Decisions
 

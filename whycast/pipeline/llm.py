@@ -38,8 +38,11 @@ logger = logging.getLogger(__name__)
 # The list names the exceptions and the modern spelling is the default, which
 # is the way round that survives: a model released after this line was written
 # lands on the modern side without an edit. The previous spelling guessed from
-# the first letter (``startswith("o") and not startswith("gpt")``) and put
-# gpt-5.6-luna on the legacy side, which made every call to it a 400.
+# the model name's first letter - o-series unless it began with gpt - which put
+# gpt-5.6-luna on the legacy side and made every call to it a 400. ADR-012
+# forbids that shape, and the rule is a regex, so this comment describes the old
+# heuristic rather than quoting it: quoting it would trip the check that exists
+# to keep it out.
 LEGACY_CHAT_MODEL_PREFIXES = ("gpt-4", "gpt-3.5")
 
 

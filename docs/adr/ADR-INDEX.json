@@ -677,7 +677,7 @@
       "title": "Two reasoning models per task profile, not four env-var slots",
       "path": "ADR-012-two-reasoning-models-per-task-profile-not-four-env-var-slots.md",
       "format": "madr",
-      "status": "Proposed",
+      "status": "Accepted",
       "date": "2026-08-31",
       "decision_summary": "Chosen option: two models by profile, because the pipeline has two kinds of work and not four.",
       "topics": [

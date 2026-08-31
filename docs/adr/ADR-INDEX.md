@@ -17,4 +17,4 @@ One row per Architecture Decision Record. Scope is the Enforcement `path_glob` s
 | ADR-009 | Accepted | `whycast/pipeline/feed.py` | Chosen option: Option A, because it removes the noise where it is generated without weakening the primitive: whycast.... |
 | ADR-010 | Accepted | - | Chosen option: Option A. |
 | ADR-011 | Accepted | - | Chosen option: Option A. |
-| ADR-012 | Proposed | `whycast/**/*.py`, `whycast/pipeline/llm.py` | Chosen option: two models by profile, because the pipeline has two kinds of work and not four. |
+| ADR-012 | Accepted | `whycast/**/*.py`, `whycast/pipeline/llm.py` | Chosen option: two models by profile, because the pipeline has two kinds of work and not four. |
