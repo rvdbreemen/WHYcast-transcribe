@@ -1,8 +1,8 @@
 ---
 id: "ADR-003"
 title: "Per-task OpenAI model selection"
-status: "Accepted"
-date: "2026-08-23"
+status: "Superseded"
+date: "2026-08-31"
 binding: false
 gate: null
 documents_shipped: true
@@ -10,7 +10,7 @@ verified_in:
   - "config.py"
   - "transcribe.py"
 supersedes: []
-superseded_by: null
+superseded_by: "ADR-012"
 topics:
   - "openai"
   - "llm"
@@ -35,7 +35,7 @@ format: "madr"
 
 ## Status
 
-Accepted, 2026-08-23.
+Superseded by ADR-012, 2026-08-31.
 
 ## Status History
 
@@ -55,6 +55,11 @@ status_history:
     status: Accepted
     changed_by: "User: Robert van den Breemen"
     reason: Auto-accepted already-shipped ADR with verified evidence
+    changed_via: adr-kit lifecycle
+  - date: 2026-08-31
+    status: Superseded
+    changed_by: "User: Robert van den Breemen"
+    reason: "Superseded by ADR-012: the four model slots collapse to two by default, and the parameter contract for gpt-5.6 removes temperature as a tuning knob"
     changed_via: adr-kit lifecycle
 ```
 

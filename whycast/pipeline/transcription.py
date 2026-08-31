@@ -42,7 +42,6 @@ from whycast.pipeline.vocabulary import process_transcript_with_vocabulary  # no
 
 logger = logging.getLogger(__name__)
 
-
 def setup_model(
     model_size: str = MODEL_SIZE,
     device: Optional[str] = None,
@@ -205,26 +204,32 @@ def transcribe_audio(model: WhisperModel, audio_file: str, speaker_segments: Opt
     emit("transcription", f"\nStart transcriptie van {os.path.basename(audio_file)}...")
     start_time = time.time()
 
-    # Load custom vocabulary if enabled
-    word_list = None
+    # Load custom vocabulary if enabled (ADR-006). Corrections are applied to
+    # the text as it comes out of Whisper - per segment on the live path, and
+    # per span in write_transcript_files - rather than by biasing the decoder.
+    #
+    # This deliberately does not use faster-whisper's `hotwords`. That shares
+    # Whisper's 224-token prompt window with `initial_prompt`, and this
+    # project's vocabulary already encodes to 285 tokens, so it would not fit
+    # today and would silently drop terms as the file grows. A replacement map
+    # has no such ceiling: adding an entry costs nothing and always applies.
+    #
+    # What used to be here was `word_list=`, which is not a faster-whisper
+    # parameter at all - verified against 1.1.1. Every run raised TypeError,
+    # logged a warning and retried without the vocabulary, so the dance around
+    # it bought nothing.
     word_replacements = {}
     if USE_CUSTOM_VOCABULARY and os.path.exists(VOCABULARY_FILE):
         try:
             with open(VOCABULARY_FILE, 'r', encoding='utf-8') as f:
                 vocabulary = json.load(f)
 
-            # Create a list of words for the word_list parameter
-            word_list = []
-
-            # Read replacements for post-processing
             for original, replacement in vocabulary.items():
                 word_replacements[original.lower()] = replacement
-                # Also add the replacement to the word_list
-                word_list.append(replacement)
 
-            if word_list:
-                logging.info(f"Loaded {len(word_list)} custom vocabulary words")
-                emit("transcription", f"Custom vocabulary loaded with {len(word_list)} words")
+            if word_replacements:
+                logging.info("Loaded %d vocabulary corrections", len(word_replacements))
+                emit("transcription", f"Custom vocabulary loaded: {len(word_replacements)} corrections")
         except Exception as e:
             logging.error(f"Error loading vocabulary: {str(e)}")
 
@@ -239,15 +244,6 @@ def transcribe_audio(model: WhisperModel, audio_file: str, speaker_segments: Opt
         emit("transcription", f"🚀 GPU Batch Processing: batch_size={batch_size}")
     else:
         logging.info(f"Using standard model with batch_size={batch_size}")
-      # Create basic transcription parameters (common to both models)
-    base_transcription_params = {
-        'beam_size': BEAM_SIZE,
-        'word_timestamps': True,  # Enable word timestamps for better alignment with diarization
-        'vad_filter': True,       # Filter out non-speech parts
-        'vad_parameters': dict(min_silence_duration_ms=500),  # Configure VAD for better accuracy
-        'initial_prompt': "This is a podcast transcription.",
-        'condition_on_previous_text': True,
-    }
       # Create transcription parameters (without batch_size for now)
     transcription_params = {
         'beam_size': BEAM_SIZE,
@@ -327,36 +323,11 @@ def transcribe_audio(model: WhisperModel, audio_file: str, speaker_segments: Opt
         return result
 
     # Execute transcription with appropriate parameters
+    emit("transcription", "Running transcription...")
+
     try:
-        # Add word_list only if it is defined and not empty
-        if word_list:
-            try:
-                # Try with word_list
-                emit("transcription", "Running transcription with custom vocabulary...")
-                segments_generator, info = model.transcribe(
-                    audio_file,
-                    **transcription_params,
-                    word_list=word_list
-                )
-                segments_list = collect_with_live_output(segments_generator)
-            except TypeError as e:
-                # If word_list is not supported, try without it
-                logging.warning(f"word_list parameter not supported in this version of faster_whisper: {e}")
-                logging.info("Running transcription without custom vocabulary")
-                emit("transcription", "word_list not supported, running transcription without custom vocabulary...")
-                segments_generator, info = model.transcribe(
-                    audio_file,
-                    **transcription_params
-                )
-                segments_list = collect_with_live_output(segments_generator)
-        else:
-            # If there is no word_list, use the default parameters
-            emit("transcription", "Running transcription...")
-            segments_generator, info = model.transcribe(
-                audio_file,
-                **transcription_params
-            )
-            segments_list = collect_with_live_output(segments_generator)
+        segments_generator, info = model.transcribe(audio_file, **transcription_params)
+        segments_list = collect_with_live_output(segments_generator)
 
     except Exception as e:
         logging.error(f"Error during transcription: {str(e)}")

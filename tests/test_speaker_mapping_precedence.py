@@ -8,7 +8,7 @@ visible from the outside: the step returns an assigned transcript either way.
 The only way to tell "used the saved mapping" from "asked the model again" is
 to watch whether the model was asked.
 
-So every test here patches :func:`analyze_speakers_with_o4` and asserts on its
+So every test here patches :func:`analyze_speakers` and asserts on its
 call count, not just on the transcript that comes out.
 
 Four branches, in the order ADR-010 states them:
@@ -21,7 +21,7 @@ Four branches, in the order ADR-010 states them:
 The tripwires below are the other half of the point. If the programmatic
 application fails for any incidental reason, ``speaker_assignment_step`` falls
 back to :func:`speaker_assignment_fallback`, which calls OpenAI for real. A test
-that only patched ``analyze_speakers_with_o4`` could therefore still spend
+that only patched ``analyze_speakers`` could therefore still spend
 money while reporting success. Every run in this module asserts that no paid
 entry point was reached at all.
 """
@@ -104,7 +104,7 @@ def run_step(monkeypatch):
         analyze = _Recorder(model_answer)
         for name in ("process_with_openai", "speaker_assignment_fallback", "OpenAI"):
             monkeypatch.setattr(speakers_module, name, _Tripwire(name))
-        monkeypatch.setattr(speakers_module, "analyze_speakers_with_o4", analyze)
+        monkeypatch.setattr(speakers_module, "analyze_speakers", analyze)
         monkeypatch.setattr(speakers_module, "openai_available", True)
 
         sink = CollectSink()
@@ -134,7 +134,7 @@ class _Recorder:
         self.call_count += 1
         if self.answer is None:
             raise AssertionError(
-                "analyze_speakers_with_o4 was called, but this test expected the "
+                "analyze_speakers was called, but this test expected the "
                 "saved mapping to be used instead - that is the paid call ADR-010 "
                 "exists to avoid"
             )
@@ -194,7 +194,7 @@ def test_a_saved_mapping_still_applies_with_no_openai_configured(tmp_path, monke
     )
     monkeypatch.setattr(speakers_module, "openai_available", False)
     monkeypatch.setattr(
-        speakers_module, "analyze_speakers_with_o4", _Tripwire("analyze_speakers_with_o4")
+        speakers_module, "analyze_speakers", _Tripwire("analyze_speakers")
     )
 
     result = speakers_module.speaker_assignment_step(TRANSCRIPT, BASE, str(tmp_path))

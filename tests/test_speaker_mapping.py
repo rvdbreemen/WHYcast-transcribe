@@ -10,7 +10,7 @@ that turned out to be true of them but were nobody's test:
   in one sweep (ADR-010's Must Not, and unrecoverable: ``podcasts/`` is
   gitignored);
 * the saved-mapping path makes no OpenAI call *at all* - not merely no
-  ``analyze_speakers_with_o4`` call. A second, unrelated paid call sat behind
+  ``analyze_speakers`` call. A second, unrelated paid call sat behind
   ``[SPEAKER_UNKNOWN]`` handling and fired on every transcript in this corpus,
   on the very path the run announces as "no model call needed";
 * a mapping that names none of the transcript's labels is refused rather than
@@ -81,7 +81,7 @@ def no_paid_calls(monkeypatch):
     """Every route to OpenAI in the speakers module, closed.
 
     ``OpenAI`` is in the list on purpose and is the one that matters. Patching
-    only ``analyze_speakers_with_o4`` proves the *analysis* was skipped and
+    only ``analyze_speakers`` proves the *analysis* was skipped and
     nothing else: ``attribute_unknown_speakers_with_ai`` used to construct its
     own ``OpenAI()`` client and call gpt-4o once per five ``[SPEAKER_UNKNOWN]``
     segments, on the saved-mapping path, in the same run that printed "Speaker
@@ -89,7 +89,7 @@ def no_paid_calls(monkeypatch):
     """
     for name in (
         "OpenAI",
-        "analyze_speakers_with_o4",
+        "analyze_speakers",
         "process_with_openai",
         "speaker_assignment_fallback",
     ):
@@ -248,7 +248,7 @@ def test_branch_3_no_file_asks_the_model_and_saves_the_answer(tmp_path, monkeypa
         calls.append(output_basename)
         return dict(answer)
 
-    monkeypatch.setattr(speakers_module, "analyze_speakers_with_o4", analyse)
+    monkeypatch.setattr(speakers_module, "analyze_speakers", analyse)
 
     result, error, text, _ = run_step(tmp_path)
 
@@ -470,7 +470,7 @@ def test_a_hand_edit_survives_a_re_run_and_replaces_the_models_guess(tmp_path):
         return {"[SPEAKER_00]": "Nancy", "[SPEAKER_01]": "Ad"}
 
     with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(speakers_module, "analyze_speakers_with_o4", analyse)
+        patch.setattr(speakers_module, "analyze_speakers", analyse)
         first, error, _, _ = run_step(tmp_path)
     assert error is None, error
     assert "Nancy:" in first and calls == [BASE]
@@ -514,7 +514,7 @@ def test_an_in_flight_run_does_not_overwrite_a_mapping_saved_meanwhile(tmp_path)
         return {"[SPEAKER_00]": "Nancy", "[SPEAKER_01]": "Ad"}
 
     with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(speakers_module, "analyze_speakers_with_o4", analyse)
+        patch.setattr(speakers_module, "analyze_speakers", analyse)
         _, error, text, _ = run_step(tmp_path)
 
     assert error is None, error

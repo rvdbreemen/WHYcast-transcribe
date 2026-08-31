@@ -3,11 +3,11 @@ id: TASK-015
 title: >-
   Word timestamps worden berekend en weggegooid; 23 procent van de segmenten
   omvat twee sprekers
-status: In Progress
+status: Done
 assignee:
   - '@robert'
 created_date: '2026-08-30 21:57'
-updated_date: '2026-08-31 05:10'
+updated_date: '2026-08-31 07:29'
 labels: []
 dependencies:
   - TASK-014
@@ -43,11 +43,11 @@ Belangrijk voor de afweging: dit is NIET op te lossen met een beter diarizationm
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Segmenten die meerdere sprekers overlappen worden op de sprekerwissel gesplitst met de bestaande woordtijden
-- [ ] #2 Elk resulterend segment overlapt nog hoogstens een spreker, of de rest wordt expliciet gelogd
-- [ ] #3 Op episode_0 daalt het aantal segmenten met meer dan een spreker aantoonbaar ten opzichte van de gemeten 53
-- [ ] #4 Een test dekt een segment waarin de sprekerwissel midden in de tekst valt
-- [ ] #5 Als word_timestamps toch niet gebruikt gaat worden, wordt de vlag uitgezet zodat de GPU-tijd niet voor niets betaald wordt
+- [x] #1 Segmenten die meerdere sprekers overlappen worden op de sprekerwissel gesplitst met de bestaande woordtijden
+- [x] #2 Elk resulterend segment overlapt nog hoogstens een spreker, of de rest wordt expliciet gelogd
+- [x] #3 Op episode_0 daalt het aantal segmenten met meer dan een spreker aantoonbaar ten opzichte van de gemeten 53
+- [x] #4 Een test dekt een segment waarin de sprekerwissel midden in de tekst valt
+- [x] #5 Als word_timestamps toch niet gebruikt gaat worden, wordt de vlag uitgezet zodat de GPU-tijd niet voor niets betaald wordt
 <!-- AC:END -->
 
 ## Implementation Notes
@@ -93,3 +93,9 @@ REGRESSIE GEVONDEN EN GEREPAREERD in dezelfde run. De spans worden uit segment.w
 
 Suite in de venv: 910 passed, 1 skipped, 0 failed, inclusief test_cuda_runtime.
 <!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+De woordtijden worden nu gelezen in plaats van weggegooid: segmenten die meerdere sprekers overlappen worden op de sprekerwissel gesplitst. Op aflevering 0 leverde dat 78 beurten met 18 nepbeurten terug naar 62 beurten met uitsluitend echte namen, bij 100 procent woordretentie. Woord-voor-woord uitgelijnd tegen het origineel gingen 202 woorden van een niet-bestaande spreker naar de juiste persoon. De 167 woorden die tussen echte namen verschoven zijn niet uit tekst te beoordelen en staan als zodanig in de PR. Gecommit in 6ea980d, PR #21.
+<!-- SECTION:FINAL_SUMMARY:END -->

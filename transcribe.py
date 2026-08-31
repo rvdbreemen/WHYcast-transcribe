@@ -31,6 +31,7 @@ from whycast.config import VERSION  # explicit: used below and by importers
 # Errors
 from whycast.errors import (  # noqa: F401
     EpisodeNotFoundError,
+    ConfigurationError,
     PipelineError,
     SecurityError,
 )
@@ -225,3 +226,14 @@ if __name__ == "__main__":
     except PipelineError as e:
         print(str(e))
         exit(1)
+    except ConfigurationError as e:
+        # A sibling of PipelineError, not a subclass, so it needs its own arm.
+        # Without this the CLI answered a configuration fault with a traceback
+        # instead of the sentence the library took care to write.
+        #
+        # Covers a missing openai package, a gated diarization model,
+        # contradictory speaker bounds, and a missing or malformed
+        # OPENAI_API_KEY. That last one used to raise a bare ValueError that
+        # matched no arm here and ended in a traceback.
+        print(str(e))
+        exit(2)

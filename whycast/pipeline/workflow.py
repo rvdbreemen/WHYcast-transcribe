@@ -10,6 +10,8 @@ import logging
 import os
 import re
 
+from whycast.config import USE_SPEAKER_DIARIZATION
+from whycast.errors import ConfigurationError
 from whycast.events import emit
 from whycast.pipeline.audio import prepare_audio_for_diarization
 from whycast.pipeline.diarization import diarize_audio
@@ -20,6 +22,62 @@ from whycast.pipeline.speakers import write_merged_transcript
 from whycast.pipeline.transcription import setup_model, transcribe_audio, write_transcript_files
 
 logger = logging.getLogger(__name__)
+
+
+def _run_diarization(prepared_audio):
+    """Diarize one prepared audio file, or None when it could not be done.
+
+    Split out of full_workflow so the "switched off" path does not have to walk
+    past the GPU checks and the audio load that exist only for this step.
+    """
+    emit("workflow", "[2/4] Running speaker diarization ...")
+    verify_gpu_setup()
+
+    try:
+        import torch
+        import torchaudio
+
+        # Load audio with GPU optimization
+        emit("workflow", "Loading audio for diarization...")
+        waveform, sample_rate = torchaudio.load(prepared_audio)
+
+        # Run diarization with GPU acceleration
+        speaker_segments = diarize_audio(waveform=waveform, sample_rate=sample_rate)
+
+        if speaker_segments is not None:
+            # Count the number of speaker segments
+            num_segments = len(list(speaker_segments.itertracks()))
+            emit("workflow", f"✅ Diarization complete. Found {num_segments} speaker segments.")
+
+            # Log speaker information
+            speakers = set()
+            for segment, _, label in speaker_segments.itertracks(yield_label=True):
+                speakers.add(label)
+            emit("workflow", f"🎤 Detected {len(speakers)} unique speakers: {', '.join(sorted(speakers))}")
+            logging.info(f"Diarization found {num_segments} segments with {len(speakers)} speakers")
+        else:
+            emit("workflow", "❌ Diarization failed or returned no segments.")
+            logging.warning("Diarization failed or returned no segments")
+
+    except ConfigurationError:
+        # A gated model, a bad token, or contradictory speaker bounds are things
+        # a person must fix. Printing "Diarization failed" and carrying on gave
+        # them a label-free transcript and exit code 0.
+        raise
+    except Exception as e:
+        emit("workflow", f"❌ Diarization failed: {e}")
+        logging.error(f"Diarization failed: {e}")
+        speaker_segments = None
+          # Clear GPU memory on error
+        try:
+            if 'torch' in locals() and torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                logging.info("GPU memory cleared after diarization error")
+        except:
+            pass
+
+    
+    return speaker_segments
 
 
 def full_workflow(audio_file=None, output_dir=None, rssfeed=None, force: bool = False, skip_postprocess: bool = False):
@@ -67,49 +125,22 @@ def full_workflow(audio_file=None, output_dir=None, rssfeed=None, force: bool = 
     emit("workflow", f"Prepared audio: {prepared_audio}")
 
     # Step 3: Transcribe audio (with diarization)
-    emit("workflow", "[2/4] Running speaker diarization ...")
-
-    # Verify GPU setup before starting diarization
-    gpu_info = verify_gpu_setup()
-
-    try:
-        import torch
-        import torchaudio
-
-        # Load audio with GPU optimization
-        emit("workflow", "Loading audio for diarization...")
-        waveform, sample_rate = torchaudio.load(prepared_audio)
-
-        # Run diarization with GPU acceleration
-        speaker_segments = diarize_audio(waveform=waveform, sample_rate=sample_rate)
-
-        if speaker_segments is not None:
-            # Count the number of speaker segments
-            num_segments = len(list(speaker_segments.itertracks()))
-            emit("workflow", f"✅ Diarization complete. Found {num_segments} speaker segments.")
-
-            # Log speaker information
-            speakers = set()
-            for segment, _, label in speaker_segments.itertracks(yield_label=True):
-                speakers.add(label)
-            emit("workflow", f"🎤 Detected {len(speakers)} unique speakers: {', '.join(sorted(speakers))}")
-            logging.info(f"Diarization found {num_segments} segments with {len(speakers)} speakers")
-        else:
-            emit("workflow", "❌ Diarization failed or returned no segments.")
-            logging.warning("Diarization failed or returned no segments")
-
-    except Exception as e:
-        emit("workflow", f"❌ Diarization failed: {e}")
-        logging.error(f"Diarization failed: {e}")
+    if not USE_SPEAKER_DIARIZATION:
+        # Checked here rather than around diarize_audio, because everything
+        # between the two is work done solely FOR diarization: verify_gpu_setup,
+        # importing torch, and loading the whole episode into memory. Doing that
+        # and then throwing the result away was slow, and any failure in it -
+        # missing torch, no torchaudio backend - was reported as "Diarization
+        # failed", which is exactly the message that sends someone hunting for a
+        # broken GPU they had deliberately opted out of. faster-whisper runs on
+        # ctranslate2, so torch is in this tree for diarization alone.
+        emit("workflow", "[2/4] Speaker diarization is switched off; continuing without speaker labels.")
+        logging.info("Speaker diarization disabled by configuration")
         speaker_segments = None
-          # Clear GPU memory on error
-        try:
-            if 'torch' in locals() and torch.cuda.is_available():
-                torch.cuda.empty_cache()
-                logging.info("GPU memory cleared after diarization error")
-        except:
-            pass
+    else:
+        speaker_segments = _run_diarization(prepared_audio)
 
+    # Step 4: Transcribe
     emit("workflow", "[3/4] Transcribing audio ...")
 
     # Initialize Whisper model with GPU acceleration

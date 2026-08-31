@@ -25,7 +25,7 @@ from whycast.config import (
     OPENAI_MODEL,
     OPENAI_REASONING_EFFORT,
 )
-from whycast.errors import SecurityError
+from whycast.errors import ConfigurationError, SecurityError
 from whycast.events import emit
 
 logger = logging.getLogger(__name__)
@@ -38,8 +38,11 @@ logger = logging.getLogger(__name__)
 # The list names the exceptions and the modern spelling is the default, which
 # is the way round that survives: a model released after this line was written
 # lands on the modern side without an edit. The previous spelling guessed from
-# the first letter (``startswith("o") and not startswith("gpt")``) and put
-# gpt-5.6-luna on the legacy side, which made every call to it a 400.
+# the model name's first letter - o-series unless it began with gpt - which put
+# gpt-5.6-luna on the legacy side and made every call to it a 400. ADR-012
+# forbids that shape, and the rule is a regex, so this comment describes the old
+# heuristic rather than quoting it: quoting it would trip the check that exists
+# to keep it out.
 LEGACY_CHAT_MODEL_PREFIXES = ("gpt-4", "gpt-3.5")
 
 
@@ -91,12 +94,18 @@ def ensure_api_key() -> str:
         str: The API key if available and valid
         
     Raises:
-        ValueError: If the API key is not set or invalid
+        ConfigurationError: If the API key is not set or invalid
         SecurityError: If the API key format is suspicious
+
+    ConfigurationError rather than the bare ValueError this used to raise: a
+    ValueError matched none of transcribe.py's except arms, so a missing key
+    ended the CLI in a traceback while the web UI handled it cleanly. Both
+    subclass WhycastError now, which is what ADR-008 asks the worker to
+    translate. webui/runner.py:1158 catches both spellings.
     """
     api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
-        raise ValueError(
+        raise ConfigurationError(
             "OPENAI_API_KEY environment variable is not set. "
             "Please set your OpenAI API key in the .env file or environment variables."
         )
@@ -104,7 +113,7 @@ def ensure_api_key() -> str:
     # Security: Basic validation of API key format
     api_key = api_key.strip()
     if len(api_key) < 20:
-        raise ValueError("OPENAI_API_KEY appears to be too short to be valid")
+        raise ConfigurationError("OPENAI_API_KEY appears to be too short to be valid")
     
     # Security: Check for suspicious characters that could indicate injection
     if any(char in api_key for char in [';', '&', '|', '`', '$', '\n', '\r']):
@@ -172,23 +181,33 @@ def truncate_transcript(transcript: str, max_tokens: int) -> str:
     return first_part + "\n\n[...transcript truncated due to length...]\n\n" + last_part
 
 def choose_appropriate_model(transcript: str) -> str:
-    """
-    Choose the appropriate model based on transcript length.
-    
+    """Pick the model for this transcript, by length (ADR-003).
+
     Args:
-        transcript: The transcript text
-        
+        transcript: The transcript text.
+
     Returns:
-        Model name to use
+        ``OPENAI_LARGE_CONTEXT_MODEL`` for a transcript past
+        ``MAX_INPUT_TOKENS``, otherwise ``OPENAI_MODEL``.
+
+    The switch only does anything when the two env-vars actually name different
+    models. They ship identical, because gpt-5.6-luna already handles the long
+    inputs the large-context slot was introduced for, so by default this
+    function returns the same model either way. It used to log "Using large
+    context model: ..." regardless, which read like a decision had been taken
+    when nothing had changed; that line now fires only on a real switch.
     """
     estimated_tokens = estimate_token_count(transcript)
     logging.info(f"Estimated transcript length: ~{estimated_tokens} tokens")
-    
-    # If transcript is long, use large context model
+
     if estimated_tokens > MAX_INPUT_TOKENS and OPENAI_LARGE_CONTEXT_MODEL:
-        logging.info(f"Using large context model: {OPENAI_LARGE_CONTEXT_MODEL} due to transcript length")
+        if OPENAI_LARGE_CONTEXT_MODEL != OPENAI_MODEL:
+            logging.info(
+                f"Transcript is long (~{estimated_tokens} tokens); switching from "
+                f"{OPENAI_MODEL} to OPENAI_LARGE_CONTEXT_MODEL {OPENAI_LARGE_CONTEXT_MODEL}"
+            )
         return OPENAI_LARGE_CONTEXT_MODEL
-    
+
     return OPENAI_MODEL
 
 
@@ -273,6 +292,11 @@ def summarize_large_transcript(transcript: str, prompt: str) -> Optional[str]:
                 logging.info(f"Completed summary for chunk {i+1}")
             else:
                 logging.warning(f"Failed to summarize chunk {i+1}")
+        except ConfigurationError:
+            # A missing package or key is not a bad chunk: retrying the other
+            # chunks cannot help and would spend money doing it. ADR-008 wants
+            # this at the worker, not logged away here.
+            raise
         except Exception as e:
             logging.error(f"Error summarizing chunk {i+1}: {str(e)}")
             # Continue with partial results if available
@@ -302,10 +326,29 @@ def process_with_openai(text: str, prompt: str, model_name: str, max_tokens: int
     Returns:
         The generated text or None if there was an error
     """
+    # Both of these are deliberately OUTSIDE the try below. That block ends in
+    # `except Exception: return None`, so anything raised inside it is swallowed
+    # into "no result" - which is the opposite of what ADR-008 asks for: library
+    # code raises and the worker translates. A missing package or a missing API
+    # key is a configuration fault a person has to fix, not an empty answer.
+    if not openai_available:
+        # Without openai the shim is None, and OpenAI(api_key=...) would raise
+        # "'NoneType' object is not callable", naming neither the package nor
+        # the fix.
+        raise ConfigurationError(
+            "The openai package is not installed, so no language-model step "
+            "can run. Install it with 'pip install openai'."
+        )
+    api_key = ensure_api_key()
+
+    # Bound before the try because the handler formats it. It used to be
+    # assigned after two statements that can throw, so an early failure died
+    # with "UnboundLocalError: cannot access local variable 'call_id'" and the
+    # real error was never logged.
+    call_id = str(uuid.uuid4())
+
     try:
-        api_key = ensure_api_key()
         client = OpenAI(api_key=api_key)
-        call_id = str(uuid.uuid4())
         prompt_first_line = prompt.strip().splitlines()[0] if prompt.strip().splitlines() else prompt.strip()
         logging.info(f"[OpenAI Call {call_id}] Model: {model_name}, Prompt first line: {prompt_first_line}")
         emit("llm", f"[OpenAI Call {call_id}] Prompt: {prompt_first_line}")

@@ -130,8 +130,8 @@
       "title": "Per-task OpenAI model selection",
       "path": "ADR-003-per-task-openai-model-selection.md",
       "format": "madr",
-      "status": "Accepted",
-      "date": "2026-08-23",
+      "status": "Superseded",
+      "date": "2026-08-31",
       "decision_summary": "Chosen option: Per-task model env-vars with length-based switch, because each step has a different cost/quality profi...",
       "topics": [
         "cost",
@@ -152,21 +152,10 @@
       "symbols": [],
       "context_scope": "selective",
       "decision_contract": {
-        "must": [
-          "Every OpenAI call takes its model from a config.py OPENAIMODEL constant",
-          "Long inputs route through chooseappropriatemodel"
-        ],
-        "must_not": [
-          "Do not hard-code a model name string at transcribe.py call sites"
-        ],
-        "exceptions": [
-          "None"
-        ],
-        "verification": [
-          "config.py:17-26",
-          "transcribe.py:629 chooseappropriatemodel",
-          "transcribe.py:942 analyzespeakerswitho4"
-        ]
+        "must": [],
+        "must_not": [],
+        "exceptions": [],
+        "verification": []
       },
       "scope": {
         "path_globs": [
@@ -182,7 +171,7 @@
           "transcribe.py"
         ],
         "supersedes": [],
-        "superseded_by": null
+        "superseded_by": "ADR-012"
       }
     },
     {
@@ -191,7 +180,7 @@
       "path": "ADR-004-hybrid-ai-analysis-plus-programmatic-speaker-assignment.md",
       "format": "madr",
       "status": "Accepted",
-      "date": "2026-08-25",
+      "date": "2026-08-31",
       "decision_summary": "Chosen option: Two-phase: LLM produces mapping, code applies it, because separating judgement (who is SPEAKER02) from...",
       "topics": [
         "attribution",
@@ -251,7 +240,7 @@
       "path": "ADR-005-recursive-chunked-summarization-for-long-transcripts.md",
       "format": "madr",
       "status": "Accepted",
-      "date": "2026-08-23",
+      "date": "2026-08-31",
       "decision_summary": "Chosen option: Recursive map-reduce summarization with overlap, because it preserves coverage of the whole episode in...",
       "topics": [
         "chunking",
@@ -367,7 +356,7 @@
       "path": "ADR-007-environment-variable-configuration-and-file-based-prompts.md",
       "format": "madr",
       "status": "Accepted",
-      "date": "2026-08-24",
+      "date": "2026-08-31",
       "decision_summary": "Chosen option: Env-vars + config.py constants + prompts/.txt, because it keeps secrets in .env, machine settings in e...",
       "topics": [
         "configuration",
@@ -682,6 +671,77 @@
         "supersedes": [],
         "superseded_by": null
       }
+    },
+    {
+      "id": "ADR-012",
+      "title": "Two reasoning models per task profile, not four env-var slots",
+      "path": "ADR-012-two-reasoning-models-per-task-profile-not-four-env-var-slots.md",
+      "format": "madr",
+      "status": "Accepted",
+      "date": "2026-08-31",
+      "decision_summary": "Chosen option: two models by profile, because the pipeline has two kinds of work and not four.",
+      "topics": [
+        "cost",
+        "llm",
+        "model-selection",
+        "openai"
+      ],
+      "aliases": [
+        "gpt-5.6-luna",
+        "gpt-5.6-sol",
+        "per-task model selection",
+        "reasoning effort"
+      ],
+      "components": [
+        "whycast.config.OPENAI_MODEL",
+        "whycast.config.OPENAI_REASONING_EFFORT",
+        "whycast.config.OPENAI_SPEAKER_MODEL",
+        "whycast.pipeline.llm.choose_appropriate_model",
+        "whycast.pipeline.llm.model_params"
+      ],
+      "symbols": [],
+      "context_scope": "selective",
+      "decision_contract": {
+        "must": [
+          "Model names and reasoning effort come from config.py env-vars, never literals",
+          "Per-model request parameters are built by llm.modelparams() and nowhere else",
+          "Speaker work uses its own model and its own reasoning effort",
+          "finishreason == \"length\" is logged; a truncated answer must not pass silently"
+        ],
+        "must_not": [
+          "Do not send temperature to any model",
+          "Do not infer a model's parameter shape from its name's prefix",
+          "Do not send audio or transcripts to a model chosen outside config.py"
+        ],
+        "exceptions": [
+          "None"
+        ],
+        "verification": [
+          "tests/testllmmodelparams.py",
+          "tests/testllmchunkedpayload.py",
+          "whycast/config.py:29-38"
+        ]
+      },
+      "scope": {
+        "path_globs": [
+          "whycast/**/*.py",
+          "whycast/pipeline/llm.py"
+        ]
+      },
+      "metadata": {
+        "binding": false,
+        "gate": null,
+        "documents_shipped": true,
+        "verified_in": [
+          "whycast/config.py",
+          "whycast/pipeline/llm.py",
+          "whycast/pipeline/speakers.py"
+        ],
+        "supersedes": [
+          "ADR-003"
+        ],
+        "superseded_by": null
+      }
     }
   ],
   "relationships": [
@@ -704,6 +764,12 @@
       "resolved": true
     },
     {
+      "source": "ADR-003",
+      "target": "ADR-012",
+      "type": "superseded-by",
+      "resolved": true
+    },
+    {
       "source": "ADR-004",
       "target": "ADR-002",
       "type": "related",
@@ -722,8 +788,20 @@
       "resolved": true
     },
     {
+      "source": "ADR-004",
+      "target": "ADR-012",
+      "type": "related",
+      "resolved": true
+    },
+    {
       "source": "ADR-005",
       "target": "ADR-003",
+      "type": "related",
+      "resolved": true
+    },
+    {
+      "source": "ADR-005",
+      "target": "ADR-012",
       "type": "related",
       "resolved": true
     },
@@ -742,6 +820,12 @@
     {
       "source": "ADR-007",
       "target": "ADR-008",
+      "type": "related",
+      "resolved": true
+    },
+    {
+      "source": "ADR-007",
+      "target": "ADR-012",
       "type": "related",
       "resolved": true
     },
@@ -838,6 +922,36 @@
     {
       "source": "ADR-011",
       "target": "ADR-010",
+      "type": "related",
+      "resolved": true
+    },
+    {
+      "source": "ADR-012",
+      "target": "ADR-003",
+      "type": "related",
+      "resolved": true
+    },
+    {
+      "source": "ADR-012",
+      "target": "ADR-003",
+      "type": "supersedes",
+      "resolved": true
+    },
+    {
+      "source": "ADR-012",
+      "target": "ADR-004",
+      "type": "related",
+      "resolved": true
+    },
+    {
+      "source": "ADR-012",
+      "target": "ADR-005",
+      "type": "related",
+      "resolved": true
+    },
+    {
+      "source": "ADR-012",
+      "target": "ADR-007",
       "type": "related",
       "resolved": true
     }

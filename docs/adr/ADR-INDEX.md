@@ -8,7 +8,7 @@ One row per Architecture Decision Record. Scope is the Enforcement `path_glob` s
 | --- | --- | --- | --- |
 | ADR-001 | Accepted | `*.py` | Chosen option: faster-whisper (CTranslate2) on CUDA float16, because it gives roughly 4x the throughput of the refere... |
 | ADR-002 | Accepted | `*.py` | Chosen option: pyannote.audio 3.1 speaker-diarization pipeline, because it is the best-performing open diarization mo... |
-| ADR-003 | Accepted | `transcribe.py` | Chosen option: Per-task model env-vars with length-based switch, because each step has a different cost/quality profi... |
+| ADR-003 | Superseded | `transcribe.py` | Chosen option: Per-task model env-vars with length-based switch, because each step has a different cost/quality profi... |
 | ADR-004 | Accepted | - | Chosen option: Two-phase: LLM produces mapping, code applies it, because separating judgement (who is SPEAKER02) from... |
 | ADR-005 | Accepted | - | Chosen option: Recursive map-reduce summarization with overlap, because it preserves coverage of the whole episode in... |
 | ADR-006 | Accepted | - | Chosen option: Post-hoc JSON replacement map, because it is deterministic, testable, editable without code, and survi... |
@@ -17,3 +17,4 @@ One row per Architecture Decision Record. Scope is the Enforcement `path_glob` s
 | ADR-009 | Accepted | `whycast/pipeline/feed.py` | Chosen option: Option A, because it removes the noise where it is generated without weakening the primitive: whycast.... |
 | ADR-010 | Accepted | - | Chosen option: Option A. |
 | ADR-011 | Accepted | - | Chosen option: Option A. |
+| ADR-012 | Accepted | `whycast/**/*.py`, `whycast/pipeline/llm.py` | Chosen option: two models by profile, because the pipeline has two kinds of work and not four. |

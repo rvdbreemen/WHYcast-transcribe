@@ -2,10 +2,22 @@
 Optional-dependency shims for the WHYcast pipeline (ADR-008).
 
 Mirrors the legacy top-of-transcribe.py try/except import blocks, but without
-sys.exit() and without logging at import time. Modules that need an optional
-dependency import its shim from here and check the matching
-``*_available`` flag before use, so a missing one degrades the step that
-needs it rather than failing the whole run at import time.
+sys.exit() and without logging at import time.
+
+What each shim does when its package is missing, because they differ:
+
+* ``openai`` -> ``OpenAI`` is None. Every caller checks ``openai_available``
+  first and fails with a ConfigurationError naming the package, rather than
+  letting "'NoneType' object is not callable" surface halfway through a run.
+  ``speakers.py`` additionally skips the step and returns None.
+* ``feedparser`` -> ``feedparser`` is None. ``pipeline/feed.py`` checks
+  ``feedparser_available`` before parsing and raises ConfigurationError.
+* ``tqdm`` -> replaced by the fallback class below, which forwards progress to
+  the event sink. Nothing has to check ``tqdm_available``; the substitute is a
+  real implementation, not a None.
+
+The flags are the contract. Adding a shim without checking its flag at the call
+site reintroduces exactly the failure this module exists to prevent.
 """
 
 openai_available = False
