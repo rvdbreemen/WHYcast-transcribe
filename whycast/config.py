@@ -26,11 +26,16 @@ COMPUTE_TYPE = os.environ.get("WHISPER_COMPUTE_TYPE", "float16")
 BEAM_SIZE = int(os.environ.get("WHISPER_BEAM_SIZE", "5"))
 
 # OpenAI configuration
-OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4.1")  # Default model for general tasks
-OPENAI_LARGE_CONTEXT_MODEL = os.environ.get("OPENAI_LARGE_CONTEXT_MODEL", "gpt-4.1")  # Model for potentially long inputs (summary, blog)
-OPENAI_HISTORY_MODEL = os.environ.get("OPENAI_HISTORY_MODEL", "gpt-4.1")  # Model specifically for history extraction
-OPENAI_SPEAKER_MODEL = os.environ.get("OPENAI_SPEAKER_MODEL", "o4-mini")  # Model for speaker assignment
-TEMPERATURE = float(os.environ.get("OPENAI_TEMPERATURE", "0.7"))
+OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-5.6-luna")  # Default model for general tasks
+OPENAI_LARGE_CONTEXT_MODEL = os.environ.get("OPENAI_LARGE_CONTEXT_MODEL", "gpt-5.6-luna")  # Model for potentially long inputs (summary, blog)
+OPENAI_HISTORY_MODEL = os.environ.get("OPENAI_HISTORY_MODEL", "gpt-5.6-luna")  # Model specifically for history extraction
+OPENAI_SPEAKER_MODEL = os.environ.get("OPENAI_SPEAKER_MODEL", "gpt-5.6-sol")  # Model for speaker assignment
+
+# How hard a reasoning model thinks before it answers. Accepted by the API:
+# none, low, medium, high, xhigh. Ignored for the legacy chat models, which do
+# not take the parameter at all (see llm.model_params).
+OPENAI_REASONING_EFFORT = os.environ.get("OPENAI_REASONING_EFFORT", "high")
+OPENAI_SPEAKER_REASONING_EFFORT = os.environ.get("OPENAI_SPEAKER_REASONING_EFFORT", "high")
 MAX_TOKENS = int(os.environ.get("OPENAI_MAX_TOKENS", "16000"))  # Increased for longer summaries
 # Max tokens to send to OpenAI (considering model's max context - completion tokens)
 MAX_INPUT_TOKENS = int(os.environ.get("OPENAI_MAX_INPUT_TOKENS", "60000"))  # Increased to handle 200kB

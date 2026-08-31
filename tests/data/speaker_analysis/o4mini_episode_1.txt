@@ -1,0 +1,132 @@
+DETAILED SPEAKER ANALYSIS REPORT
+==================================================
+
+Generated: 2026-08-26 21:40:32
+Model: o4-mini
+Transcript: episode_1
+
+SPEAKER IDENTIFICATION ANALYSIS
+================================
+
+TRANSCRIPT OVERVIEW:
+- Total unique labels detected: 7 (SPEAKER_00, SPEAKER_01, SPEAKER_02, SPEAKER_03, SPEAKER_04, SPEAKER_05, SPEAKER_UNKNOWN)
+- Show format: Conversation / Interview (two co-hosts guide the episode, interview multiple guests, interleaved segments including history lesson and event previews)
+- Main topics:
+  1. Recap of Fallfest meetup in Eindhoven  
+  2. Open Call for Proposals (CFP) and Team:Content interview  
+  3. History lesson by “Oddfluencer”  
+  4. Volunteers vacancy spotlight  
+  5. Hackfest preview with Dave Borghuis  
+
+SPEAKER MAPPING:
+================
+
+SPEAKER_01:
+- Identified Name: Ad
+- Final Label: Ad
+- Role: Co-Host
+- Confidence: High
+- Evidence:  
+  • “I’m Ad. And we are the hosts…”  
+  • Asks guiding questions: “So Ad, what are we talking about today?”  
+- Context Analysis: Primary question-asker, introduces show, conducts guest hand-offs.
+- Characteristics: Co-host of the WHYcast podcast, organizer of the WHY2025 hacker camp.
+- Reasoning: Clear self-introduction and consistent hosting behavior.
+
+SPEAKER_04:
+- Identified Name: Nancy
+- Final Label: Nancy
+- Role: Co-Host
+- Confidence: High
+- Evidence:  
+  • Describes planning details: “Well, there’s a couple of things we will be discussing…”  
+  • Hosts segments alongside Ad (e.g. Fallfest recap, vacancy spotlight).  
+- Context Analysis: Nancy drives topic recaps and segment transitions.  
+- Characteristics: Co-host, enthusiastic about volunteer-run event, active in organization.
+- Reasoning: Aside from Ad, only Nancy remains as second host; major content blocks align with her speaking.
+
+SPEAKER_UNKNOWN:
+- Identified Name: Nancy
+- Final Label: Nancy
+- Role: Co-Host (interjections)
+- Confidence: Medium
+- Evidence:  
+  • Short responses and back-and-forth: “So.” “Yep.” “Oh, okay.” “Yes.”  
+  • Occurs in places where the non-Ad host prompts or acknowledges.  
+- Context Analysis: Follows Ad’s or Nancy’s longer turns; consistent co-host fill-ins.  
+- Characteristics: Non-formal interjections, affirmations.  
+- Reasoning: No other regular speaker would fill these in; aligns with Nancy’s turn-taking.
+
+SPEAKER_00:
+- Identified Name: Nancy
+- Final Label: Nancy
+- Role: Co-Host (brief interjection)
+- Confidence: Medium
+- Evidence:  
+  • Responds to Ad’s line “This is not working out, which is fine.” with “This is fine.”  
+- Context Analysis: Quiet acknowledgement from co-host.  
+- Characteristics: Short affirmation.  
+- Reasoning: Matches Nancy’s pattern of interjecting in support of Ad.
+
+SPEAKER_02:
+- Identified Name: Dani (short for Daniëlle)
+- Final Label: Dani
+- Role: Guest (Team:Content)
+- Confidence: High
+- Evidence:  
+  • “Hi, I am Dani. That’s the short form of Daniëlle…”  
+  • Describes her role: “I am in Team:Content. So we are working on the CFP…”  
+- Context Analysis: Subject-matter guest explaining CFP and volunteer needs.  
+- Characteristics: Volunteer for WHY2025, manages call for proposals, experienced with conferences.
+- Reasoning: Clear self-introduction and detailed expert content.
+
+SPEAKER_03:
+- Identified Name: Odd (aka Oddfluencer)
+- Final Label: Odd
+- Role: Guest (History segment host / “Oddfluencer”)
+- Confidence: High
+- Evidence:  
+  • “Each episode, we’ll be diving into a piece of history…”  
+  • Others address him: “What else, Odd?”  
+- Context Analysis: Presents the history lesson on Stone Age computer.  
+- Characteristics: Podcast segment specialist, historian of past hacker camps.
+- Reasoning: Self-contained history monologue with a named persona “Oddfluencer.”
+
+SPEAKER_05:
+- Identified Name: Dave Borghuis
+- Final Label: Dave
+- Role: Guest (Hackfest organizer)
+- Confidence: High
+- Evidence:  
+  • “My name is Dave Borghuis. I also volunteer at the WHY…”  
+  • Describes organizing Hackfest in Enschede.  
+- Context Analysis: Interviewed about upcoming Hackfest, venue, program details.  
+- Characteristics: Organizer, founder of local hackerspace, demo-scene enthusiast.
+- Reasoning: Clear self-introduction and event-preview content.
+
+CONFIDENCE SUMMARY:
+==================
+- High confidence identifications: 5 (SPEAKER_01, SPEAKER_02, SPEAKER_03, SPEAKER_04, SPEAKER_05)
+- Medium confidence identifications: 2 (SPEAKER_00, SPEAKER_UNKNOWN)
+- Low confidence identifications: 0
+- Fallback labels used: 0 (all names or clear roles)
+
+FINAL MAPPING FOR TRANSCRIPT:
+============================
+SPEAKER_00 → Nancy  
+SPEAKER_01 → Ad  
+SPEAKER_02 → Dani  
+SPEAKER_03 → Odd  
+SPEAKER_04 → Nancy  
+SPEAKER_05 → Dave  
+SPEAKER_UNKNOWN → Nancy
+
+==================================================
+EXTRACTED MAPPING:
+[SPEAKER_01] → Ad
+[SPEAKER_04] → Nancy
+[SPEAKER_UNKNOWN] → Nancy
+[SPEAKER_00] → Nancy
+[SPEAKER_02] → Dani
+[SPEAKER_03] → Odd
+[SPEAKER_05] → Dave

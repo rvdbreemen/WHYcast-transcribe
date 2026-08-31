@@ -32,7 +32,13 @@ from whycast._deps import tqdm  # noqa: E402
 from whycast.config import BEAM_SIZE, MODEL_SIZE, USE_CUSTOM_VOCABULARY, VOCABULARY_FILE  # noqa: E402
 from whycast.events import emit  # noqa: E402
 from whycast.io_utils import atomic_write_text  # noqa: E402
+from whycast.pipeline.attribution import (  # noqa: E402
+    attribute_words_to_speakers,
+    speaker_for_interval,
+    turns_from_diarization,
+)
 from whycast.pipeline.gpu import force_cuda_device  # noqa: E402
+from whycast.pipeline.vocabulary import process_transcript_with_vocabulary  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -260,16 +266,9 @@ def transcribe_audio(model: WhisperModel, audio_file: str, speaker_segments: Opt
     current_speaker = None
 
     # Define a function to determine the speaker based on diarization segments
-    def find_speaker_for_segment(segment_middle, speaker_segments):
-        if not speaker_segments:
-            return None
-        # speaker_segments is expected to be a pyannote Annotation
-        # Find the segment that contains segment_middle
-        for speech_turn in speaker_segments.itertracks(yield_label=True):
-            segment, _, label = speech_turn
-            if segment.start <= segment_middle <= segment.end:
-                return label
-        return None
+    # Turns are normalised once here rather than per segment: the live loop runs
+    # for every segment while the diarization result never changes.
+    live_turns = turns_from_diarization(speaker_segments)
 
     # Define a function for live output
     def process_segment(segment):
@@ -296,10 +295,11 @@ def transcribe_audio(model: WhisperModel, audio_file: str, speaker_segments: Opt
         speaker_info = ""
         nonlocal current_speaker
 
-        if speaker_segments:
-            # Use the middle of the segment to determine the speaker
-            segment_middle = (segment.start + segment.end) / 2
-            speaker = find_speaker_for_segment(segment_middle, speaker_segments)
+        if live_turns:
+            # Console output only, so a single label for the whole segment is
+            # fine here even when the segment spans a speaker change. The files
+            # written by write_transcript_files are cut per speaker.
+            speaker = speaker_for_interval(segment.start, segment.end, live_turns)
 
             # Always show the speaker, not only when switching
             if speaker:
@@ -385,67 +385,46 @@ def write_transcript_files(segments: List, output_file: str, output_file_timesta
     Returns:
         Full transcript text
     """
-    # Local function to find speaker for a segment midpoint
-    def find_speaker_for_segment(segment_middle, speaker_segments):
-        if not speaker_segments:
-            return None
-        for speech_turn in speaker_segments.itertracks(yield_label=True):
-            segment, _, label = speech_turn
-            if segment.start <= segment_middle <= segment.end:
-                return label
-        return None
-
     try:
         # Prepare for writing the transcripts
         full_transcript = []
         timestamped_transcript = []
-        # Track current speaker to avoid repeating speaker tags for consecutive segments
-        current_speaker = None
         emit("transcription", f"\nCreating transcript files...")
         emit("transcription", f"- Clean transcript: {os.path.basename(output_file)}")
         emit("transcription", f"- Timestamped transcript: {os.path.basename(output_file_timestamped)}")
-        # Process each segment from Whisper
-        for i, segment in enumerate(tqdm(segments, desc="Processing transcript", unit="segment")):
-            start = segment.start
-            end = segment.end
-            text = segment.text.strip()
-            if not text:  # Skip empty segments
-                continue
-            # Calculate segment duration for better speaker detection of short segments
-            segment_duration = end - start
-            # Format timestamp for the timestamped version
-            timestamp = format_timestamp(start)
-            # Get speaker info if available
-            speaker_info = ""
-            speaker_prefix = ""
-            if speaker_segments:
-                # Use middle of segment to determine speaker
-                middle_time = (start + end) / 2
-                speaker = find_speaker_for_segment(middle_time, speaker_segments)
-                if speaker:
-                    is_short_utterance = segment_duration < 1.0 and len(text.split()) <= 5
-                    # For very short utterances with no clear speaker, try to maintain speaker continuity
-                    if is_short_utterance and not speaker and current_speaker:
-                        speaker = current_speaker
-                    if speaker:
-                        speaker_info = f"[{speaker}] "
-                        speaker_prefix = f"[{speaker}] "
-                        current_speaker = speaker
-                    else:
-                        speaker_info = "[SPEAKER_UNKNOWN] "
-                        speaker_prefix = "[SPEAKER_UNKNOWN] "
-                        current_speaker = None
-                else:
-                    speaker_info = "[SPEAKER_UNKNOWN] "
-                    speaker_prefix = "[SPEAKER_UNKNOWN] "
-                    current_speaker = None
-            # Add to transcript collections
-            clean_line = f"{speaker_prefix}{text}"
-            timestamped_line = f"{timestamp} {speaker_info}{text}"
-            full_transcript.append(clean_line)
-            timestamped_transcript.append(timestamped_line)
-            # Store the end time for checking continuity in the next iteration
-            prev_end = end
+
+        # One line per stretch of speech by one speaker, not one line per Whisper
+        # segment. Whisper cuts on its own rhythm and a single segment regularly
+        # spans a speaker change - 53 of 234 segments in episode 0 - so a line
+        # per segment necessarily files one person's words under another's name.
+        # See whycast.pipeline.attribution for the measurements.
+        spans = attribute_words_to_speakers(
+            tqdm(segments, desc="Attributing speakers", unit="segment"),
+            speaker_segments,
+        )
+
+        for span in spans:
+            prefix = f"[{span.speaker}] " if span.speaker else ""
+            # ADR-006 corrections are applied here, on the assembled span, and
+            # not only in process_segment. That one rewrites segment.text; the
+            # spans above are built from segment.words, which Whisper leaves
+            # exactly as it heard them. Correcting only segment.text published a
+            # transcript saying "YCast" where every earlier run said "WHYcast" -
+            # measured on episode 0, where "WHYcast" went from 3 occurrences to
+            # 0. Applying it per span rather than to the joined text keeps the
+            # speaker labels out of reach of the replacements.
+            text = process_transcript_with_vocabulary(span.text)
+            full_transcript.append(f"{prefix}{text}")
+            timestamped_transcript.append(
+                f"{format_timestamp(span.start)} {prefix}{text}"
+            )
+
+        unattributed = sum(1 for s in spans if s.speaker is None)
+        if speaker_segments and unattributed:
+            logging.warning(
+                "%d of %d spans could not be attributed to a speaker",
+                unattributed, len(spans),
+            )
         # Join all lines
         full_text = "\n".join(full_transcript)
         timestamped_text = "\n".join(timestamped_transcript)

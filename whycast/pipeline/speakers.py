@@ -16,7 +16,12 @@ from datetime import datetime
 from typing import Any, Dict, Optional
 
 from whycast._deps import OpenAI, BadRequestError, openai_available
-from whycast.config import MAX_TOKENS, OPENAI_SPEAKER_MODEL, PROMPT_SPEAKER_ASSIGN_FILE
+from whycast.config import (
+    MAX_TOKENS,
+    OPENAI_SPEAKER_MODEL,
+    OPENAI_SPEAKER_REASONING_EFFORT,
+    PROMPT_SPEAKER_ASSIGN_FILE,
+)
 from whycast.episodes import SPEAKER_MAP_SUFFIX as _SPEAKER_MAP_SUFFIX
 from whycast.errors import SpeakerMappingError
 from whycast.events import emit
@@ -177,8 +182,12 @@ def analyze_speakers_with_o4(transcript: str, output_basename: str = None, outpu
             logging.error("Speaker analysis prompt not found")
             return None
 
-        # Use o4 model for analysis (assuming it's configured in OPENAI_SPEAKER_MODEL)
-        analysis_result = process_with_openai(transcript, analysis_prompt, OPENAI_SPEAKER_MODEL, max_tokens=MAX_TOKENS * 2)
+        # Speaker work is the one step on its own model and its own reasoning
+        # budget (ADR-003): it is judgement over the whole transcript, where
+        # the summary steps are compression.
+        analysis_result = process_with_openai(transcript, analysis_prompt, OPENAI_SPEAKER_MODEL,
+                                              max_tokens=MAX_TOKENS * 2,
+                                              reasoning_effort=OPENAI_SPEAKER_REASONING_EFFORT)
 
         if not analysis_result:
             logging.error("Speaker analysis failed")
@@ -227,100 +236,174 @@ def analyze_speakers_with_o4(transcript: str, output_basename: str = None, outpu
         emit("speakers", f"❌ Speaker analysis failed: {str(e)}")
         return None
 
-def parse_speaker_mapping_from_analysis(analysis_text: str) -> Dict[str, str]:
+#: Longest string still plausibly a person's name or a role ("Dave Borghuis",
+#: "Host"). Anything longer is the model explaining itself rather than
+#: answering, and apply_speaker_mapping_programmatically would paste it into
+#: the transcript as if someone were called that.
+MAX_SPEAKER_LABEL_CHARS = 40
+
+#: The heading that introduces the model's decision. Matched case-insensitively
+#: and without requiring a colon: o4-mini writes "FINAL MAPPING FOR TRANSCRIPT:"
+#: and gpt-5.6-sol writes "## FINAL MAPPING FOR TRANSCRIPT".
+_MAPPING_HEADING = re.compile(r"(?:FINAL|SPEAKER)\s+MAPPING", re.IGNORECASE)
+
+#: One decision. The label may be bracketed or not, and the arrow may be ASCII
+#: or unicode. SPEAKER_UNKNOWN matches too: the old pattern demanded
+#: SPEAKER_\d+, which silently dropped it.
+#:
+#: A colon is deliberately NOT a separator here. Both models end their answer
+#: with a "CONFIDENCE SUMMARY" listing "SPEAKER_00: high", and reading those as
+#: decisions overwrites the names with confidence words.
+_MAPPING_LINE = re.compile(
+    r"^\s*\[?(SPEAKER_[A-Z0-9_]+)\]?\s*(?:->|→)\s*(\S.*?)\s*$"
+)
+
+#: The same decision, but allowed to sit mid-sentence. Only used by the last
+#: resort, where there is no block to anchor to.
+_MAPPING_ANYWHERE = re.compile(
+    r"\[?(SPEAKER_[A-Z0-9_]+)\]?\s*(?:->|→)\s*(\S.*?)\s*$"
+)
+
+#: An all-caps line ending in a colon starts a new section ("CONFIDENCE
+#: SUMMARY:", "EXTRACTED MAPPING:") and therefore ends the mapping block.
+_SECTION_HEADER = re.compile(r"^[A-Z][A-Z0-9 _-]*:$")
+
+#: Rules, code fences and other decoration between the heading and the entries.
+_DECORATION = re.compile(r"^[\s=*_`~-]*$|^```")
+
+
+def _plausible_speaker_label(raw: str, speaker: str) -> Optional[str]:
+    """Clean one parsed label, or return None when it is not a name at all.
+
+    The model is asked for a name and usually gives one, but it also writes
+    prose around its answer. The previous last-resort pattern scanned that
+    prose, and on one run handed back a 120-character sentence as the name of
+    SPEAKER_01. Silently accepting that is worse than dropping it: the label
+    goes straight into the transcript.
     """
-    Parse speaker mapping from the o4 analysis result.
+    label = raw.strip().strip("`").strip()
+    label = re.sub(r"^\*\*(.*)\*\*$", r"\1", label).strip()
+    label = label.strip("[]").strip()
+    label = re.sub(r"[\s.,;:]+$", "", label).strip()
+
+    if not label:
+        return None
+    if len(label) > MAX_SPEAKER_LABEL_CHARS:
+        logging.warning(
+            "Ignoring the label for %s: %d characters is prose, not a name (%r)",
+            speaker, len(label), label[:60],
+        )
+        return None
+    if re.search(r"[.!?]\s", label):
+        logging.warning("Ignoring the label for %s: reads as a sentence (%r)", speaker, label)
+        return None
+    return label
+
+
+def _mapping_from_final_block(analysis_text: str) -> Dict[str, str]:
+    """Read the decisions under the LAST mapping heading.
+
+    Only that block is authoritative. Everything before it is the model
+    reasoning out loud, where a line such as "SPEAKER_03 -> could be almost
+    anyone here" is commentary, not a decision.
+    """
+    headings = list(_MAPPING_HEADING.finditer(analysis_text))
+    if not headings:
+        return {}
+
+    mapping: Dict[str, str] = {}
+    for line in analysis_text[headings[-1].end():].split("\n"):
+        stripped = line.strip()
+        if not stripped or _DECORATION.match(stripped):
+            continue
+        # A new markdown section closes the block, but only once something has
+        # been read: the heading itself is often followed by one.
+        if mapping and (stripped.startswith("#") or _SECTION_HEADER.match(stripped)):
+            break
+        match = _MAPPING_LINE.match(stripped)
+        if not match:
+            continue
+        speaker, raw = match.group(1), match.group(2)
+        label = _plausible_speaker_label(raw, speaker)
+        if label:
+            mapping[f"[{speaker}]"] = label
+    return mapping
+
+
+def _mapping_from_speaker_sections(analysis_text: str) -> Dict[str, str]:
+    """Fallback: per-speaker sections ending in "- Final Label:".
+
+    o4-mini's house style, and the only shape the parser read reliably before,
+    so it stays as a second chance for answers with no closing block.
+    """
+    mapping: Dict[str, str] = {}
+    current = None
+    for line in analysis_text.split("\n"):
+        stripped = line.strip()
+        if stripped.startswith("SPEAKER_") and stripped.endswith(":"):
+            current = stripped[:-1]
+        elif current and stripped.startswith("- Final Label:"):
+            label = _plausible_speaker_label(stripped[len("- Final Label:"):], current)
+            if label:
+                mapping[f"[{current}]"] = label
+            current = None
+    return mapping
+
+
+def _mapping_from_anywhere(analysis_text: str) -> Dict[str, str]:
+    """Last resort: arrow lines anywhere in the answer.
+
+    Some answers name the speakers without ever writing a closing block. This
+    used to be an unguarded regex over the whole document, which is how a
+    sentence of commentary once became a speaker's name; every candidate now
+    has to look like a name before it is accepted.
+    """
+    mapping: Dict[str, str] = {}
+    for line in analysis_text.split("\n"):
+        match = _MAPPING_ANYWHERE.search(line.strip())
+        if not match:
+            continue
+        label = _plausible_speaker_label(match.group(2), match.group(1))
+        if label:
+            mapping[f"[{match.group(1)}]"] = label
+    return mapping
+
+
+def parse_speaker_mapping_from_analysis(analysis_text: str) -> Dict[str, str]:
+    """Read the speaker mapping out of the analysis model's answer.
+
+    ADR-004 has the model decide who each ``SPEAKER_xx`` is and has code apply
+    that decision. This function is the seam between the two, and it has to
+    survive two models writing the same answer in different shapes: o4-mini in
+    per-speaker sections, gpt-5.6-sol in a fenced block under a markdown
+    heading.
 
     Args:
-        analysis_text: The analysis result from o4 model
+        analysis_text: The analysis model's full answer.
 
     Returns:
-        Dictionary mapping SPEAKER_XX to final labels
+        ``{"[SPEAKER_00]": "Nancy", ...}``, empty when nothing could be read.
+        ``SPEAKER_UNKNOWN`` is included when the model labelled it: it carries
+        real segments - 45 of 155 in episode 1 - and is not a marker to skip.
     """
-    mapping = {}
+    if not analysis_text:
+        return {}
 
     try:
-        # Look for the "FINAL MAPPING FOR TRANSCRIPT:" section
-        lines = analysis_text.split('\n')
-        in_mapping_section = False
-
-        for line in lines:
-            line = line.strip()
-
-            # Check if we've reached the mapping section
-            if "FINAL MAPPING FOR TRANSCRIPT:" in line or "SPEAKER MAPPING:" in line:
-                in_mapping_section = True
-                continue
-
-            # Stop at next major section or examples
-            if in_mapping_section and (line.startswith(('##', '===', 'CONFIDENCE SUMMARY:', '**EXAMPLES'))) or line == '':
-                if line.startswith(('##', '===', 'CONFIDENCE SUMMARY:', '**EXAMPLES')):
-                    break
-                continue
-
-            # Parse mapping lines like "SPEAKER_00 → Sarah" or "SPEAKER_00 → Host"
-            if in_mapping_section and ('→' in line or '->' in line):
-                # Split on either arrow type
-                if '→' in line:
-                    parts = line.split('→')
-                else:
-                    parts = line.split('->')
-
-                if len(parts) == 2:
-                    original = parts[0].strip()
-                    mapped = parts[1].strip()
-
-                    # Clean up the original speaker label
-                    if not original.startswith('SPEAKER_'):
-                        continue
-
-                    # Keep mapped label simple - it will be used as "Label:" without brackets
-                    # Store mapping as [SPEAKER_XX] → Label (no brackets in the mapped value)
-                    mapping[f"[{original}]"] = mapped
-
-        # Fallback: look for individual speaker sections
+        mapping = _mapping_from_final_block(analysis_text)
         if not mapping:
-            current_speaker = None
-            current_label = None
-
-            for line in lines:
-                line = line.strip()
-
-                # Look for speaker headers like "SPEAKER_00:"
-                if line.startswith('SPEAKER_') and line.endswith(':'):
-                    current_speaker = f"[{line[:-1]}]"  # Remove colon, add brackets
-                    current_label = None
-
-                # Look for Final Label lines (now expecting simple labels)
-                elif current_speaker and line.startswith('- Final Label:'):
-                    label_part = line.replace('- Final Label:', '').strip()
-                    # Remove any brackets from the response if present
-                    if label_part.startswith('[') and label_part.endswith(']'):
-                        label_part = label_part[1:-1]
-                    current_label = label_part  # No brackets in the mapped value
-
-                    mapping[current_speaker] = current_label
-                    current_speaker = None
-                    current_label = None
-
-        # If still no mapping found, try simple pattern matching
+            mapping = _mapping_from_speaker_sections(analysis_text)
         if not mapping:
-            import re
-            # Look for any SPEAKER_XX → Label patterns (without requiring brackets)
-            pattern = r'(SPEAKER_\d+)\s*[→\->\s]+\s*([^\n\[]+?)(?:\n|$)'
-            matches = re.findall(pattern, analysis_text)
-            for original, mapped in matches:
-                clean_mapped = mapped.strip()
-                # Remove any trailing punctuation or brackets
-                clean_mapped = re.sub(r'[\[\]]+$', '', clean_mapped).strip()
-                mapping[f"[{original}]"] = clean_mapped  # No brackets in the mapped value
-
-        logging.info(f"Parsed speaker mapping: {mapping}")
+            mapping = _mapping_from_anywhere(analysis_text)
+        if mapping:
+            logging.info(f"Parsed speaker mapping: {mapping}")
+        else:
+            logging.warning("No speaker mapping could be read from the analysis")
         return mapping
-
     except Exception as e:
         logging.error(f"Error parsing speaker mapping: {str(e)}")
         return {}
+
 
 # ---------------------------------------------------------------------------
 # The persisted speaker mapping (ADR-010)
@@ -1371,7 +1454,8 @@ CRITICAL: The output length should be nearly identical to input length. Only cha
             transcript,
             enhanced_prompt,
             OPENAI_SPEAKER_MODEL,
-            max_tokens=MAX_TOKENS * 2
+            max_tokens=MAX_TOKENS * 2,
+            reasoning_effort=OPENAI_SPEAKER_REASONING_EFFORT
         )
 
         if not assigned_text:
