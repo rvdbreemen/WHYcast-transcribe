@@ -23,7 +23,7 @@ from whycast.config import (
     PROMPT_SPEAKER_ASSIGN_FILE,
 )
 from whycast.episodes import SPEAKER_MAP_SUFFIX as _SPEAKER_MAP_SUFFIX
-from whycast.errors import SpeakerMappingError
+from whycast.errors import ConfigurationError, SpeakerMappingError
 from whycast.events import emit
 from whycast.io_utils import atomic_write_text
 from whycast.pipeline.llm import process_with_openai, read_prompt_file
@@ -154,9 +154,9 @@ def write_merged_transcript(transcript_text: str, base_path: str) -> str:
         emit("speakers", f"❌ Error creating merged transcript: {str(e)}")
         return ""
 
-def analyze_speakers_with_o4(transcript: str, output_basename: str = None, output_dir: str = None) -> Optional[Dict[str, str]]:
+def analyze_speakers(transcript: str, output_basename: str = None, output_dir: str = None) -> Optional[Dict[str, str]]:
     """
-    Use o4 model to analyze transcript and create detailed speaker mapping.
+    Ask the configured speaker model to work out who each SPEAKER_xx is.
 
     Args:
         transcript: The original transcript text with SPEAKER_XX labels
@@ -170,8 +170,8 @@ def analyze_speakers_with_o4(transcript: str, output_basename: str = None, outpu
         logging.warning("OpenAI not available, skipping speaker analysis")
         return None
 
-    logging.info("Running detailed speaker analysis with o4 model")
-    emit("speakers", "🧠 Analyzing speakers with o4 reasoning model...")
+    logging.info(f"Running detailed speaker analysis with {OPENAI_SPEAKER_MODEL}")
+    emit("speakers", f"🧠 Analyzing speakers with {OPENAI_SPEAKER_MODEL}...")
 
     try:
         # Read the speaker analysis prompt
@@ -231,6 +231,12 @@ def analyze_speakers_with_o4(transcript: str, output_basename: str = None, outpu
 
         return speaker_mapping
 
+    except ConfigurationError:
+        # Not "the analysis failed"; the environment is not set up. Swallowing
+        # it here made a missing openai package look like a bad transcript, and
+        # because the speaker step runs before cleanup, that was the FIRST thing
+        # a person saw (ADR-008: library raises, the worker translates).
+        raise
     except Exception as e:
         logging.error(f"Error in speaker analysis: {str(e)}")
         emit("speakers", f"❌ Speaker analysis failed: {str(e)}")
@@ -409,7 +415,7 @@ def parse_speaker_mapping_from_analysis(analysis_text: str) -> Dict[str, str]:
 # The persisted speaker mapping (ADR-010)
 # ---------------------------------------------------------------------------
 #
-# Until ADR-010 the mapping only ever lived in memory: analyze_speakers_with_o4
+# Until ADR-010 the mapping only ever lived in memory: analyze_speakers
 # produced it, speaker_assignment_step spent it, and the only trace left on disk
 # was <base>_speaker_analysis.txt - prose, written for a human to read, which
 # nothing parses back. So every re-run paid a reasoning model to rediscover
@@ -1244,7 +1250,7 @@ def speaker_assignment_step(transcript: str, output_basename: str = None, output
 
             # Phase 1b: no saved mapping - ask the model, then keep the answer.
             _announce_missing_mapping(output_basename, output_dir)
-            speaker_mapping = analyze_speakers_with_o4(transcript, output_basename, output_dir)
+            speaker_mapping = analyze_speakers(transcript, output_basename, output_dir)
 
             if not speaker_mapping:
                 logging.warning("Speaker analysis failed, falling back to original method")
@@ -1314,7 +1320,7 @@ def _announce_saved_mapping(
     trust the correction, and will go back to editing the transcript by hand -
     the thing ADR-009 and ADR-010 exist to make unnecessary. So the file is
     named, its provenance is named, and the names themselves are listed exactly
-    the way :func:`analyze_speakers_with_o4` lists its own.
+    the way :func:`analyze_speakers` lists its own.
 
     A file with no ``transcript_fingerprint`` gets one extra line. ADR-010's
     Must says a re-transcription marks a mapping stale "rather than deleting
@@ -1480,3 +1486,11 @@ CRITICAL: The output length should be nearly identical to input length. Only cha
     except Exception as e:
         logging.error(f"Error in fallback speaker assignment: {str(e)}")
         return None
+
+
+#: The previous name of :func:`analyze_speakers`, kept so that
+#: "from transcribe import ..." style callers outside this repository do not
+#: break. It was named for o4-mini; the model is a config value now
+#: (OPENAI_SPEAKER_MODEL, default gpt-5.6-sol), so the name had stopped being
+#: true.
+analyze_speakers_with_o4 = analyze_speakers

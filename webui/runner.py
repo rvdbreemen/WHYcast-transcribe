@@ -64,7 +64,7 @@ import time
 import traceback
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from whycast.errors import PipelineError, SecurityError, WhycastError
+from whycast.errors import ConfigurationError, PipelineError, SecurityError, WhycastError
 from whycast import backups
 from whycast.events import ProgressEvent, emit, use_sink
 
@@ -1155,7 +1155,9 @@ def _require_api_key(ctx: _Context) -> None:
 
     try:
         ensure_api_key()
-    except (ValueError, SecurityError) as exc:
+    # ConfigurationError since ensure_api_key stopped raising a bare
+    # ValueError; ValueError stays so an older call path cannot slip past.
+    except (ConfigurationError, ValueError, SecurityError) as exc:
         raise JobInputError(
             f"This job makes paid OpenAI calls, but the API key is not usable: "
             f"{str(exc).rstrip('.')}. Set OPENAI_API_KEY in .env or the "

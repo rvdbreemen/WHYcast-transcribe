@@ -1,11 +1,11 @@
 ---
 id: TASK-008
 title: o-series modeldetectie is gedupliceerd en berust op een prefix-heuristiek
-status: In Progress
+status: Done
 assignee:
   - '@robert'
 created_date: '2026-08-30 19:40'
-updated_date: '2026-08-30 20:42'
+updated_date: '2026-08-31 07:29'
 labels: []
 dependencies: []
 modified_files:
@@ -30,9 +30,9 @@ Uitkomst: een enkele functie met een expliciete lijst of een expliciete configur
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 De o-series-bepaling staat op precies een plek en beide aanroeppaden gebruiken die
-- [ ] #2 De bepaling berust op een expliciete lijst of config, niet op een prefix-gok
-- [ ] #3 Een test dekt minimaal een o-series model, een gpt-model en een onbekend model
+- [x] #1 De o-series-bepaling staat op precies een plek en beide aanroeppaden gebruiken die
+- [x] #2 De bepaling berust op een expliciete lijst of config, niet op een prefix-gok
+- [x] #3 Een test dekt minimaal een o-series model, een gpt-model en een onbekend model
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -58,3 +58,9 @@ Daarnaast de bestaande interpunctie-heuristiek in process_with_openai achter fin
 
 Suite na alle wijzigingen: 852 passed, 1 skipped.
 <!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+De prefix-heuristiek is vervangen door model_params() op een plek, met LEGACY_CHAT_MODEL_PREFIXES als expliciete uitzonderingenlijst en max_completion_tokens als default. temperature is volledig verdwenen. Geverifieerd tegen de live API: gpt-5.6-luna en -sol weigeren max_tokens en elke temperature behalve 1. 25 tests in test_llm_model_params.py en test_llm_chunked_payload.py dekken legacy, modern en onbekende modellen op beide aanroeppaden. Gecommit in 6ea980d, PR #21.
+<!-- SECTION:FINAL_SUMMARY:END -->

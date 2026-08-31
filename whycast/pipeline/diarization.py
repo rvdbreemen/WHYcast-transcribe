@@ -17,7 +17,15 @@ import os
 import re
 from typing import Optional
 
-from whycast.config import base_dir
+from whycast.config import (
+    DIARIZATION_ALTERNATIVE_MODEL,
+    DIARIZATION_MAX_SPEAKERS,
+    DIARIZATION_MIN_SPEAKERS,
+    DIARIZATION_MODEL,
+    USE_SPEAKER_DIARIZATION,
+    base_dir,
+)
+from whycast.errors import ConfigurationError
 from whycast.events import emit
 from whycast.io_utils import atomic_write_text
 
@@ -124,6 +132,15 @@ def diarize_audio(waveform=None, sample_rate=None, audio_file_path=None, hf_toke
     Returns:
         diarization result (pyannote Annotation) or None on failure
     """
+    if not USE_SPEAKER_DIARIZATION:
+        # The switch existed in config.py and in the web UI config viewer and
+        # was read by nothing, so diarization always ran. Turning it off now
+        # means the transcript carries no speaker labels at all, which is what
+        # every caller already handles (speaker_segments=None).
+        emit("diarization", "Speaker diarization disabled (USE_SPEAKER_DIARIZATION)")
+        logging.info("Speaker diarization disabled by configuration")
+        return None
+
     try:
         import torch
         import torchaudio
@@ -167,14 +184,60 @@ def diarize_audio(waveform=None, sample_rate=None, audio_file_path=None, hf_toke
             emit("diarization", "⚠️  CUDA not available for diarization - using CPU (slow)")
             logging.warning("CUDA not available for diarization - using CPU (slow)")
         
-        # Load the diarization pipeline
-        emit("diarization", "Loading pyannote speaker-diarization-3.1 pipeline...")
-        logging.info("Loading pyannote speaker-diarization-3.1 pipeline")
-        pipeline = Pipeline.from_pretrained(
-            'pyannote/speaker-diarization-3.1', 
-            use_auth_token=hf_token
-        )
-        
+        # Load the diarization pipeline. The model comes from config, not from
+        # a literal here: DIARIZATION_MODEL was defined, shown in the web UI
+        # config viewer and read by nothing, so changing it did nothing at all.
+        emit("diarization", f"Loading {DIARIZATION_MODEL} pipeline...")
+        logging.info(f"Loading {DIARIZATION_MODEL} pipeline")
+
+        def _load(model_id):
+            """Load a pipeline, turning pyannote's silent None into an error.
+
+            Pipeline.from_pretrained does NOT raise when the repository is
+            missing, private or gated: it prints a hint and returns None
+            (pyannote/audio/core/pipeline.py:107-121, where RepositoryNotFoundError
+            - and therefore GatedRepoError - is caught). That is the failure
+            ADR-002 names as its risk, so a fallback that only catches
+            exceptions would never fire for the case it was written for.
+            """
+            loaded = Pipeline.from_pretrained(model_id, use_auth_token=hf_token)
+            if loaded is None:
+                raise ConfigurationError(
+                    f"Could not load the diarization pipeline '{model_id}'. It is "
+                    "missing, private, or gated. Accept the conditions on "
+                    f"https://hf.co/{model_id} and set a Hugging Face token."
+                )
+            return loaded
+
+        try:
+            pipeline = _load(DIARIZATION_MODEL)
+        except Exception as primary_error:
+            # ADR-002 names DIARIZATION_ALTERNATIVE_MODEL as the mitigation for
+            # pyannote drifting against torch. Nothing read it, so the mitigation
+            # the ADR claims did not exist. It does now - but be blunt about its
+            # limit: the shipped default is pyannote/segmentation-3.0, a
+            # segmentation MODEL. Pipeline.from_pretrained reads
+            # config["pipeline"]["name"], which a model config does not have, so
+            # that value raises KeyError. The fallback is only useful once the
+            # setting points at a real pipeline; until then this logs the attempt
+            # and re-raises the ORIGINAL error, which is the one worth reading.
+            if not DIARIZATION_ALTERNATIVE_MODEL or DIARIZATION_ALTERNATIVE_MODEL == DIARIZATION_MODEL:
+                raise
+            logging.warning(
+                "Could not load %s (%s); trying DIARIZATION_ALTERNATIVE_MODEL %s",
+                DIARIZATION_MODEL, primary_error, DIARIZATION_ALTERNATIVE_MODEL,
+            )
+            emit("diarization", f"⚠️  {DIARIZATION_MODEL} failed to load, trying {DIARIZATION_ALTERNATIVE_MODEL}")
+            try:
+                pipeline = _load(DIARIZATION_ALTERNATIVE_MODEL)
+            except Exception as fallback_error:
+                logging.error(
+                    "DIARIZATION_ALTERNATIVE_MODEL %s also failed (%s). Note that a "
+                    "segmentation model cannot serve as a diarization pipeline.",
+                    DIARIZATION_ALTERNATIVE_MODEL, fallback_error,
+                )
+                raise primary_error
+
         # FORCE the pipeline to use GPU if available
         if cuda_available:
             emit("diarization", "Moving diarization pipeline to GPU...")
@@ -211,8 +274,31 @@ def diarize_audio(waveform=None, sample_rate=None, audio_file_path=None, hf_toke
             memory_before = torch.cuda.memory_allocated(0) / 1024**2
             logging.info(f"GPU memory before diarization: {memory_before:.2f} MB")
         
-        # Run the actual diarization
-        diarization = pipeline({'waveform': waveform, 'sample_rate': sample_rate})
+        # Run the actual diarization. min/max speakers bound the clustering:
+        # without them pyannote decides the speaker count on its own, which on
+        # episode 1 produced six numbered labels for what is probably four
+        # people. Both were configurable and neither was ever passed.
+        speaker_bounds = {}
+        if DIARIZATION_MIN_SPEAKERS > 1:
+            speaker_bounds["min_speakers"] = DIARIZATION_MIN_SPEAKERS
+        if DIARIZATION_MAX_SPEAKERS:
+            speaker_bounds["max_speakers"] = DIARIZATION_MAX_SPEAKERS
+        if (
+            "min_speakers" in speaker_bounds
+            and "max_speakers" in speaker_bounds
+            and speaker_bounds["min_speakers"] > speaker_bounds["max_speakers"]
+        ):
+            # Two env-vars that contradict each other. Passing them on gets an
+            # error from deep inside pyannote that names neither setting.
+            raise ConfigurationError(
+                f"DIARIZATION_MIN_SPEAKERS ({DIARIZATION_MIN_SPEAKERS}) is greater "
+                f"than DIARIZATION_MAX_SPEAKERS ({DIARIZATION_MAX_SPEAKERS})."
+            )
+        if speaker_bounds:
+            logging.info(f"Diarization speaker bounds: {speaker_bounds}")
+        diarization = pipeline(
+            {'waveform': waveform, 'sample_rate': sample_rate}, **speaker_bounds
+        )
         
         # Log memory usage after processing
         if cuda_available:

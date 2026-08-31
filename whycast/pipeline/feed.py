@@ -20,9 +20,9 @@ from typing import List, Optional
 
 import requests
 
-from whycast._deps import feedparser
+from whycast._deps import feedparser, feedparser_available
 from whycast.episodes import belongs_to_base, is_input_filename
-from whycast.errors import PipelineError
+from whycast.errors import ConfigurationError, PipelineError
 from whycast.events import emit
 from whycast.io_utils import atomic_writer
 
@@ -37,6 +37,21 @@ logger = logging.getLogger(__name__)
 #: and never reaches the failure handling below.
 DOWNLOAD_TIMEOUT = (10, 60)
 
+
+def _require_feedparser() -> None:
+    """Fail with a sentence a person can act on, not an AttributeError.
+
+    ``feedparser`` is optional (ADR-008), and when it is absent the shim in
+    whycast._deps is None. Calling ``.parse`` on that raises
+    ``AttributeError: 'NoneType' object has no attribute 'parse'`` halfway
+    through a workflow, which says nothing about what to install.
+    """
+    if not feedparser_available:
+        raise ConfigurationError(
+            "feedparser is not installed, so the RSS feed cannot be read. "
+            "Install it with 'pip install feedparser', or pass an audio file "
+            "directly instead of fetching from the feed."
+        )
 
 def delete_episode_files(base_name: str, output_dir: str, exclude_files: Optional[List[str]] = None):
     """
@@ -210,6 +225,7 @@ def podcast_fetching_workflow(rssfeed, output_dir, return_base_name=False):
     If return_base_name is True, also returns the base name for the episode file.
     """
     import glob
+    _require_feedparser()
     feed = feedparser.parse(rssfeed)
     if not feed.entries:
         emit("feed", "No episodes found in RSS feed.")
@@ -282,6 +298,7 @@ def download_all_episodes_from_rssfeed(rssfeed: str, output_dir: str = './podcas
     Download all mp3 audio files from the RSS feed to the output directory.
     Skips files that already exist. Shows a progress bar.
     """
+    _require_feedparser()
     feed = feedparser.parse(rssfeed)
     if not feed.entries:
         emit("feed", "No episodes found in RSS feed.")

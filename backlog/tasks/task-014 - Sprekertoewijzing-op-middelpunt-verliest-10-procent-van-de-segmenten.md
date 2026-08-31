@@ -1,11 +1,11 @@
 ---
 id: TASK-014
 title: Sprekertoewijzing op middelpunt verliest 10 procent van de segmenten
-status: In Progress
+status: Done
 assignee:
   - '@robert'
 created_date: '2026-08-30 21:57'
-updated_date: '2026-08-30 23:31'
+updated_date: '2026-08-31 07:29'
 labels: []
 dependencies: []
 documentation:
@@ -48,11 +48,11 @@ De continuiteitsregel voor korte uitingen staat binnen 'if speaker:', dus 'not s
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Toewijzing gebeurt op maximale overlap in tijd, niet op het middelpunt
-- [ ] #2 De functie staat op een plek in plaats van twee identieke kopieen
-- [ ] #3 De onbereikbare continuiteitstak is weg of verplaatst naar de tak waar hij wel kan vuren
-- [ ] #4 Een test dekt: middelpunt in een gat tussen twee turns, segment volledig binnen een turn, en segment zonder enige overlap
-- [ ] #5 Op episode_0 levert de nieuwe toewijzing 0 segmenten met SPEAKER_UNKNOWN
+- [x] #1 Toewijzing gebeurt op maximale overlap in tijd, niet op het middelpunt
+- [x] #2 De functie staat op een plek in plaats van twee identieke kopieen
+- [x] #3 De onbereikbare continuiteitstak is weg of verplaatst naar de tak waar hij wel kan vuren
+- [x] #4 Een test dekt: middelpunt in een gat tussen twee turns, segment volledig binnen een turn, en segment zonder enige overlap
+- [x] #5 Op episode_0 levert de nieuwe toewijzing 0 segmenten met SPEAKER_UNKNOWN
 <!-- AC:END -->
 
 ## Implementation Notes
@@ -67,3 +67,9 @@ SPEAKER_UNKNOWN, middelpunt versus maximale overlap:
   nieuw: 0 regels, 0 woorden
 230 woorden teruggewonnen, 100 procent van het verlies.
 <!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Toewijzing gebeurt op maximale overlap in plaats van op het middelpunt, in de nieuwe module whycast/pipeline/attribution.py; de twee identieke kopieen van find_speaker_for_segment en de onbereikbare continuiteitstak zijn weg. Op aflevering 0 daalde SPEAKER_UNKNOWN van 20 regels en circa 217 woorden naar nul, in een echte productierun met faster-whisper large-v3 en pyannote 3.1. Gecommit in 6ea980d, PR #21.
+<!-- SECTION:FINAL_SUMMARY:END -->

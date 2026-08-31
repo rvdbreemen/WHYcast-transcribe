@@ -1,10 +1,11 @@
 ---
 id: TASK-007
 title: Per-taak modelkeuze uit ADR-003 is uitgeschakeld door identieke defaults
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@robert'
 created_date: '2026-08-30 19:39'
-updated_date: '2026-08-30 20:09'
+updated_date: '2026-08-31 07:28'
 labels: []
 dependencies:
   - TASK-008
@@ -36,7 +37,7 @@ Uitkomst: beslis of de defaults uiteen moeten lopen zoals ADR-003 beoogt, of dat
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
 - [ ] #1 De defaults in config.py sluiten aan bij ADR-003, of ADR-003 is bijgewerkt of gesuperseded
-- [ ] #2 De log-regel in llm.py:136 meldt alleen een groot-contextmodel wanneer dat daadwerkelijk afwijkt van OPENAI_MODEL
+- [x] #2 De log-regel in llm.py:136 meldt alleen een groot-contextmodel wanneer dat daadwerkelijk afwijkt van OPENAI_MODEL
 - [ ] #3 De .env-documentatie noemt per env-var waarvoor het model wordt gebruikt en wat een zinnige afwijkende waarde is
 <!-- AC:END -->
 
@@ -44,4 +45,8 @@ Uitkomst: beslis of de defaults uiteen moeten lopen zoals ADR-003 beoogt, of dat
 
 <!-- SECTION:NOTES:BEGIN -->
 Defaults omgezet naar gpt-5.6-luna (algemeen, groot-context, history) en gpt-5.6-sol (sprekers), beide reasoning_effort=high via OPENAI_REASONING_EFFORT en OPENAI_SPEAKER_REASONING_EFFORT. A/B-run 2026-08-30 door het echte productiepad, gemeten over 5 aanroepen per arm op dezelfde invoer: oud 34081 in / 15716 uit / 122s totaal; nieuw 34079 in / 22955 uit waarvan 13428 reasoning / 292s totaal. Nieuw kost dus circa 46 procent meer outputtokens en 2,4 maal de wandkloktijd. Geen enkele aanroep werd afgekapt (finish_reason=stop overal), dus MAX_TOKENS=16000 volstaat bij deze transcriptlengtes. De lengte-switch in choose_appropriate_model blijft een no-op zolang OPENAI_MODEL en OPENAI_LARGE_CONTEXT_MODEL gelijk zijn; dat hoort in het opvolgende ADR.
+
+choose_appropriate_model logt de omschakeling nu alleen wanneer OPENAI_LARGE_CONTEXT_MODEL echt afwijkt van OPENAI_MODEL. Eerder meldde hij 'Using large context model: gpt-5.6-luna' terwijl hij precies hetzelfde model teruggaf als de andere tak, wat las als een genomen beslissing.
+
+AC 1 en AC 3 zijn NIET afgevinkt en dat is opzet. AC 1 vraagt of de defaults bij ADR-003 moeten passen of dat ADR-003 moet worden bijgewerkt; dat is een architectuurbeslissing van Robert, niet van mij. De feitelijke situatie is dat gpt-5.6-luna de lange invoer aankan waarvoor de groot-contextsleuf ooit is bedacht, dus de switch is mogelijk overbodig geworden in plaats van kapot. AC 3 vraagt om .env-documentatie; dit project heeft geen .env.example, dus daar hoort eerst een besluit over de plek.
 <!-- SECTION:NOTES:END -->
