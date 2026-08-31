@@ -218,3 +218,6 @@ logs/webui-server.log
 
 # Versioned artifact backups (ADR-011): every run moves what it overwrites here
 backups/
+
+# Handmatige veiligheidskopieen van episode-artefacten (podcasts/ is zelf ook genegeerd).
+/podcasts_backup

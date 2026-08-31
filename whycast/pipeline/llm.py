@@ -23,12 +23,65 @@ from whycast.config import (
     MAX_TOKENS,
     OPENAI_LARGE_CONTEXT_MODEL,
     OPENAI_MODEL,
-    TEMPERATURE,
+    OPENAI_REASONING_EFFORT,
 )
 from whycast.errors import SecurityError
 from whycast.events import emit
 
 logger = logging.getLogger(__name__)
+
+# Chat models that still take the legacy ``max_tokens`` and accept a
+# ``temperature``. Everything else - the o-series and every gpt-5.x model -
+# takes ``max_completion_tokens``, rejects any temperature other than 1, and
+# accepts ``reasoning_effort``.
+#
+# The list names the exceptions and the modern spelling is the default, which
+# is the way round that survives: a model released after this line was written
+# lands on the modern side without an edit. The previous spelling guessed from
+# the first letter (``startswith("o") and not startswith("gpt")``) and put
+# gpt-5.6-luna on the legacy side, which made every call to it a 400.
+LEGACY_CHAT_MODEL_PREFIXES = ("gpt-4", "gpt-3.5")
+
+
+def model_params(model_name: str, max_tokens: int, reasoning_effort: Optional[str] = None) -> dict:
+    """The per-model half of a chat-completions payload.
+
+    Args:
+        model_name: The model the call is going to.
+        max_tokens: Output budget, under whichever parameter name the model takes.
+        reasoning_effort: none/low/medium/high/xhigh, or None to leave it to the
+            API default. Dropped for legacy models, which do not accept it.
+
+    Returns:
+        The parameters that differ per model. Everything else in the payload is
+        the same whatever the model is.
+    """
+    if model_name.startswith(LEGACY_CHAT_MODEL_PREFIXES):
+        return {"max_tokens": max_tokens}
+
+    params: dict = {"max_completion_tokens": max_tokens}
+    if reasoning_effort:
+        params["reasoning_effort"] = reasoning_effort
+    return params
+
+
+def _warn_if_truncated(call_id: str, response) -> None:
+    """Log when the model stopped because it ran out of output budget.
+
+    A reasoning model spends part of ``max_completion_tokens`` on thinking
+    before it emits a word, so a budget that was ample for gpt-4.1 can leave a
+    summary half-written. The API says so in ``finish_reason``; without this
+    the only symptom is prose that stops mid-sentence.
+    """
+    try:
+        finish_reason = response.choices[0].finish_reason
+    except (AttributeError, IndexError):
+        return
+    if finish_reason == "length":
+        logging.warning(
+            f"[OpenAI Call {call_id}] Output hit the token limit (finish_reason=length); "
+            "the result is truncated. Raise OPENAI_MAX_TOKENS or lower the reasoning effort."
+        )
 
 def ensure_api_key() -> str:
     """
@@ -172,9 +225,20 @@ def split_into_chunks(text: str, max_chunk_size: int = MAX_CHUNK_SIZE, overlap: 
                 end = sentence_break + 2
         
         chunks.append(text[start:end])
-        # Start the next chunk with some overlap for context
+
+        # The text is covered once end reaches it. Without this the loop kept
+        # going: start would move to len(text) - overlap, which is still short
+        # of the end, and from there end never changed again, so start crept
+        # forward one character per round for another `overlap` rounds. That
+        # appended ~1000 shrinking scraps, each of which the callers turn into
+        # a paid API call.
+        if end >= len(text):
+            break
+
+        # Start the next chunk with some overlap for context. The max() keeps
+        # start moving even when a break point lands within `overlap` of it.
         start = max(start + 1, end - overlap)
-        
+
     return chunks
 
 def summarize_large_transcript(transcript: str, prompt: str) -> Optional[str]:
@@ -224,7 +288,8 @@ def summarize_large_transcript(transcript: str, prompt: str) -> Optional[str]:
     final_prompt = f"{prompt}\n\nHere are summaries from different parts of the transcript. Please combine them into a cohesive summary and blog post:"
     return process_with_openai(combined_text, final_prompt, OPENAI_LARGE_CONTEXT_MODEL, max_tokens=MAX_TOKENS)
 
-def process_with_openai(text: str, prompt: str, model_name: str, max_tokens: int = MAX_TOKENS) -> Optional[str]:
+def process_with_openai(text: str, prompt: str, model_name: str, max_tokens: int = MAX_TOKENS,
+                        reasoning_effort: Optional[str] = OPENAI_REASONING_EFFORT) -> Optional[str]:
     """
     Process text with OpenAI model using the specified prompt.
     
@@ -253,14 +318,8 @@ def process_with_openai(text: str, prompt: str, model_name: str, max_tokens: int
             logging.warning(f"[OpenAI Call {call_id}] Text too long (~{estimated_tokens} tokens > {MAX_INPUT_TOKENS} limit), truncating...")
             text = truncate_transcript(text, MAX_INPUT_TOKENS)
         
-        # Determine if we're using an o-series model (like o3-mini) that requires special parameter handling
-        # NOTE: GPT-4o is NOT considered an o-series model in this context - it uses standard parameters
-        is_o_series_model = model_name.startswith("o") and not model_name.startswith("gpt")
-        
-        # Set up parameters based on model type
-        token_param = "max_completion_tokens" if is_o_series_model else "max_tokens"
-        
-        # Create base parameters dict
+        # Create base parameters dict. Everything that varies per model is added
+        # below by model_params().
         params = {
             "model": model_name,
             "messages": [
@@ -268,11 +327,7 @@ def process_with_openai(text: str, prompt: str, model_name: str, max_tokens: int
                 {"role": "user", "content": f"{prompt}\n\nHere's the text to process:\n\n{text}"}
             ]
         }
-        
-        # Add temperature only for models that support it (non-"o" series)
-        if not is_o_series_model:
-            params["temperature"] = TEMPERATURE
-        
+
         try:
             # For transcript cleanup, we need to ensure we get complete output by using a higher max_tokens limit
             if "clean" in prompt.lower() and "transcript" in prompt.lower():
@@ -282,23 +337,30 @@ def process_with_openai(text: str, prompt: str, model_name: str, max_tokens: int
                 
                 # Check if text needs to be processed in chunks due to size
                 if estimated_tokens > MAX_INPUT_TOKENS // 2:
-                    return process_large_text_in_chunks(text, prompt, model_name, client, parent_call_id=call_id)
+                    return process_large_text_in_chunks(text, prompt, model_name, client, parent_call_id=call_id,
+                                                                       reasoning_effort=reasoning_effort)
                 
-                # Add token parameter
-                params[token_param] = cleanup_max_tokens
-                
+                params.update(model_params(model_name, cleanup_max_tokens, reasoning_effort))
+
                 response = client.chat.completions.create(**params)
             else:
                 # Regular processing for non-cleanup tasks
-                # Add token parameter
-                params[token_param] = max_tokens
-                
+                params.update(model_params(model_name, max_tokens, reasoning_effort))
+
                 response = client.chat.completions.create(**params)
-                
+
+            _warn_if_truncated(call_id, response)
             result = response.choices[0].message.content
-            
-            # Check if result might be truncated (ends abruptly without proper punctuation)
-            if len(result) > 100 and not result.rstrip().endswith(('.', '!', '?', '"', ':', ';', ')', ']', '}')):
+
+            # Guess at truncation from the last character, but only when the API
+            # has not already said the call finished cleanly. finish_reason is
+            # authoritative and _warn_if_truncated above reports it; this
+            # heuristic fires on any answer ending in a table row, a code fence
+            # or a list item, which the speaker analysis does routinely. Left in
+            # as a second signal for the case where finish_reason is missing.
+            if (response.choices[0].finish_reason != "stop"
+                    and len(result) > 100
+                    and not result.rstrip().endswith(('.', '!', '?', '"', ':', ';', ')', ']', '}'))):
                 logging.warning(f"[OpenAI Call {call_id}] Generated text may be truncated (doesn't end with punctuation)")
                 
             return result
@@ -321,7 +383,8 @@ def process_with_openai(text: str, prompt: str, model_name: str, max_tokens: int
         logging.error(f"[OpenAI Call {call_id}] Error processing with OpenAI: {str(e)}")
         return None
 
-def process_large_text_in_chunks(text: str, prompt: str, model_name: str, client: OpenAI, parent_call_id: str = None) -> str:
+def process_large_text_in_chunks(text: str, prompt: str, model_name: str, client: OpenAI, parent_call_id: str = None,
+                                 reasoning_effort: Optional[str] = OPENAI_REASONING_EFFORT) -> str:
     """
     Process very large text by breaking it into chunks and reassembling the results.
     
@@ -337,8 +400,6 @@ def process_large_text_in_chunks(text: str, prompt: str, model_name: str, client
     call_id = str(uuid.uuid4())
     logging.info(f"[OpenAI Chunked Call {call_id}] Parent: {parent_call_id} | Model: {model_name} | Chunks incoming")
     emit("llm", f"[OpenAI Chunked Call {call_id}] Parent: {parent_call_id} | Prompt: {prompt.strip().splitlines()[0] if prompt.strip().splitlines() else prompt.strip()}")
-    is_o_series_model = model_name.startswith("o") and not model_name.startswith("gpt")
-    token_param = "max_completion_tokens" if is_o_series_model else "max_tokens"
     token_limit = MAX_TOKENS * 2
     modified_prompt = f"{prompt}\n\nThis is a chunk of a longer transcript. Process this chunk following the instructions."
     processed_chunks = []
@@ -355,10 +416,9 @@ def process_large_text_in_chunks(text: str, prompt: str, model_name: str, client
                     {"role": "user", "content": f"{modified_prompt}\n\nChunk {i+1} of text:\n\n{chunk}"}
                 ]
             }
-            if not is_o_series_model:
-                params["temperature"] = TEMPERATURE
-            params[token_param] = token_limit
+            params.update(model_params(model_name, token_limit, reasoning_effort))
             response = client.chat.completions.create(**params)
+            _warn_if_truncated(chunk_call_id, response)
             processed_chunks.append(response.choices[0].message.content)
             logging.info(f"[OpenAI Chunk {chunk_call_id}] Successfully processed chunk {i+1}")
         except Exception as e:
@@ -379,9 +439,7 @@ def process_large_text_in_chunks(text: str, prompt: str, model_name: str, client
                     {"role": "user", "content": f"This is a processed transcript that was handled in chunks. Please ensure consistency across chunk boundaries and fix any obvious issues.\n\n{combined_text}"}
                 ]
             }
-            if not is_o_series_model:
-                params["temperature"] = TEMPERATURE
-            params[token_param] = MAX_TOKENS
+            params.update(model_params(model_name, MAX_TOKENS, reasoning_effort))
             response = client.chat.completions.create(**params)
             return response.choices[0].message.content
         except Exception as e:
